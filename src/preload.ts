@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 export interface FileEntry {
   name: string;
@@ -9,6 +9,7 @@ export interface FileEntry {
 export interface FileStats {
   mtimeMs: number;
   size: number;
+  isDirectory: boolean;
 }
 
 const api = {
@@ -86,6 +87,8 @@ const api = {
     ipcRenderer.on('export-docx', handler);
     return () => ipcRenderer.removeListener('export-docx', handler);
   },
+
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld('mde', api);

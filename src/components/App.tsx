@@ -122,6 +122,14 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const editorsRef = useRef<Map<string, TipTapEditor>>(new Map());
   const [activeEditor, setActiveEditor] = useState<TipTapEditor | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(msg);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  }, []);
 
   const activeTab = state.tabs[state.activeTabIndex] || null;
 
@@ -281,24 +289,42 @@ export default function App() {
     dispatch({ type: 'CLOSE_TAB', index });
   }, [state.tabs, unregisterEditor]);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    const files = Array.from(e.dataTransfer.files);
-    for (const file of files) {
-      const filePath = (file as any).path as string;
-      if (!filePath) continue;
-      if (/\.(md|markdown)$/i.test(filePath)) {
-        openFile(filePath);
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const handleDrop = async (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.dataTransfer) return;
+      const files = Array.from(e.dataTransfer.files);
+      for (const file of files) {
+        const filePath = window.mde.getPathForFile(file);
+        if (!filePath) continue;
+        const stats = await window.mde.getFileStats(filePath);
+        if (stats && stats.isDirectory) {
+          dispatch({ type: 'SET_PROJECT_ROOT', root: filePath });
+          return;
+        }
+        if (/\.(md|markdown)$/i.test(filePath)) {
+          openFile(filePath);
+        } else {
+          const ext = filePath.split('/').pop() || filePath;
+          showToast(`Unsupported file type: ${ext} -- only .md and .markdown files are supported`);
+        }
       }
-    }
-  }, [openFile]);
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-  }, []);
+    };
+    document.addEventListener('dragover', handleDragOver);
+    document.addEventListener('drop', handleDrop);
+    return () => {
+      document.removeEventListener('dragover', handleDragOver);
+      document.removeEventListener('drop', handleDrop);
+    };
+  }, [openFile, showToast]);
 
   return (
-    <div className="app" onDrop={handleDrop} onDragOver={handleDragOver}>
+    <div className="app">
       <div className="app-drag-region" />
       <div className="app-body">
         <Sidebar
@@ -350,6 +376,9 @@ export default function App() {
           </div>
         </div>
       </div>
+      {toast && (
+        <div className="toast">{toast}</div>
+      )}
     </div>
   );
 }

@@ -45,6 +45,10 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
     windowStates.delete(win);
   });
 
+  win.webContents.on('will-navigate', (event) => {
+    event.preventDefault();
+  });
+
   win.webContents.on('did-finish-load', () => {
     if (projectRoot) {
       win.webContents.send('open-project', projectRoot);
@@ -182,7 +186,7 @@ ipcMain.handle('write-file', async (_event, filePath: string, content: string) =
 ipcMain.handle('get-file-stats', async (_event, filePath: string) => {
   try {
     const stats = await fs.promises.stat(filePath);
-    return { mtimeMs: stats.mtimeMs, size: stats.size };
+    return { mtimeMs: stats.mtimeMs, size: stats.size, isDirectory: stats.isDirectory() };
   } catch {
     return null;
   }

@@ -7,6 +7,7 @@ export interface FileEntry {
 export interface FileStats {
   mtimeMs: number;
   size: number;
+  isDirectory: boolean;
 }
 
 export interface Tab {
@@ -36,6 +37,7 @@ export interface MdeAPI {
   onFileChanged: (callback: (filePath: string) => void) => () => void;
   onExportPDF: (callback: () => void) => () => void;
   onExportDOCX: (callback: () => void) => () => void;
+  getPathForFile: (file: File) => string;
 }
 
 declare global {

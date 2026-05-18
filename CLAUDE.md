@@ -51,6 +51,28 @@ takes <1s. Use `--grep "test name fragment"` to isolate.
 All verification goes through E2E tests -- do not start the app
 interactively to check behavior.
 
+## Current status
+
+All features from `plan.md` phases 1-6 are implemented and covered by
+31 E2E tests. What exists:
+
+- Electron shell with IPC bridge, menu bar, drag-drop
+- TipTap WYSIWYG editor with Markdown load/save
+- File explorer sidebar + document outline sidebar
+- Tabbed editor with dirty indicators
+- Toolbar (headings, bold, italic, strike, highlight, lists, blockquote, code, link, table, HR)
+- Find/replace floating bar
+- File conflict detection (silent reload / red banner)
+- PDF export (via Electron printToPDF)
+
+**Not yet done / known gaps:**
+
+- DOCX export: menu item exists but handler is not wired in the renderer
+- CSS uses component-specific classes throughout -- not yet refactored to utility classes (see conventions below)
+- The app has NOT been manually tested yet. E2E tests pass but the user hasn't confirmed visual correctness.
+- Image rendering (displaying existing `![](path)` references) is untested
+- Phase 7 (polish, accessibility, edge cases) is not started
+
 ## CSS conventions
 
 Prefer utility classes over single-purpose component classes. Follow
