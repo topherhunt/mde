@@ -25,15 +25,19 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 ## Commands
 
 ```
-cd app
 npm start          # Run the app (electron-forge start)
 npm test           # Build + run Playwright E2E tests (headless)
 npx playwright test tests/app.spec.ts --grep "pattern"  # Run subset
+rm -rf .webpack/ out/ && npm test  # Clean build (required after webpack config changes)
 ```
 
 ## Testing
 
 Playwright in Electron mode. Tests live in `tests/`. Run with `npm test`.
+The `pretest` script in package.json runs `electron-forge package` to
+build the `.webpack/` bundle before tests execute. To skip the rebuild
+when iterating on tests without source changes, run
+`npx playwright test` directly.
 
 **Tests MUST be headless.** No windows should pop up when tests run. The
 main process checks for `--test-headless` in `process.argv` and sets

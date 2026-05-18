@@ -1,1 +1,19 @@
 *.local.*
+
+logs
+*.log
+npm-debug.log*
+
+.DS_Store
+
+node_modules/
+test-results/
+.webpack/
+
+*.tsbuildinfo
+
+# Electron-Forge
+out/
+
+.env
+.env.test
