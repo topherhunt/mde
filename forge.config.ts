@@ -14,6 +14,23 @@ import { rendererConfig } from './webpack.renderer.config';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    extendInfo: {
+      CFBundleDocumentTypes: [
+        {
+          CFBundleTypeName: 'Markdown Document',
+          CFBundleTypeRole: 'Editor',
+          LSHandlerRank: 'Alternate',
+          LSItemContentTypes: ['net.daringfireball.markdown', 'public.plain-text'],
+          CFBundleTypeExtensions: ['md', 'markdown'],
+        },
+        {
+          CFBundleTypeName: 'Folder',
+          CFBundleTypeRole: 'Viewer',
+          LSHandlerRank: 'Alternate',
+          LSItemContentTypes: ['public.folder'],
+        },
+      ],
+    },
   },
   rebuildConfig: {},
   makers: [

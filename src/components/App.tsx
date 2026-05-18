@@ -304,7 +304,11 @@ export default function App() {
         if (!filePath) continue;
         const stats = await window.mde.getFileStats(filePath);
         if (stats && stats.isDirectory) {
-          dispatch({ type: 'SET_PROJECT_ROOT', root: filePath });
+          if (state.projectRoot || state.tabs.length > 0) {
+            window.mde.openFolderInNewWindow(filePath);
+          } else {
+            dispatch({ type: 'SET_PROJECT_ROOT', root: filePath });
+          }
           return;
         }
         if (/\.(md|markdown)$/i.test(filePath)) {
@@ -321,7 +325,7 @@ export default function App() {
       document.removeEventListener('dragover', handleDragOver);
       document.removeEventListener('drop', handleDrop);
     };
-  }, [openFile, showToast]);
+  }, [openFile, showToast, state.projectRoot, state.tabs.length]);
 
   return (
     <div className="app">

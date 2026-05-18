@@ -18,9 +18,14 @@ const windowStates = new Map<BrowserWindow, WindowState>();
 const isTest = process.argv.includes('--test-headless');
 
 function createWindow(projectRoot: string | null = null): BrowserWindow {
+  const focused = BrowserWindow.getFocusedWindow();
+  const [x, y] = focused ? focused.getPosition().map((v, i) => v + 30) : [undefined, undefined];
+
   const win = new BrowserWindow({
     height: 800,
     width: 1200,
+    x,
+    y,
     minWidth: 600,
     minHeight: 400,
     show: !isTest,
@@ -267,6 +272,10 @@ ipcMain.on('unwatch-file', (_event, filePath: string) => {
     watcher.close();
     watchers.delete(filePath);
   }
+});
+
+ipcMain.handle('open-folder-in-new-window', (_event, folderPath: string) => {
+  createWindow(folderPath);
 });
 
 // --- Drag and drop at app level ---

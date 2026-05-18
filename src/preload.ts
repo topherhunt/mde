@@ -88,6 +88,9 @@ const api = {
     return () => ipcRenderer.removeListener('export-docx', handler);
   },
 
+  openFolderInNewWindow: (folderPath: string): Promise<void> =>
+    ipcRenderer.invoke('open-folder-in-new-window', folderPath),
+
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 

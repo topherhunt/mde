@@ -37,6 +37,7 @@ export interface MdeAPI {
   onFileChanged: (callback: (filePath: string) => void) => () => void;
   onExportPDF: (callback: () => void) => () => void;
   onExportDOCX: (callback: () => void) => () => void;
+  openFolderInNewWindow: (folderPath: string) => Promise<void>;
   getPathForFile: (file: File) => string;
 }
 
