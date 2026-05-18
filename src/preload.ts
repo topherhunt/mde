@@ -88,6 +88,14 @@ const api = {
     return () => ipcRenderer.removeListener('export-docx', handler);
   },
 
+  onCloseTab: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('close-tab', handler);
+    return () => ipcRenderer.removeListener('close-tab', handler);
+  },
+
+  closeWindow: (): void => ipcRenderer.send('close-window'),
+
   openFolderInNewWindow: (folderPath: string): Promise<void> =>
     ipcRenderer.invoke('open-folder-in-new-window', folderPath),
 

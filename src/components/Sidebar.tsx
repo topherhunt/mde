@@ -97,7 +97,7 @@ function DirectoryNode({ path, name, onOpenFile, isRoot }: DirectoryNodeProps) {
               <div
                 key={entry.path}
                 className="tree-item tree-file"
-                onDoubleClick={() => onOpenFile(entry.path)}
+                onClick={() => onOpenFile(entry.path)}
               >
                 <span className="tree-name">{entry.name}</span>
               </div>

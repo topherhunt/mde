@@ -136,7 +136,14 @@ function buildMenu(): void {
           },
         },
         { type: 'separator' },
-        { role: 'close' },
+        {
+          label: 'Close Tab',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('close-tab');
+          },
+        },
       ],
     },
     {
@@ -251,13 +258,14 @@ ipcMain.handle('get-project-root', (event) => {
 
 const watchers = new Map<string, fs.FSWatcher>();
 
-ipcMain.on('watch-file', (event, filePath: string) => {
+ipcMain.on('watch-file', (_event, filePath: string) => {
   if (watchers.has(filePath)) return;
   try {
     const watcher = fs.watch(filePath, () => {
-      const win = BrowserWindow.fromWebContents(event.sender);
-      if (win && !win.isDestroyed()) {
-        win.webContents.send('file-changed', filePath);
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send('file-changed', filePath);
+        }
       }
     });
     watchers.set(filePath, watcher);
@@ -272,6 +280,11 @@ ipcMain.on('unwatch-file', (_event, filePath: string) => {
     watcher.close();
     watchers.delete(filePath);
   }
+});
+
+ipcMain.on('close-window', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) win.close();
 });
 
 ipcMain.handle('open-folder-in-new-window', (_event, folderPath: string) => {

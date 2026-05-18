@@ -222,10 +222,47 @@ export default function App() {
     dispatch({ type: 'MARK_CONFLICT', tabId: activeTab.id, conflict: false });
   }, [activeTab, activeEditor]);
 
+  const registerEditor = useCallback((tabId: string, editor: TipTapEditor) => {
+    editorsRef.current.set(tabId, editor);
+    if (activeTab && tabId === activeTab.id) {
+      setActiveEditor(editor);
+    }
+  }, [activeTab]);
+
+  const unregisterEditor = useCallback((tabId: string) => {
+    editorsRef.current.delete(tabId);
+    if (activeTab && tabId === activeTab.id) {
+      setActiveEditor(null);
+    }
+  }, [activeTab]);
+
+  const handleCloseTab = useCallback((index: number) => {
+    const tab = state.tabs[index];
+    if (!tab) return;
+    if (tab.dirty) {
+      const confirmed = window.confirm(
+        `"${tab.fileName}" has unsaved changes. Close anyway and lose them?`
+      );
+      if (!confirmed) return;
+    }
+    if (tab.filePath) {
+      window.mde.unwatchFile(tab.filePath);
+    }
+    unregisterEditor(tab.id);
+    dispatch({ type: 'CLOSE_TAB', index });
+  }, [state.tabs, unregisterEditor]);
+
   useEffect(() => {
     const cleanups = [
       window.mde.onOpenFile(openFile),
       window.mde.onOpenProject((root) => dispatch({ type: 'SET_PROJECT_ROOT', root })),
+      window.mde.onCloseTab(() => {
+        if (state.tabs.length > 0) {
+          handleCloseTab(state.activeTabIndex);
+        } else {
+          window.mde.closeWindow();
+        }
+      }),
       window.mde.onSaveFile(saveActiveTab),
       window.mde.onSaveFileAs(saveActiveTabAs),
       window.mde.onToggleFind(() => dispatch({ type: 'TOGGLE_FIND_BAR' })),
@@ -256,38 +293,13 @@ export default function App() {
     ];
 
     return () => cleanups.forEach(fn => fn());
-  }, [openFile, saveActiveTab, saveActiveTabAs, state.tabs]);
+  }, [openFile, saveActiveTab, saveActiveTabAs, handleCloseTab, state.tabs, state.activeTabIndex]);
 
   useEffect(() => {
     window.mde.getProjectRoot().then(root => {
       if (root) dispatch({ type: 'SET_PROJECT_ROOT', root });
     });
   }, []);
-
-  const registerEditor = useCallback((tabId: string, editor: TipTapEditor) => {
-    editorsRef.current.set(tabId, editor);
-    if (activeTab && tabId === activeTab.id) {
-      setActiveEditor(editor);
-    }
-  }, [activeTab]);
-
-  const unregisterEditor = useCallback((tabId: string) => {
-    editorsRef.current.delete(tabId);
-    if (activeTab && tabId === activeTab.id) {
-      setActiveEditor(null);
-    }
-  }, [activeTab]);
-
-  const handleCloseTab = useCallback((index: number) => {
-    const tab = state.tabs[index];
-    if (tab) {
-      if (tab.filePath) {
-        window.mde.unwatchFile(tab.filePath);
-      }
-      unregisterEditor(tab.id);
-    }
-    dispatch({ type: 'CLOSE_TAB', index });
-  }, [state.tabs, unregisterEditor]);
 
   useEffect(() => {
     const handleDragOver = (e: DragEvent) => {

@@ -263,7 +263,12 @@ body {
 }
 
 .tab-bar::-webkit-scrollbar {
-  height: 0;
+  height: 4px;
+}
+
+.tab-bar::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 2px;
 }
 
 .tab {
@@ -275,8 +280,7 @@ body {
   cursor: pointer;
   font-size: 13px;
   white-space: nowrap;
-  min-width: 0;
-  max-width: 200px;
+  flex-shrink: 0;
   color: var(--text-muted);
   user-select: none;
 }

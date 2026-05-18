@@ -437,7 +437,7 @@ test.describe('File explorer', () => {
     await expect(page.locator('.tree-file', { hasText: 'doc2.md' })).toBeVisible();
   });
 
-  test('double-clicking a file in explorer opens it', async () => {
+  test('clicking a file in explorer opens it', async () => {
     ({ app, page } = await launchApp());
 
     const projectDir = fixturePath('test-project');
@@ -447,7 +447,7 @@ test.describe('File explorer', () => {
 
     await expect(page.locator('.tree-file', { hasText: 'doc1.md' })).toBeVisible({ timeout: 5000 });
 
-    await page.locator('.tree-file', { hasText: 'doc1.md' }).dblclick();
+    await page.locator('.tree-file', { hasText: 'doc1.md' }).click();
 
     // Tab should appear
     await expect(page.locator('.tab')).toBeVisible({ timeout: 5000 });
