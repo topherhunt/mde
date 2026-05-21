@@ -242,6 +242,25 @@ body {
 .toolbar-bold { font-weight: 700; }
 .toolbar-italic { font-style: italic; }
 .toolbar-strike { text-decoration: line-through; }
+.toolbar-highlight { background: #fef08a; color: #854d0e; }
+.toolbar-highlight:hover { background: #fde047; }
+
+.toolbar-link-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.toolbar-link-input input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 13px;
+  color: var(--text);
+  width: 200px;
+}
 
 .toolbar-select {
   border: 1px solid var(--border);
@@ -368,6 +387,7 @@ body {
 }
 
 .editor-wrapper {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -658,4 +678,60 @@ body {
   font-size: 13px;
   z-index: 9999;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.table-menu {
+  position: absolute;
+  z-index: 50;
+}
+
+.table-menu-trigger {
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.table-menu-trigger:hover {
+  background: var(--bg-tertiary);
+  color: var(--text);
+}
+
+.table-menu-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  min-width: 160px;
+}
+
+.table-menu-dropdown button {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.table-menu-dropdown button:hover {
+  background: var(--accent-light);
+}
+
+.table-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
 }

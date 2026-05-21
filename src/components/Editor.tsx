@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { useEditor, EditorContent, Editor as TipTapEditor } from '@tiptap/react';
+import { useEditor, EditorContent, Editor as TipTapEditor, createNodeFromContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
 import Link from '@tiptap/extension-link';
@@ -9,6 +9,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { common, createLowlight } from 'lowlight';
 import { Markdown as MarkdownExt } from 'tiptap-markdown';
 import { Tab } from '../types';
+import TableMenu from './TableMenu';
 
 const lowlight = createLowlight(common);
 
@@ -65,7 +66,14 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
 
     window.mde.readFile(tab.filePath).then(content => {
       // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
-      editor.commands.setContent(editor.storage.markdown.parser.parse(content));
+      const html = editor.storage.markdown.parser.parse(content);
+      const doc = createNodeFromContent(html, editor.schema, { slice: false });
+      const { tr } = editor.state;
+      tr.replaceWith(0, tr.doc.content.size, (doc as any).content);
+      tr.setMeta('addToHistory', false);
+      tr.setMeta('preventUpdate', false);
+      editor.view.dispatch(tr);
+      editor.commands.setTextSelection(0);
       loadedRef.current = true;
     });
   }, [editor, tab.filePath]);
@@ -75,6 +83,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
   return (
     <div className="editor-wrapper">
       <EditorContent editor={editor} className="editor-content" />
+      <TableMenu editor={editor} />
     </div>
   );
 }

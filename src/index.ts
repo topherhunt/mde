@@ -164,6 +164,30 @@ function buildMenu(): void {
             if (win) win.webContents.send('close-tab');
           },
         },
+        {
+          label: 'Reopen Closed Tab',
+          accelerator: 'CmdOrCtrl+Shift+T',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('reopen-closed-tab');
+          },
+        },
+        {
+          label: 'Previous Tab',
+          accelerator: 'CmdOrCtrl+Alt+Left',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('prev-tab');
+          },
+        },
+        {
+          label: 'Next Tab',
+          accelerator: 'CmdOrCtrl+Alt+Right',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('next-tab');
+          },
+        },
       ],
     },
     {

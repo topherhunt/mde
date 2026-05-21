@@ -157,6 +157,7 @@ function fileNameFromPath(filePath: string): string {
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const editorsRef = useRef<Map<string, TipTapEditor>>(new Map());
+  const closedTabsRef = useRef<string[]>([]);
   const [activeEditor, setActiveEditor] = useState<TipTapEditor | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -298,6 +299,7 @@ export default function App() {
       if (!window.confirm(msg)) return;
     }
     if (tab.filePath) {
+      closedTabsRef.current.push(tab.filePath);
       window.mde.unwatchFile(tab.filePath);
     }
     unregisterEditor(tab.id);
@@ -313,6 +315,22 @@ export default function App() {
           handleCloseTab(state.activeTabIndex);
         } else {
           window.mde.closeWindow();
+        }
+      }),
+      window.mde.onReopenClosedTab(() => {
+        const filePath = closedTabsRef.current.pop();
+        if (filePath) openFile(filePath);
+      }),
+      window.mde.onPrevTab(() => {
+        if (state.tabs.length > 1) {
+          const prev = (state.activeTabIndex - 1 + state.tabs.length) % state.tabs.length;
+          dispatch({ type: 'SET_ACTIVE_TAB', index: prev });
+        }
+      }),
+      window.mde.onNextTab(() => {
+        if (state.tabs.length > 1) {
+          const next = (state.activeTabIndex + 1) % state.tabs.length;
+          dispatch({ type: 'SET_ACTIVE_TAB', index: next });
         }
       }),
       window.mde.onSaveFile(saveActiveTab),

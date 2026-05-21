@@ -266,6 +266,23 @@ test.describe('Editing', () => {
     await expect(page.locator('.tab-dirty-dot')).toBeVisible();
   });
 
+  test('undo after opening file does not clear content', async () => {
+    ({ app, page } = await launchApp());
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, fixturePath('test-project/doc1.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Document One', { timeout: 5000 });
+
+    // Press Cmd+Z (undo) -- should NOT clear the content
+    await editor.click();
+    await page.keyboard.press('Meta+z');
+
+    await expect(editor).toContainText('Document One');
+  });
+
   test('save clears dirty state', async () => {
     ({ app, page } = await launchApp());
 

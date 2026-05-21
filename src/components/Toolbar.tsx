@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { Editor as TipTapEditor } from '@tiptap/react';
 
 interface ToolbarProps {
@@ -7,6 +7,8 @@ interface ToolbarProps {
 
 export default function Toolbar({ editor }: ToolbarProps) {
   const [, forceUpdate] = useState(0);
+  const [linkInput, setLinkInput] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
+  const linkInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!editor) return;
@@ -18,16 +20,28 @@ export default function Toolbar({ editor }: ToolbarProps) {
       editor.off('transaction', handler);
     };
   }, [editor]);
-  const setLink = useCallback(() => {
+
+  const startSetLink = useCallback(() => {
     if (!editor) return;
-    const previousUrl = editor.getAttributes('link').href;
-    const url = window.prompt('URL', previousUrl);
-    if (url === null) return;
+    const previousUrl = editor.getAttributes('link').href || '';
+    setLinkInput({ visible: true, url: previousUrl });
+    setTimeout(() => linkInputRef.current?.focus(), 0);
+  }, [editor]);
+
+  const applyLink = useCallback(() => {
+    if (!editor) return;
+    const url = linkInput.url.trim();
     if (url === '') {
       editor.chain().focus().extendMarkRange('link').unsetLink().run();
-      return;
+    } else {
+      editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
     }
-    editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+    setLinkInput({ visible: false, url: '' });
+  }, [editor, linkInput.url]);
+
+  const cancelLink = useCallback(() => {
+    setLinkInput({ visible: false, url: '' });
+    editor?.commands.focus();
   }, [editor]);
 
   const insertTable = useCallback(() => {
@@ -41,6 +55,23 @@ export default function Toolbar({ editor }: ToolbarProps) {
 
   return (
     <div className="toolbar">
+      <div className="toolbar-group">
+        <ToolbarButton
+          label="↩"
+          title="Undo (Cmd+Z)"
+          active={false}
+          onClick={() => editor.chain().focus().undo().run()}
+        />
+        <ToolbarButton
+          label="↪"
+          title="Redo (Cmd+Shift+Z)"
+          active={false}
+          onClick={() => editor.chain().focus().redo().run()}
+        />
+      </div>
+
+      <div className="toolbar-separator" />
+
       <div className="toolbar-group">
         <select
           className="toolbar-select"
@@ -108,13 +139,13 @@ export default function Toolbar({ editor }: ToolbarProps) {
 
       <div className="toolbar-group">
         <ToolbarButton
-          label="OL"
+          label="1."
           title="Ordered List (Cmd+Shift+7)"
           active={editor.isActive('orderedList')}
           onClick={() => editor.chain().focus().toggleOrderedList().run()}
         />
         <ToolbarButton
-          label="UL"
+          label="•"
           title="Unordered List (Cmd+Shift+8)"
           active={editor.isActive('bulletList')}
           onClick={() => editor.chain().focus().toggleBulletList().run()}
@@ -151,7 +182,7 @@ export default function Toolbar({ editor }: ToolbarProps) {
           label="🔗"
           title="Link (Cmd+K)"
           active={editor.isActive('link')}
-          onClick={setLink}
+          onClick={startSetLink}
         />
         <ToolbarButton
           label="⊞"
@@ -166,6 +197,24 @@ export default function Toolbar({ editor }: ToolbarProps) {
           onClick={() => editor.chain().focus().setHorizontalRule().run()}
         />
       </div>
+
+      {linkInput.visible && (
+        <div className="toolbar-link-input">
+          <input
+            ref={linkInputRef}
+            type="text"
+            placeholder="Enter URL..."
+            value={linkInput.url}
+            onChange={(e) => setLinkInput({ ...linkInput, url: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') applyLink();
+              if (e.key === 'Escape') cancelLink();
+            }}
+          />
+          <button className="toolbar-btn" onMouseDown={(e) => { e.preventDefault(); applyLink(); }}>✓</button>
+          <button className="toolbar-btn" onMouseDown={(e) => { e.preventDefault(); cancelLink(); }}>✕</button>
+        </div>
+      )}
     </div>
   );
 }

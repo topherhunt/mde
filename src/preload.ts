@@ -94,6 +94,24 @@ const api = {
     return () => ipcRenderer.removeListener('close-tab', handler);
   },
 
+  onReopenClosedTab: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('reopen-closed-tab', handler);
+    return () => ipcRenderer.removeListener('reopen-closed-tab', handler);
+  },
+
+  onPrevTab: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('prev-tab', handler);
+    return () => ipcRenderer.removeListener('prev-tab', handler);
+  },
+
+  onNextTab: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('next-tab', handler);
+    return () => ipcRenderer.removeListener('next-tab', handler);
+  },
+
   closeWindow: (): void => ipcRenderer.send('close-window'),
 
   saveLastProjectRoot: (root: string): void =>
