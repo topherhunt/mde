@@ -120,6 +120,8 @@ const api = {
   openFolderInNewWindow: (folderPath: string): Promise<void> =>
     ipcRenderer.invoke('open-folder-in-new-window', folderPath),
 
+  openExternal: (url: string): void => ipcRenderer.send('open-external', url),
+
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -337,6 +337,10 @@ ipcMain.on('close-window', (event) => {
 
 ipcMain.handle('open-folder-in-new-window', (_event, folderPath: string) => {
   createWindow(folderPath);
+});
+
+ipcMain.on('open-external', (_event, url: string) => {
+  if (/^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 
 // --- Drag and drop at app level ---

@@ -45,6 +45,7 @@ export interface MdeAPI {
   closeWindow: () => void;
   saveLastProjectRoot: (root: string) => void;
   openFolderInNewWindow: (folderPath: string) => Promise<void>;
+  openExternal: (url: string) => void;
   getPathForFile: (file: File) => string;
 }
 

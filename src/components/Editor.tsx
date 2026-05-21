@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useEditor, EditorContent, Editor as TipTapEditor, createNodeFromContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
@@ -22,6 +22,7 @@ interface EditorProps {
 
 export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: EditorProps) {
   const loadedRef = useRef(false);
+  const cleanDocRef = useRef<string | null>(null);
 
   const editor = useEditor({
     extensions: [
@@ -48,9 +49,10 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
         transformPastedText: true,
       }),
     ],
-    onUpdate: () => {
+    onUpdate: ({ editor: e }) => {
       if (loadedRef.current) {
-        onDirtyChange(true);
+        const current = JSON.stringify(e.state.doc.toJSON());
+        onDirtyChange(current !== cleanDocRef.current);
       }
     },
   });
@@ -60,6 +62,14 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
     onReady(editor);
     return () => onDestroy();
   }, [editor]);
+
+  const prevDirtyRef = useRef(tab.dirty);
+  useEffect(() => {
+    if (prevDirtyRef.current && !tab.dirty && editor) {
+      cleanDocRef.current = JSON.stringify(editor.state.doc.toJSON());
+    }
+    prevDirtyRef.current = tab.dirty;
+  }, [tab.dirty, editor]);
 
   useEffect(() => {
     if (!editor || !tab.filePath || loadedRef.current) return;
@@ -74,6 +84,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       tr.setMeta('preventUpdate', false);
       editor.view.dispatch(tr);
       editor.commands.setTextSelection(0);
+      cleanDocRef.current = JSON.stringify(editor.state.doc.toJSON());
       loadedRef.current = true;
     });
   }, [editor, tab.filePath]);
@@ -83,7 +94,57 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
   return (
     <div className="editor-wrapper">
       <EditorContent editor={editor} className="editor-content" />
+      <LinkPreview editor={editor} />
       <TableMenu editor={editor} />
+    </div>
+  );
+}
+
+function LinkPreview({ editor }: { editor: TipTapEditor }) {
+  const [link, setLink] = useState<{ url: string; top: number; left: number } | null>(null);
+
+  const update = useCallback(() => {
+    if (!editor.isActive('link')) {
+      setLink(null);
+      return;
+    }
+    const href = editor.getAttributes('link').href;
+    if (!href) { setLink(null); return; }
+
+    const { from } = editor.state.selection;
+    const coords = editor.view.coordsAtPos(from);
+    const wrapper = editor.view.dom.closest('.editor-wrapper');
+    if (!wrapper) { setLink(null); return; }
+    const rect = wrapper.getBoundingClientRect();
+    setLink({
+      url: href,
+      top: coords.bottom - rect.top + 4,
+      left: coords.left - rect.left,
+    });
+  }, [editor]);
+
+  useEffect(() => {
+    editor.on('selectionUpdate', update);
+    editor.on('transaction', update);
+    return () => {
+      editor.off('selectionUpdate', update);
+      editor.off('transaction', update);
+    };
+  }, [editor, update]);
+
+  if (!link) return null;
+
+  return (
+    <div className="link-preview" style={{ top: link.top, left: link.left }}>
+      <a
+        href={link.url}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          window.mde.openExternal(link.url);
+        }}
+      >
+        {link.url}
+      </a>
     </div>
   );
 }

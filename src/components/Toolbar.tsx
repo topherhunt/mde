@@ -23,6 +23,10 @@ export default function Toolbar({ editor }: ToolbarProps) {
 
   const startSetLink = useCallback(() => {
     if (!editor) return;
+    if (editor.state.selection.empty && !editor.isActive('link')) {
+      alert('Select some text first.');
+      return;
+    }
     const previousUrl = editor.getAttributes('link').href || '';
     setLinkInput({ visible: true, url: previousUrl });
     setTimeout(() => linkInputRef.current?.focus(), 0);
@@ -60,12 +64,14 @@ export default function Toolbar({ editor }: ToolbarProps) {
           label="↩"
           title="Undo (Cmd+Z)"
           active={false}
+          disabled={!editor.can().undo()}
           onClick={() => editor.chain().focus().undo().run()}
         />
         <ToolbarButton
           label="↪"
           title="Redo (Cmd+Shift+Z)"
           active={false}
+          disabled={!editor.can().redo()}
           onClick={() => editor.chain().focus().redo().run()}
         />
       </div>
@@ -223,18 +229,20 @@ interface ToolbarButtonProps {
   label: string;
   title: string;
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
   className?: string;
 }
 
-function ToolbarButton({ label, title, active, onClick, className }: ToolbarButtonProps) {
+function ToolbarButton({ label, title, active, disabled, onClick, className }: ToolbarButtonProps) {
   return (
     <button
-      className={`toolbar-btn ${active ? 'active' : ''} ${className || ''}`}
+      className={`toolbar-btn ${active ? 'active' : ''} ${disabled ? 'disabled' : ''} ${className || ''}`}
       title={title}
+      disabled={disabled}
       onMouseDown={(e) => {
         e.preventDefault();
-        onClick();
+        if (!disabled) onClick();
       }}
     >
       {label}

@@ -283,6 +283,55 @@ test.describe('Editing', () => {
     await expect(editor).toContainText('Document One');
   });
 
+  test('undo button is disabled when nothing to undo', async () => {
+    ({ app, page } = await launchApp());
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, fixturePath('test-project/doc1.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Document One', { timeout: 5000 });
+
+    const undoBtn = page.locator('.toolbar-btn[title*="Undo"]');
+    const redoBtn = page.locator('.toolbar-btn[title*="Redo"]');
+    await expect(undoBtn).toBeDisabled();
+    await expect(redoBtn).toBeDisabled();
+
+    // Type something -- undo should become enabled
+    await editor.click();
+    await editor.press('End');
+    await editor.type(' extra');
+    await expect(undoBtn).toBeEnabled();
+
+    // Undo -- redo should become enabled, undo disabled again
+    await page.keyboard.press('Meta+z');
+    await expect(redoBtn).toBeEnabled();
+    await expect(undoBtn).toBeDisabled();
+  });
+
+  test('undo back to original state clears dirty indicator', async () => {
+    ({ app, page } = await launchApp());
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, fixturePath('test-project/doc1.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Document One', { timeout: 5000 });
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
+
+    // Type something -- dirty dot appears
+    await editor.click();
+    await editor.press('End');
+    await editor.type(' extra');
+    await expect(page.locator('.tab-dirty-dot')).toBeVisible();
+
+    // Undo -- dirty dot should disappear
+    await page.keyboard.press('Meta+z');
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
+  });
+
   test('save clears dirty state', async () => {
     ({ app, page } = await launchApp());
 

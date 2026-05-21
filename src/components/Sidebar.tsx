@@ -167,13 +167,14 @@ function DocumentOutline({ editor }: DocumentOutlineProps) {
           key={i}
           className={`outline-item outline-h${h.level}`}
           onClick={() => {
-            editor.commands.focus();
-            editor.commands.setTextSelection(h.pos);
-            const domNode = editor.view.domAtPos(h.pos);
-            if (domNode.node instanceof HTMLElement) {
-              domNode.node.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            } else if (domNode.node.parentElement) {
-              domNode.node.parentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            editor.view.dom.focus();
+            const { tr } = editor.state;
+            const { TextSelection } = require('@tiptap/pm/state');
+            tr.setSelection(TextSelection.create(tr.doc, h.pos));
+            editor.view.dispatch(tr);
+            const dom = editor.view.nodeDOM(h.pos);
+            if (dom instanceof HTMLElement) {
+              dom.scrollIntoView({ block: 'start' });
             }
           }}
         >
