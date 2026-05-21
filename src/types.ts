@@ -17,6 +17,7 @@ export interface Tab {
   dirty: boolean;
   diskMtime: number | null;
   conflict: boolean;
+  tentative: boolean;
 }
 
 export interface MdeAPI {

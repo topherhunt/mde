@@ -6,7 +6,7 @@ interface SidebarProps {
   projectRoot: string | null;
   mode: 'explorer' | 'outline';
   onSetMode: (mode: 'explorer' | 'outline') => void;
-  onOpenFile: (filePath: string) => void;
+  onOpenFile: (filePath: string, tentative?: boolean) => void;
   activeEditor: TipTapEditor | null;
 }
 
@@ -42,7 +42,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, acti
 
 interface FileExplorerProps {
   projectRoot: string | null;
-  onOpenFile: (filePath: string) => void;
+  onOpenFile: (filePath: string, tentative?: boolean) => void;
 }
 
 function FileExplorer({ projectRoot, onOpenFile }: FileExplorerProps) {
@@ -56,7 +56,7 @@ function FileExplorer({ projectRoot, onOpenFile }: FileExplorerProps) {
 interface DirectoryNodeProps {
   path: string;
   name: string;
-  onOpenFile: (filePath: string) => void;
+  onOpenFile: (filePath: string, tentative?: boolean) => void;
   isRoot?: boolean;
 }
 
@@ -97,7 +97,8 @@ function DirectoryNode({ path, name, onOpenFile, isRoot }: DirectoryNodeProps) {
               <div
                 key={entry.path}
                 className="tree-item tree-file"
-                onClick={() => onOpenFile(entry.path)}
+                onClick={() => onOpenFile(entry.path, true)}
+                onDoubleClick={() => onOpenFile(entry.path, false)}
               >
                 <span className="tree-name">{entry.name}</span>
               </div>

@@ -7,9 +7,10 @@ interface TabBarProps {
   onSelect: (index: number) => void;
   onClose: (index: number) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
+  onPinTab: (tabId: string) => void;
 }
 
-export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder }: TabBarProps) {
+export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder, onPinTab }: TabBarProps) {
   const activeTabRef = useRef<HTMLDivElement>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -65,12 +66,13 @@ export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder
           {dropIndex === i && <div className="tab-drop-indicator" />}
           <div
             ref={i === activeIndex ? activeTabRef : undefined}
-            className={`tab ${i === activeIndex ? 'active' : ''} ${tab.conflict ? 'conflict' : ''} ${dragIndex === i ? 'dragging' : ''}`}
+            className={`tab ${i === activeIndex ? 'active' : ''} ${tab.conflict ? 'conflict' : ''} ${tab.tentative ? 'tentative' : ''} ${dragIndex === i ? 'dragging' : ''}`}
             draggable
             onDragStart={(e) => handleDragStart(e, i)}
             onDragOver={(e) => handleDragOver(e, i)}
             onDragEnd={handleDragEnd}
             onClick={() => onSelect(i)}
+            onDoubleClick={() => { if (tab.tentative) onPinTab(tab.id); }}
             onAuxClick={(e) => {
               if (e.button === 1) onClose(i);
             }}

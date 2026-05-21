@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { Editor as TipTapEditor } from '@tiptap/react';
 
 interface ToolbarProps {
@@ -6,6 +6,18 @@ interface ToolbarProps {
 }
 
 export default function Toolbar({ editor }: ToolbarProps) {
+  const [, forceUpdate] = useState(0);
+
+  useEffect(() => {
+    if (!editor) return;
+    const handler = () => forceUpdate(n => n + 1);
+    editor.on('selectionUpdate', handler);
+    editor.on('transaction', handler);
+    return () => {
+      editor.off('selectionUpdate', handler);
+      editor.off('transaction', handler);
+    };
+  }, [editor]);
   const setLink = useCallback(() => {
     if (!editor) return;
     const previousUrl = editor.getAttributes('link').href;

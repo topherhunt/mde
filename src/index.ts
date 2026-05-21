@@ -344,6 +344,37 @@ app.on('ready', () => {
   createWindow(loadLastProjectRoot());
 });
 
+let isQuitting = false;
+
+app.on('before-quit', (event) => {
+  if (isQuitting || isTest) return;
+  event.preventDefault();
+
+  (async () => {
+    let hasDirty = false;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        hasDirty = await win.webContents.executeJavaScript(
+          'document.querySelector(".tab-dirty-dot") !== null'
+        );
+        if (hasDirty) {
+          const { response } = await dialog.showMessageBox(win, {
+            type: 'warning',
+            buttons: ['Quit', 'Cancel'],
+            defaultId: 1,
+            message: 'You have unsaved changes. Quit anyway and lose them?',
+          });
+          if (response !== 0) return;
+          break;
+        }
+      } catch {}
+    }
+    isQuitting = true;
+    app.quit();
+  })();
+});
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();

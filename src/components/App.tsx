@@ -27,7 +27,8 @@ type Action =
   | { type: 'UPDATE_TAB_MTIME'; tabId: string; mtime: number }
   | { type: 'SET_SIDEBAR_MODE'; mode: 'explorer' | 'outline' }
   | { type: 'TOGGLE_FIND_BAR' }
-  | { type: 'REORDER_TABS'; fromIndex: number; toIndex: number };
+  | { type: 'REORDER_TABS'; fromIndex: number; toIndex: number }
+  | { type: 'PIN_TAB'; tabId: string };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -37,7 +38,22 @@ function reducer(state: AppState, action: Action): AppState {
     case 'OPEN_TAB': {
       const existing = state.tabs.findIndex(t => t.filePath === action.tab.filePath);
       if (existing >= 0) {
+        const tab = state.tabs[existing];
+        if (tab.tentative && !action.tab.tentative) {
+          return {
+            ...state,
+            tabs: state.tabs.map((t, i) => i === existing ? { ...t, tentative: false } : t),
+            activeTabIndex: existing,
+          };
+        }
         return { ...state, activeTabIndex: existing };
+      }
+      if (action.tab.tentative) {
+        const tentativeIndex = state.tabs.findIndex(t => t.tentative);
+        if (tentativeIndex >= 0) {
+          const tabs = state.tabs.map((t, i) => i === tentativeIndex ? action.tab : t);
+          return { ...state, tabs, activeTabIndex: tentativeIndex };
+        }
       }
       return {
         ...state,
@@ -61,7 +77,17 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         tabs: state.tabs.map(t =>
-          t.id === action.tabId ? { ...t, dirty: action.dirty } : t
+          t.id === action.tabId
+            ? { ...t, dirty: action.dirty, tentative: action.dirty ? false : t.tentative }
+            : t
+        ),
+      };
+
+    case 'PIN_TAB':
+      return {
+        ...state,
+        tabs: state.tabs.map(t =>
+          t.id === action.tabId ? { ...t, tentative: false } : t
         ),
       };
 
@@ -147,12 +173,23 @@ export default function App() {
     setActiveEditor(activeTab ? editorsRef.current.get(activeTab.id) || null : null);
   }, [activeTab?.id]);
 
-  const openFile = useCallback(async (filePath: string) => {
+  const openFile = useCallback(async (filePath: string, tentative = false) => {
     const existing = state.tabs.find(t => t.filePath === filePath);
     if (existing) {
+      if (!tentative && existing.tentative) {
+        dispatch({ type: 'PIN_TAB', tabId: existing.id });
+      }
       const idx = state.tabs.indexOf(existing);
       dispatch({ type: 'SET_ACTIVE_TAB', index: idx });
       return;
+    }
+
+    if (tentative) {
+      const oldTentative = state.tabs.find(t => t.tentative);
+      if (oldTentative && oldTentative.filePath) {
+        window.mde.unwatchFile(oldTentative.filePath);
+        editorsRef.current.delete(oldTentative.id);
+      }
     }
 
     const stats = await window.mde.getFileStats(filePath);
@@ -163,6 +200,7 @@ export default function App() {
       dirty: false,
       diskMtime: stats?.mtimeMs ?? null,
       conflict: false,
+      tentative,
     };
     dispatch({ type: 'OPEN_TAB', tab });
     window.mde.watchFile(filePath);
@@ -378,6 +416,7 @@ export default function App() {
             onSelect={(i) => dispatch({ type: 'SET_ACTIVE_TAB', index: i })}
             onClose={handleCloseTab}
             onReorder={(from, to) => dispatch({ type: 'REORDER_TABS', fromIndex: from, toIndex: to })}
+            onPinTab={(tabId) => dispatch({ type: 'PIN_TAB', tabId })}
           />
           <div className="editor-area">
             {activeTab?.conflict && (

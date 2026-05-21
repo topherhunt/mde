@@ -299,6 +299,10 @@ body {
   color: var(--danger);
 }
 
+.tab.tentative .tab-name {
+  font-style: italic;
+}
+
 .tab.dragging {
   opacity: 0.4;
 }
@@ -308,7 +312,6 @@ body {
   flex-shrink: 0;
   background: var(--accent);
   border-radius: 2px;
-  margin: 4px 0;
 }
 
 .tab-name {
