@@ -3,7 +3,8 @@ import { Editor } from '@tiptap/react';
 export const Markdown = {
   serialize(editor: Editor): string {
     // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
-    return editor.storage.markdown.getMarkdown();
+    const md = editor.storage.markdown.getMarkdown() as string;
+    return md.endsWith('\n') ? md : md + '\n';
   },
 
   deserializeInto(editor: Editor, markdown: string): void {

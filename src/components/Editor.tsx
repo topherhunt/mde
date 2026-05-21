@@ -42,6 +42,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       }),
       MarkdownExt.configure({
         html: true,
+        breaks: true,
         transformCopiedText: true,
         transformPastedText: true,
       }),

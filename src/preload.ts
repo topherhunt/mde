@@ -96,6 +96,9 @@ const api = {
 
   closeWindow: (): void => ipcRenderer.send('close-window'),
 
+  saveLastProjectRoot: (root: string): void =>
+    ipcRenderer.send('save-last-project-root', root),
+
   openFolderInNewWindow: (folderPath: string): Promise<void> =>
     ipcRenderer.invoke('open-folder-in-new-window', folderPath),
 

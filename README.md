@@ -2,6 +2,8 @@
 
 A simple WYSIWYG Markdown browser/editor for macOS. Open a folder of `.md` files, edit them visually with a toolbar, and save back to Markdown. Features tabbed editing, file explorer sidebar, document outline, find/replace, syntax-highlighted code blocks, file conflict detection, PDF and DOCX export.
 
+Inspired by this guy's MDV app: https://sockpuppet.org/blog/2026/05/12/emacsification/.
+
 ## Getting started
 
 ```
@@ -34,7 +36,6 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ## Tasks
 
-- Thank you. Tab scrolling works fantastic now, but when you open a new tab, it should auto-scroll to the right so that that tab is within view fully.
-- Great, so the prompt that appears when you try to close a tab that has unsaved changes works great. But that prompt should also appear if you attempted to save, but then you enter the conflict state because you get that warning banner saying that there's a conflict. Cmd + W or clicking x shouldn't let you accidentally close this without a prompt.
-- Anytime I open a file, edit it, and then try to save, I get the red warning banner as if there were a conflicting write: "This file was modified on disk. Your unsaved changes may conflict. Copy your work before reloading." There was no modification on disk. False positive?
+- On launch, please remember the most recently opened folder and reopen that folder by default.
+- You should be able to drag and drop tabs to reorder them. When dragging, a blue separator line (3-5px wide vert rectangle, rounded corners?) appears between tabs to indicate where it will land if you drop it.
 

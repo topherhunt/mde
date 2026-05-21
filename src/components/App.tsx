@@ -26,7 +26,8 @@ type Action =
   | { type: 'UPDATE_TAB_PATH'; tabId: string; filePath: string; fileName: string; mtime: number }
   | { type: 'UPDATE_TAB_MTIME'; tabId: string; mtime: number }
   | { type: 'SET_SIDEBAR_MODE'; mode: 'explorer' | 'outline' }
-  | { type: 'TOGGLE_FIND_BAR' };
+  | { type: 'TOGGLE_FIND_BAR' }
+  | { type: 'REORDER_TABS'; fromIndex: number; toIndex: number };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -95,6 +96,15 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_FIND_BAR':
       return { ...state, findBarOpen: !state.findBarOpen };
+
+    case 'REORDER_TABS': {
+      const tabs = [...state.tabs];
+      const [moved] = tabs.splice(action.fromIndex, 1);
+      tabs.splice(action.toIndex, 0, moved);
+      const activeTab = state.tabs[state.activeTabIndex];
+      const newActiveIndex = tabs.indexOf(activeTab);
+      return { ...state, tabs, activeTabIndex: newActiveIndex };
+    }
 
     default:
       return state;
@@ -170,6 +180,10 @@ export default function App() {
 
     const { Markdown } = await import('../utils/markdown');
     const markdown = Markdown.serialize(activeEditor);
+
+    if (activeTab.filePath) {
+      window.mde.unwatchFile(activeTab.filePath);
+    }
     const mtime = await window.mde.writeFile(filePath, markdown);
 
     if (activeTab.filePath !== filePath) {
@@ -180,11 +194,11 @@ export default function App() {
         fileName: fileNameFromPath(filePath),
         mtime,
       });
-      window.mde.watchFile(filePath);
     } else {
       dispatch({ type: 'UPDATE_TAB_MTIME', tabId: activeTab.id, mtime });
     }
     dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
+    window.mde.watchFile(filePath);
   }, [activeTab, activeEditor]);
 
   const saveActiveTabAs = useCallback(async () => {
@@ -239,11 +253,11 @@ export default function App() {
   const handleCloseTab = useCallback((index: number) => {
     const tab = state.tabs[index];
     if (!tab) return;
-    if (tab.dirty) {
-      const confirmed = window.confirm(
-        `"${tab.fileName}" has unsaved changes. Close anyway and lose them?`
-      );
-      if (!confirmed) return;
+    if (tab.dirty || tab.conflict) {
+      const msg = tab.conflict
+        ? `"${tab.fileName}" has a conflict with the version on disk. Close anyway and lose your changes?`
+        : `"${tab.fileName}" has unsaved changes. Close anyway and lose them?`;
+      if (!window.confirm(msg)) return;
     }
     if (tab.filePath) {
       window.mde.unwatchFile(tab.filePath);
@@ -302,6 +316,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (state.projectRoot) {
+      window.mde.saveLastProjectRoot(state.projectRoot);
+    }
+  }, [state.projectRoot]);
+
+  useEffect(() => {
     const handleDragOver = (e: DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -357,6 +377,7 @@ export default function App() {
             activeIndex={state.activeTabIndex}
             onSelect={(i) => dispatch({ type: 'SET_ACTIVE_TAB', index: i })}
             onClose={handleCloseTab}
+            onReorder={(from, to) => dispatch({ type: 'REORDER_TABS', fromIndex: from, toIndex: to })}
           />
           <div className="editor-area">
             {activeTab?.conflict && (

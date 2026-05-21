@@ -39,6 +39,7 @@ export interface MdeAPI {
   onExportDOCX: (callback: () => void) => () => void;
   onCloseTab: (callback: () => void) => () => void;
   closeWindow: () => void;
+  saveLastProjectRoot: (root: string) => void;
   openFolderInNewWindow: (folderPath: string) => Promise<void>;
   getPathForFile: (file: File) => string;
 }

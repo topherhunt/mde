@@ -17,6 +17,25 @@ const windowStates = new Map<BrowserWindow, WindowState>();
 
 const isTest = process.argv.includes('--test-headless');
 
+const stateFilePath = path.join(app.getPath('userData'), 'mde-state.json');
+
+function loadLastProjectRoot(): string | null {
+  if (isTest) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
+    if (data.lastProjectRoot && fs.existsSync(data.lastProjectRoot)) {
+      return data.lastProjectRoot;
+    }
+  } catch {}
+  return null;
+}
+
+function saveLastProjectRoot(root: string): void {
+  try {
+    fs.writeFileSync(stateFilePath, JSON.stringify({ lastProjectRoot: root }), 'utf-8');
+  } catch {}
+}
+
 function createWindow(projectRoot: string | null = null): BrowserWindow {
   const focused = BrowserWindow.getFocusedWindow();
   const [x, y] = focused ? focused.getPosition().map((v, i) => v + 30) : [undefined, undefined];
@@ -39,6 +58,7 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
   });
 
   windowStates.set(win, { projectRoot });
+  if (projectRoot) saveLastProjectRoot(projectRoot);
 
   win.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
@@ -282,6 +302,10 @@ ipcMain.on('unwatch-file', (_event, filePath: string) => {
   }
 });
 
+ipcMain.on('save-last-project-root', (_event, root: string) => {
+  saveLastProjectRoot(root);
+});
+
 ipcMain.on('close-window', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win) win.close();
@@ -317,7 +341,7 @@ app.on('open-file', (event, filePath) => {
 
 app.on('ready', () => {
   buildMenu();
-  createWindow();
+  createWindow(loadLastProjectRoot());
 });
 
 app.on('window-all-closed', () => {

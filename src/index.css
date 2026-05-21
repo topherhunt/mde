@@ -299,6 +299,18 @@ body {
   color: var(--danger);
 }
 
+.tab.dragging {
+  opacity: 0.4;
+}
+
+.tab-drop-indicator {
+  width: 3px;
+  flex-shrink: 0;
+  background: var(--accent);
+  border-radius: 2px;
+  margin: 4px 0;
+}
+
 .tab-name {
   display: flex;
   align-items: center;
