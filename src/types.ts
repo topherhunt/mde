@@ -46,6 +46,9 @@ export interface MdeAPI {
   saveLastProjectRoot: (root: string) => void;
   openFolderInNewWindow: (folderPath: string) => Promise<void>;
   openExternal: (url: string) => void;
+  getTheme: () => Promise<string>;
+  setTheme: (theme: string) => Promise<void>;
+  onThemeChanged: (callback: (theme: string) => void) => () => void;
   checkTerminalLauncher: () => Promise<boolean>;
   installTerminalLauncher: () => Promise<{ success: boolean; error?: string }>;
   onOpenSettings: (callback: () => void) => () => void;

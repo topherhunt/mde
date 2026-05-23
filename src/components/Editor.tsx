@@ -116,7 +116,6 @@ function LinkPreview({ editor }: { editor: TipTapEditor }) {
     if (!linkMark) { setLink(null); return; }
 
     let linkStart = $from.pos;
-    let linkEnd = $from.pos;
     const parent = $from.parent;
     const parentOffset = $from.start();
     parent.forEach((child, offset) => {
@@ -124,19 +123,17 @@ function LinkPreview({ editor }: { editor: TipTapEditor }) {
       const childEnd = childStart + child.nodeSize;
       if (child.marks.some(m => m.eq(linkMark)) && childStart <= $from.pos && childEnd >= $from.pos) {
         linkStart = childStart;
-        linkEnd = childEnd;
       }
     });
 
-    const startCoords = editor.view.coordsAtPos(linkStart);
-    const endCoords = editor.view.coordsAtPos(linkEnd);
+    const coords = editor.view.coordsAtPos(linkStart);
     const wrapper = editor.view.dom.closest('.editor-wrapper');
     if (!wrapper) { setLink(null); return; }
     const rect = wrapper.getBoundingClientRect();
     setLink({
       url: href,
-      top: endCoords.bottom - rect.top + 4,
-      left: startCoords.left - rect.left,
+      top: coords.bottom - rect.top + 4,
+      left: coords.left - rect.left,
     });
   }, [editor]);
 
@@ -162,6 +159,16 @@ function LinkPreview({ editor }: { editor: TipTapEditor }) {
       >
         {link.url}
       </a>
+      <button
+        className="link-preview-unlink"
+        title="Remove link"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          editor.chain().focus().extendMarkRange('link').unsetLink().run();
+        }}
+      >
+        ✕
+      </button>
     </div>
   );
 }

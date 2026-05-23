@@ -122,6 +122,14 @@ const api = {
 
   openExternal: (url: string): void => ipcRenderer.send('open-external', url),
 
+  getTheme: (): Promise<string> => ipcRenderer.invoke('get-theme'),
+  setTheme: (theme: string): Promise<void> => ipcRenderer.invoke('set-theme', theme),
+  onThemeChanged: (callback: (theme: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, theme: string) => callback(theme);
+    ipcRenderer.on('theme-changed', handler);
+    return () => ipcRenderer.removeListener('theme-changed', handler);
+  },
+
   checkTerminalLauncher: (): Promise<boolean> =>
     ipcRenderer.invoke('check-terminal-launcher'),
 

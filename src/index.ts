@@ -19,21 +19,31 @@ const isTest = process.argv.includes('--test-headless');
 
 const stateFilePath = path.join(app.getPath('userData'), 'mde-state.json');
 
+function loadState(): Record<string, any> {
+  try {
+    return JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
+  } catch {}
+  return {};
+}
+
+function saveState(partial: Record<string, any>): void {
+  try {
+    const current = loadState();
+    fs.writeFileSync(stateFilePath, JSON.stringify({ ...current, ...partial }), 'utf-8');
+  } catch {}
+}
+
 function loadLastProjectRoot(): string | null {
   if (isTest) return null;
-  try {
-    const data = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
-    if (data.lastProjectRoot && fs.existsSync(data.lastProjectRoot)) {
-      return data.lastProjectRoot;
-    }
-  } catch {}
+  const data = loadState();
+  if (data.lastProjectRoot && fs.existsSync(data.lastProjectRoot)) {
+    return data.lastProjectRoot;
+  }
   return null;
 }
 
 function saveLastProjectRoot(root: string): void {
-  try {
-    fs.writeFileSync(stateFilePath, JSON.stringify({ lastProjectRoot: root }), 'utf-8');
-  } catch {}
+  saveState({ lastProjectRoot: root });
 }
 
 function createWindow(projectRoot: string | null = null): BrowserWindow {
@@ -349,6 +359,19 @@ ipcMain.handle('open-folder-in-new-window', (_event, folderPath: string) => {
 
 ipcMain.on('open-external', (_event, url: string) => {
   if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+});
+
+ipcMain.handle('get-theme', () => {
+  return loadState().theme || 'system';
+});
+
+ipcMain.handle('set-theme', (_event, theme: string) => {
+  saveState({ theme });
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('theme-changed', theme);
+    }
+  }
 });
 
 ipcMain.handle('check-terminal-launcher', () => {

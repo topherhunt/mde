@@ -1,6 +1,6 @@
 # MDE (Markdown Editor)
 
-A simple WYSIWYG Markdown browser/editor for macOS. Open a folder of `.md` files, edit them visually with a toolbar, and save back to Markdown. Features tabbed editing, file explorer sidebar, document outline, find/replace, syntax-highlighted code blocks, file conflict detection, PDF and DOCX export.
+A simple WYSIWYG Markdown browser/editor for macOS. Open a folder of `.md` files, edit them visually with a toolbar, and save back to Markdown. Features tabbed editing, file explorer sidebar, document outline, find/replace, syntax-highlighted code blocks, file conflict detection, dark mode, and PDF export.
 
 Inspired by this guy's MDV app: https://sockpuppet.org/blog/2026/05/12/emacsification/.
 
@@ -12,6 +12,15 @@ npm start
 ```
 
 Drag a folder onto the window to open it as a project, or use File > Open.
+
+### Terminal launcher
+
+Open Settings (Cmd+,) and click "Install terminal launcher" to enable opening folders from the terminal:
+
+```
+mde .              # Open current directory
+mde ~/my-notes     # Open a specific folder
+```
 
 ## Tests
 
@@ -36,4 +45,3 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ## Tasks
 
-- When the app is not open, and I type `mde .`, it should open ONLY that folder, rather than additionally opening the most recent folder I had previously opened (as it does if you just open the app without a directory provided).

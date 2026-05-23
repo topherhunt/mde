@@ -20,6 +20,9 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - No auto-save. Explicit Cmd+S only.
 - File conflict detection: poll mtime, show red banner, disable Save (but not editing).
 - State management: React context + useReducer, no external state lib.
+- User preferences (theme, last project root) stored in `mde-state.json` in Electron's userData dir via `loadState`/`saveState` helpers in index.ts.
+- Initial file load uses a manual ProseMirror transaction with `addToHistory: false` so undo doesn't clear the buffer. Do not use `editor.commands.setContent()` for initial load -- TipTap's `beforeTransaction` event fires after history has already recorded the transaction.
+- The `open-file` macOS event fires before `app.on('ready')` when launched via `mde .`. A `launchFileHandled` flag prevents the ready handler from creating a duplicate default window.
 - Renderer webpack config does NOT use the `@vercel/webpack-asset-relocator-loader`. That loader breaks ESM imports from TipTap packages. It's only needed for native node modules in the main process.
 
 ## Commands
@@ -53,25 +56,30 @@ interactively to check behavior.
 
 ## Current status
 
-All features from `plan.md` phases 1-6 are implemented and covered by
-31 E2E tests. What exists:
+34 E2E tests. The app has been manually tested and is in active use.
+Packaged app is named `MDE.app` (productName "MDE" in package.json,
+name "MDE" in forge.config.ts packagerConfig).
 
-- Electron shell with IPC bridge, menu bar, drag-drop
+What exists:
+
+- Electron shell with IPC bridge, menu bar, drag-drop (with blue pulse overlay)
 - TipTap WYSIWYG editor with Markdown load/save
-- File explorer sidebar + document outline sidebar
-- Tabbed editor with dirty indicators
-- Toolbar (headings, bold, italic, strike, highlight, lists, blockquote, code, link, table, HR)
+- File explorer sidebar (root shown as bold header, not collapsible) + document outline sidebar
+- Tabbed editor with smart dirty tracking (undo back to original clears dirty)
+- Toolbar (headings, bold, italic, strike, highlight, lists, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo buttons gray out when unavailable
+- Link preview popup (top-right of editor area when cursor is in a link)
 - Find/replace floating bar
 - File conflict detection (silent reload / red banner)
 - PDF export (via Electron printToPDF)
+- Dark mode support (light / dark / system default, stored in user state file)
+- Settings dialog (Cmd+,) with theme selector and terminal launcher installer
+- Terminal launcher: `mde .` opens a folder from the terminal (installed via Settings)
+- Custom app icon (icon.icns, generated from icon.png)
 
 **Not yet done / known gaps:**
 
 - DOCX export: menu item exists but handler is not wired in the renderer
-- CSS uses component-specific classes throughout -- not yet refactored to utility classes (see conventions below)
-- The app has NOT been manually tested yet. E2E tests pass but the user hasn't confirmed visual correctness.
 - Image rendering (displaying existing `![](path)` references) is untested
-- Phase 7 (polish, accessibility, edge cases) is not started
 
 ## CSS conventions
 

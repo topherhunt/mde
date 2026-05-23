@@ -159,6 +159,7 @@ export default function App() {
   const editorsRef = useRef<Map<string, TipTapEditor>>(new Map());
   const closedTabsRef = useRef<string[]>([]);
   const [activeEditor, setActiveEditor] = useState<TipTapEditor | null>(null);
+  const [theme, setTheme] = useState<string>('system');
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [draggingOver, setDraggingOver] = useState(false);
@@ -373,7 +374,19 @@ export default function App() {
     window.mde.getProjectRoot().then(root => {
       if (root) dispatch({ type: 'SET_PROJECT_ROOT', root });
     });
+    window.mde.getTheme().then(applyTheme);
+    const cleanup = window.mde.onThemeChanged(applyTheme);
+    return cleanup;
   }, []);
+
+  function applyTheme(t: string) {
+    setTheme(t);
+    if (t === 'system') {
+      document.documentElement.removeAttribute('data-theme');
+    } else {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  }
 
   useEffect(() => {
     if (state.projectRoot) {
@@ -495,7 +508,7 @@ export default function App() {
         </div>
       </div>
       {draggingOver && <div className="drop-overlay">Drop to open</div>}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} />}
       {toast && (
         <div className="toast">{toast}</div>
       )}
@@ -503,7 +516,7 @@ export default function App() {
   );
 }
 
-function SettingsDialog({ onClose }: { onClose: () => void }) {
+function SettingsDialog({ onClose, theme }: { onClose: () => void; theme: string }) {
   const [status, setStatus] = useState<'checking' | 'idle' | 'installed' | 'installing' | 'done' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -532,6 +545,22 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
           <button className="toolbar-btn" onClick={onClose}>&times;</button>
         </div>
         <div className="modal-body">
+          <div className="settings-row">
+            <div>
+              <div className="fw-bold">Theme</div>
+              <div className="text-muted fs-sm">Choose light, dark, or match your system.</div>
+            </div>
+            <select
+              className="settings-select"
+              value={theme}
+              onChange={(e) => window.mde.setTheme(e.target.value)}
+            >
+              <option value="system">System default</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </div>
+          <div className="settings-separator" />
           <div className="settings-row">
             <div>
               <div className="fw-bold">Terminal launcher</div>
