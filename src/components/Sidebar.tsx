@@ -7,12 +7,13 @@ interface SidebarProps {
   mode: 'explorer' | 'outline';
   onSetMode: (mode: 'explorer' | 'outline') => void;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
+  onImportFile: (filePath: string) => void;
   activeEditor: TipTapEditor | null;
   activeFilePath: string | null;
   refreshKey: number;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, activeEditor, activeFilePath, refreshKey }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey }: SidebarProps) {
   return (
     <div className="sidebar">
       <div className="sidebar-tabs">
@@ -33,7 +34,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, acti
       </div>
       <div className="sidebar-content">
         {mode === 'explorer' ? (
-          <FileExplorer projectRoot={projectRoot} onOpenFile={onOpenFile} activeFilePath={activeFilePath} refreshKey={refreshKey} />
+          <FileExplorer projectRoot={projectRoot} onOpenFile={onOpenFile} onImportFile={onImportFile} activeFilePath={activeFilePath} refreshKey={refreshKey} />
         ) : (
           <DocumentOutline editor={activeEditor} />
         )}
@@ -45,6 +46,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, acti
 interface FileExplorerProps {
   projectRoot: string | null;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
+  onImportFile: (filePath: string) => void;
   activeFilePath: string | null;
   refreshKey: number;
 }
@@ -53,24 +55,29 @@ function isEditable(name: string): boolean {
   return /\.(md|markdown|txt)$/i.test(name);
 }
 
-function FileExplorer({ projectRoot, onOpenFile, activeFilePath, refreshKey }: FileExplorerProps) {
+function isImportable(name: string): boolean {
+  return /\.(docx|pdf)$/i.test(name);
+}
+
+function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey }: FileExplorerProps) {
   if (!projectRoot) {
     return <div className="sidebar-empty">Open a folder to browse files</div>;
   }
 
-  return <DirectoryNode path={projectRoot} name={projectRoot.split('/').pop() || ''} onOpenFile={onOpenFile} activeFilePath={activeFilePath} refreshKey={refreshKey} isRoot />;
+  return <DirectoryNode path={projectRoot} name={projectRoot.split('/').pop() || ''} onOpenFile={onOpenFile} onImportFile={onImportFile} activeFilePath={activeFilePath} refreshKey={refreshKey} isRoot />;
 }
 
 interface DirectoryNodeProps {
   path: string;
   name: string;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
+  onImportFile: (filePath: string) => void;
   activeFilePath: string | null;
   refreshKey: number;
   isRoot?: boolean;
 }
 
-function DirectoryNode({ path, name, onOpenFile, activeFilePath, refreshKey, isRoot }: DirectoryNodeProps) {
+function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, refreshKey, isRoot }: DirectoryNodeProps) {
   const [expanded, setExpanded] = useState(isRoot || false);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -95,11 +102,12 @@ function DirectoryNode({ path, name, onOpenFile, activeFilePath, refreshKey, isR
               path={entry.path}
               name={entry.name}
               onOpenFile={onOpenFile}
+              onImportFile={onImportFile}
               activeFilePath={activeFilePath}
               refreshKey={refreshKey}
             />
           ) : (
-            <FileNode key={entry.path} entry={entry} onOpenFile={onOpenFile} active={entry.path === activeFilePath} />
+            <FileNode key={entry.path} entry={entry} onOpenFile={onOpenFile} onImportFile={onImportFile} active={entry.path === activeFilePath} />
           )
         )}
       </div>
@@ -124,11 +132,12 @@ function DirectoryNode({ path, name, onOpenFile, activeFilePath, refreshKey, isR
                 path={entry.path}
                 name={entry.name}
                 onOpenFile={onOpenFile}
+                onImportFile={onImportFile}
                 activeFilePath={activeFilePath}
                 refreshKey={refreshKey}
               />
             ) : (
-              <FileNode key={entry.path} entry={entry} onOpenFile={onOpenFile} active={entry.path === activeFilePath} />
+              <FileNode key={entry.path} entry={entry} onOpenFile={onOpenFile} onImportFile={onImportFile} active={entry.path === activeFilePath} />
             )
           )}
           {loaded && entries.length === 0 && (
@@ -140,13 +149,15 @@ function DirectoryNode({ path, name, onOpenFile, activeFilePath, refreshKey, isR
   );
 }
 
-function FileNode({ entry, onOpenFile, active }: { entry: FileEntry; onOpenFile: (path: string, tentative?: boolean) => void; active?: boolean }) {
-  const md = isEditable(entry.name);
+function FileNode({ entry, onOpenFile, onImportFile, active }: { entry: FileEntry; onOpenFile: (path: string, tentative?: boolean) => void; onImportFile: (path: string) => void; active?: boolean }) {
+  const editable = isEditable(entry.name);
+  const importable = isImportable(entry.name);
+  const clickable = editable || importable;
   return (
     <div
-      className={`tree-item tree-file ${md ? '' : 'tree-file-disabled'} ${active ? 'tree-file-active' : ''}`}
-      onClick={md ? () => onOpenFile(entry.path, true) : undefined}
-      onDoubleClick={md ? () => onOpenFile(entry.path, false) : undefined}
+      className={`tree-item tree-file ${clickable ? '' : 'tree-file-disabled'} ${importable ? 'tree-file-importable' : ''} ${active ? 'tree-file-active' : ''}`}
+      onClick={editable ? () => onOpenFile(entry.path, true) : importable ? () => onImportFile(entry.path) : undefined}
+      onDoubleClick={editable ? () => onOpenFile(entry.path, false) : undefined}
     >
       <span className="tree-name">{entry.name}</span>
     </div>

@@ -6,6 +6,7 @@ import Toolbar from './Toolbar';
 import Editor from './Editor';
 import ConflictBanner from './ConflictBanner';
 import FindBar from './FindBar';
+import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
 import { Editor as TipTapEditor } from '@tiptap/react';
 
@@ -161,7 +162,7 @@ export default function App() {
   const closedTabsRef = useRef<string[]>([]);
   const [activeEditor, setActiveEditor] = useState<TipTapEditor | null>(null);
   const [theme, setTheme] = useState<string>('system');
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; variant?: string; hiding?: boolean } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [draggingOver, setDraggingOver] = useState(false);
   const dragCountRef = useRef(0);
@@ -170,11 +171,16 @@ export default function App() {
   const [linkTrigger, setLinkTrigger] = useState(0);
   const [spellcheck, setSpellcheck] = useState(true);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const [importConfirm, setImportConfirm] = useState<string | null>(null);
+  const [linkBarVisible, setLinkBarVisible] = useState(false);
 
-  const showToast = useCallback((msg: string) => {
+  const showToast = useCallback((msg: string, variant?: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setToast(msg);
-    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+    setToast({ msg, variant });
+    toastTimerRef.current = setTimeout(() => {
+      setToast(prev => prev ? { ...prev, hiding: true } : null);
+      setTimeout(() => setToast(null), 200);
+    }, 4000);
   }, []);
 
   const activeTab = state.tabs[state.activeTabIndex] || null;
@@ -215,6 +221,22 @@ export default function App() {
     dispatch({ type: 'OPEN_TAB', tab });
     window.mde.watchFile(filePath);
   }, [state.tabs]);
+
+  const handleImportFile = useCallback((filePath: string) => {
+    setImportConfirm(filePath);
+  }, []);
+
+  const confirmImport = useCallback(async () => {
+    if (!importConfirm) return;
+    setImportConfirm(null);
+    const result = await window.mde.convertImport(importConfirm);
+    if ('error' in result) {
+      showToast(result.error, 'danger');
+    } else {
+      showToast('Converted to Markdown. Original saved as backup.');
+      openFile(result.mdPath);
+    }
+  }, [importConfirm, openFile, showToast]);
 
   const saveActiveTab = useCallback(async () => {
     if (!activeTab || !activeEditor) return;
@@ -354,7 +376,14 @@ export default function App() {
         const ed = editorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
         if (ed) ed.chain().focus().toggleCodeBlock().run();
       }),
-      window.mde.onInsertLink(() => setLinkTrigger(n => n + 1)),
+      window.mde.onInsertLink(() => {
+        const ed = editorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
+        if (ed && (ed.isActive('link') || !ed.state.selection.empty)) {
+          setLinkBarVisible(true);
+        } else {
+          showToast('Select some text first.', 'danger');
+        }
+      }),
       window.mde.onFileChanged(async (filePath) => {
         const tab = state.tabs.find(t => t.filePath === filePath);
         if (!tab) return;
@@ -448,9 +477,11 @@ export default function App() {
         }
         if (/\.(md|markdown|txt)$/i.test(filePath)) {
           openFile(filePath);
+        } else if (/\.(docx|pdf)$/i.test(filePath)) {
+          handleImportFile(filePath);
         } else {
           const ext = filePath.split('/').pop() || filePath;
-          showToast(`Unsupported file type: ${ext} -- only .md, .markdown, and .txt files are supported`);
+          showToast(`Unsupported file type: ${ext}`, 'danger');
         }
       }
     };
@@ -479,6 +510,7 @@ export default function App() {
           mode={state.sidebarMode}
           onSetMode={(mode) => dispatch({ type: 'SET_SIDEBAR_MODE', mode })}
           onOpenFile={openFile}
+          onImportFile={handleImportFile}
           activeEditor={activeEditor}
           activeFilePath={activeTab?.filePath || null}
           refreshKey={sidebarRefreshKey}
@@ -492,7 +524,7 @@ export default function App() {
             onReorder={(from, to) => dispatch({ type: 'REORDER_TABS', fromIndex: from, toIndex: to })}
             onPinTab={(tabId) => dispatch({ type: 'PIN_TAB', tabId })}
           />
-          <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} />
+          <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} />
           <div className="editor-area">
             {activeTab?.conflict && (
               <ConflictBanner onReload={reloadActiveTab} onSaveAs={saveActiveTabAs} />
@@ -501,6 +533,12 @@ export default function App() {
               <FindBar
                 editor={activeEditor}
                 onClose={() => dispatch({ type: 'TOGGLE_FIND_BAR' })}
+              />
+            )}
+            {linkBarVisible && activeEditor && (
+              <LinkBar
+                editor={activeEditor}
+                onClose={() => setLinkBarVisible(false)}
               />
             )}
             {state.tabs.map((tab, i) => (
@@ -536,9 +574,16 @@ export default function App() {
           onClose={() => setQuickOpenVisible(false)}
         />
       )}
+      {importConfirm && (
+        <ImportConfirmDialog
+          filePath={importConfirm}
+          onConfirm={confirmImport}
+          onCancel={() => setImportConfirm(null)}
+        />
+      )}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} spellcheck={spellcheck} />}
       {toast && (
-        <div className="toast">{toast}</div>
+        <div className={`toast ${toast.variant ? `toast-${toast.variant}` : ''} ${toast.hiding ? 'toast-out' : ''}`}>{toast.msg}</div>
       )}
     </div>
   );
@@ -635,6 +680,40 @@ function SettingsDialog({ onClose, theme, spellcheck }: { onClose: () => void; t
           {status === 'error' && (
             <div className="settings-error">{errorMsg}</div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportConfirmDialog({ filePath, onConfirm, onCancel }: { filePath: string; onConfirm: () => void; onCancel: () => void }) {
+  const fileName = filePath.split('/').pop() || filePath;
+  const ext = fileName.split('.').pop()?.toUpperCase() || '';
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Enter') onConfirm();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onConfirm, onCancel]);
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="fw-bold">Convert {ext} to Markdown</span>
+          <button className="toolbar-btn" onClick={onCancel}>&times;</button>
+        </div>
+        <div className="modal-body">
+          <p>This will convert <strong>{fileName}</strong> to Markdown format for editing.</p>
+          <p className="text-muted fs-sm">The original file will be kept as a backup ({fileName.replace(/(\.[^.]+)$/, '.bak$1')}).</p>
+          <p className="text-muted fs-sm">Some formatting may be simplified during conversion.</p>
+          <div className="d-flex gap-2 mt-3" style={{ justifyContent: 'flex-end' }}>
+            <button className="settings-btn" onClick={onCancel}>Cancel</button>
+            <button className="settings-btn btn-primary" onClick={onConfirm}>Convert &amp; Open</button>
+          </div>
         </div>
       </div>
     </div>

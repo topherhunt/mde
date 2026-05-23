@@ -8,7 +8,9 @@ interface TableMenuProps {
 export default function TableMenu({ editor }: TableMenuProps) {
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const [open, setOpen] = useState(false);
+  const [alignRight, setAlignRight] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const cellPosRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -84,6 +86,12 @@ export default function TableMenu({ editor }: TableMenuProps) {
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open || !dropdownRef.current) return;
+    const rect = dropdownRef.current.getBoundingClientRect();
+    setAlignRight(rect.right > window.innerWidth - 8);
+  }, [open]);
+
   if (!position || !editor) return null;
 
   const action = (fn: () => void) => {
@@ -100,7 +108,7 @@ export default function TableMenu({ editor }: TableMenuProps) {
         <i className="bi bi-three-dots" />
       </button>
       {open && (
-        <div className="table-menu-dropdown">
+        <div className={`table-menu-dropdown ${alignRight ? 'table-menu-dropdown-right' : ''}`} ref={dropdownRef}>
           <button onMouseDown={(e) => { e.preventDefault(); action(() => editor.chain().focus().addRowBefore().run()); }}><i className="bi bi-layout-sidebar-inset table-icon-row-before" /> Insert row above</button>
           <button onMouseDown={(e) => { e.preventDefault(); action(() => editor.chain().focus().addRowAfter().run()); }}><i className="bi bi-layout-sidebar-inset table-icon-row-after" /> Insert row below</button>
           <button onMouseDown={(e) => { e.preventDefault(); action(() => editor.chain().focus().deleteRow().run()); }}><i className="bi bi-trash" /> Delete row</button>

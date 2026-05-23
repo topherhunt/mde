@@ -111,6 +111,10 @@ function buildMenu(): void {
           },
         },
         { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
         { role: 'quit' },
       ],
     },
@@ -253,6 +257,9 @@ function buildMenu(): void {
         { role: 'resetZoom' },
       ],
     },
+    {
+      role: 'windowMenu',
+    },
   ];
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -285,6 +292,7 @@ ipcMain.handle('list-directory', async (_event, dirPath: string) => {
 
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
+    if (isBackupFile(entry.name)) continue;
     const fullPath = path.join(dirPath, entry.name);
     result.push({ name: entry.name, path: fullPath, isDirectory: entry.isDirectory() });
   }
@@ -315,6 +323,7 @@ async function walkProjectFiles(root: string): Promise<string[]> {
     try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
     for (const entry of entries) {
       if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+      if (isBackupFile(entry.name)) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         queue.push(full);
@@ -330,6 +339,57 @@ async function walkProjectFiles(root: string): Promise<string[]> {
 
 ipcMain.handle('list-project-files', async (_event, root: string) => {
   return walkProjectFiles(root);
+});
+
+const IMPORTABLE_EXTENSIONS = ['.docx', '.pdf'];
+const BACKUP_INFIX = '.bak';
+
+function isBackupFile(name: string): boolean {
+  return IMPORTABLE_EXTENSIONS.some(ext => name.endsWith(`${BACKUP_INFIX}${ext}`));
+}
+
+function isImportable(name: string): boolean {
+  const lower = name.toLowerCase();
+  return IMPORTABLE_EXTENSIONS.some(ext => lower.endsWith(ext)) && !isBackupFile(lower);
+}
+
+ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdPath: string } | { error: string }> => {
+  const ext = path.extname(filePath).toLowerCase();
+  const baseName = path.basename(filePath, ext);
+  const dir = path.dirname(filePath);
+  const mdPath = path.join(dir, `${baseName}.md`);
+  const backupPath = path.join(dir, `${baseName}${BACKUP_INFIX}${ext}`);
+
+  try {
+    const existingMd = await fs.promises.access(mdPath).then(() => true).catch(() => false);
+    if (existingMd) {
+      return { error: `${baseName}.md already exists. Delete or rename it first.` };
+    }
+
+    let markdown = '';
+
+    if (ext === '.docx') {
+      const mammoth = require('mammoth');
+      const TurndownService = require('turndown');
+      const result = await mammoth.convertToHtml({ path: filePath });
+      const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+      markdown = td.turndown(result.value);
+    } else if (ext === '.pdf') {
+      const pdfParse = require('pdf-parse');
+      const buffer = await fs.promises.readFile(filePath);
+      const data = await pdfParse(buffer);
+      markdown = data.text;
+    } else {
+      return { error: `Unsupported file type: ${ext}` };
+    }
+
+    await fs.promises.rename(filePath, backupPath);
+    await fs.promises.writeFile(mdPath, markdown, 'utf-8');
+    return { mdPath };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `Conversion failed: ${msg}` };
+  }
 });
 
 ipcMain.handle('show-save-dialog', async (_event, defaultPath?: string) => {

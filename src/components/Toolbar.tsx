@@ -1,16 +1,15 @@
-import React, { useCallback, useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { Editor as TipTapEditor } from '@tiptap/react';
 
 interface ToolbarProps {
   editor: TipTapEditor | null;
   linkTrigger?: number;
-  onToast?: (msg: string) => void;
+  onToast?: (msg: string, variant?: string) => void;
+  onLinkEdit?: () => void;
 }
 
-export default function Toolbar({ editor, linkTrigger, onToast }: ToolbarProps) {
+export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: ToolbarProps) {
   const [, forceUpdate] = useState(0);
-  const [linkInput, setLinkInput] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
-  const linkInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!editor) return;
@@ -30,29 +29,11 @@ export default function Toolbar({ editor, linkTrigger, onToast }: ToolbarProps) 
   const startSetLink = useCallback(() => {
     if (!editor) return;
     if (editor.state.selection.empty && !editor.isActive('link')) {
-      onToast?.('Select some text first.');
+      onToast?.('Select some text first.', 'danger');
       return;
     }
-    const previousUrl = editor.getAttributes('link').href || '';
-    setLinkInput({ visible: true, url: previousUrl });
-    setTimeout(() => linkInputRef.current?.focus(), 0);
-  }, [editor]);
-
-  const applyLink = useCallback(() => {
-    if (!editor) return;
-    const url = linkInput.url.trim();
-    if (url === '') {
-      editor.chain().focus().extendMarkRange('link').unsetLink().run();
-    } else {
-      editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
-    }
-    setLinkInput({ visible: false, url: '' });
-  }, [editor, linkInput.url]);
-
-  const cancelLink = useCallback(() => {
-    setLinkInput({ visible: false, url: '' });
-    editor?.commands.focus();
-  }, [editor]);
+    onLinkEdit?.();
+  }, [editor, onToast, onLinkEdit]);
 
   const insertTable = useCallback(() => {
     if (!editor) return;
@@ -205,24 +186,6 @@ export default function Toolbar({ editor, linkTrigger, onToast }: ToolbarProps) 
           onClick={() => editor.chain().focus().setHorizontalRule().run()}
         />
       </div>
-
-      {linkInput.visible && (
-        <div className="toolbar-link-input">
-          <input
-            ref={linkInputRef}
-            type="text"
-            placeholder="Enter URL..."
-            value={linkInput.url}
-            onChange={(e) => setLinkInput({ ...linkInput, url: e.target.value })}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') applyLink();
-              if (e.key === 'Escape') cancelLink();
-            }}
-          />
-          <button className="toolbar-btn" onMouseDown={(e) => { e.preventDefault(); applyLink(); }}>✓</button>
-          <button className="toolbar-btn" onMouseDown={(e) => { e.preventDefault(); cancelLink(); }}>✕</button>
-        </div>
-      )}
     </div>
   );
 }

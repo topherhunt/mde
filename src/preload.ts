@@ -162,6 +162,9 @@ const api = {
     return () => ipcRenderer.removeListener('spellcheck-changed', handler);
   },
 
+  convertImport: (filePath: string): Promise<{ mdPath: string } | { error: string }> =>
+    ipcRenderer.invoke('convert-import', filePath),
+
   listProjectFiles: (root: string): Promise<string[]> =>
     ipcRenderer.invoke('list-project-files', root),
 
