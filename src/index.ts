@@ -375,10 +375,17 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
       const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
       markdown = td.turndown(result.value);
     } else if (ext === '.pdf') {
-      const pdfParse = require('pdf-parse');
+      const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs');
       const buffer = await fs.promises.readFile(filePath);
-      const data = await pdfParse(buffer);
-      markdown = data.text;
+      const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer), useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true }).promise;
+      const pages: string[] = [];
+      for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i);
+        const content = await page.getTextContent();
+        pages.push(content.items.map((item: any) => item.str).join(' '));
+      }
+      markdown = pages.join('\n\n');
+      doc.destroy();
     } else {
       return { error: `Unsupported file type: ${ext}` };
     }

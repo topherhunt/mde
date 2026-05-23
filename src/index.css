@@ -772,6 +772,10 @@ body {
   text-align: center;
 }
 
+.find-bar-count-active {
+  color: var(--text);
+}
+
 .find-bar-btn {
   border: 1px solid var(--border);
   background: var(--bg);
@@ -793,9 +797,36 @@ body {
   color: var(--accent);
 }
 
+.find-bar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.find-bar-btn.btn-primary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.find-bar-confirm-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .find-bar-close {
   font-size: 16px;
   padding: 2px 6px;
+}
+
+.find-match {
+  background: rgba(255, 200, 0, 0.3);
+  border-bottom: 2px solid #e8a800;
+}
+
+.find-match-active {
+  background: rgba(255, 200, 0, 0.6);
+  border-bottom: 2px solid #cc8800;
 }
 
 /* --- Link bar --- */
@@ -839,6 +870,10 @@ body {
 
 .link-bar-input:focus {
   border-color: var(--accent);
+}
+
+.link-bar-selection {
+  background: var(--accent-light);
 }
 
 /* --- Empty state --- */

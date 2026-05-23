@@ -699,18 +699,21 @@ function ImportConfirmDialog({ filePath, onConfirm, onCancel }: { filePath: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [onConfirm, onCancel]);
 
+  const backupName = fileName.replace(/(\.[^.]+)$/, '.bak$1');
+
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
+        <div className="modal-header" style={{ justifyContent: 'center' }}>
           <span className="fw-bold">Convert {ext} to Markdown</span>
-          <button className="toolbar-btn" onClick={onCancel}>&times;</button>
         </div>
         <div className="modal-body">
-          <p>This will convert <strong>{fileName}</strong> to Markdown format for editing.</p>
-          <p className="text-muted fs-sm">The original file will be kept as a backup ({fileName.replace(/(\.[^.]+)$/, '.bak$1')}).</p>
-          <p className="text-muted fs-sm">Some formatting may be simplified during conversion.</p>
-          <div className="d-flex gap-2 mt-3" style={{ justifyContent: 'flex-end' }}>
+          <p className="text-muted fs-sm">
+            This will convert <strong>{fileName}</strong> to Markdown for editing.
+            The original will be kept as a backup ({backupName}).
+            Some formatting may be simplified.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
             <button className="settings-btn" onClick={onCancel}>Cancel</button>
             <button className="settings-btn btn-primary" onClick={onConfirm}>Convert &amp; Open</button>
           </div>

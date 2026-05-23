@@ -1,5 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Editor as TipTapEditor } from '@tiptap/react';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
 
 interface FindBarProps {
   editor: TipTapEditor;
@@ -11,12 +13,22 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
   const [replaceTerm, setReplaceTerm] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [matchCount, setMatchCount] = useState(0);
+  const [confirmingAll, setConfirmingAll] = useState(false);
   const [currentMatch, setCurrentMatch] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const pluginKeyRef = useRef(new PluginKey('find-highlight'));
+
   useEffect(() => {
     inputRef.current?.focus();
-  }, []);
+    return () => {
+      const key = pluginKeyRef.current;
+      const plugins = editor.state.plugins.filter(p => p.spec.key !== key);
+      if (plugins.length !== editor.state.plugins.length) {
+        editor.view.updateState(editor.state.reconfigure({ plugins }));
+      }
+    };
+  }, [editor]);
 
   const findMatches = useCallback((term: string, caseSens: boolean): { from: number; to: number }[] => {
     if (!term) return [];
@@ -37,22 +49,41 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
     return matches;
   }, [editor]);
 
+  const updateHighlights = useCallback((matches: { from: number; to: number }[], activeIndex: number) => {
+    const key = pluginKeyRef.current;
+    const decorations = matches.map((m, i) =>
+      Decoration.inline(m.from, m.to, {
+        class: i === activeIndex ? 'find-match-active' : 'find-match',
+      })
+    );
+    const decoSet = DecorationSet.create(editor.state.doc, decorations);
+
+    const existingPlugins = editor.state.plugins.filter(p => p.spec.key !== key);
+    const plugin = new Plugin({
+      key,
+      props: { decorations: () => decoSet },
+    });
+    editor.view.updateState(editor.state.reconfigure({ plugins: [...existingPlugins, plugin] }));
+  }, [editor]);
+
   const doSearch = useCallback((term: string, caseSens: boolean) => {
     const matches = findMatches(term, caseSens);
     setMatchCount(matches.length);
     if (matches.length > 0) {
       setCurrentMatch(1);
       editor.commands.setTextSelection(matches[0]);
+      updateHighlights(matches, 0);
       scrollToSelection();
     } else {
       setCurrentMatch(0);
+      updateHighlights([], -1);
     }
-  }, [editor, findMatches]);
+  }, [editor, findMatches, updateHighlights]);
 
   const scrollToSelection = useCallback(() => {
     const { node } = editor.view.domAtPos(editor.state.selection.from);
     const el = node instanceof HTMLElement ? node : node.parentElement;
-    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    el?.scrollIntoView({ block: 'nearest' });
   }, [editor]);
 
   const findNext = useCallback(() => {
@@ -61,8 +92,9 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
     const next = currentMatch >= matches.length ? 1 : currentMatch + 1;
     setCurrentMatch(next);
     editor.commands.setTextSelection(matches[next - 1]);
+    updateHighlights(matches, next - 1);
     scrollToSelection();
-  }, [searchTerm, caseSensitive, currentMatch, editor, findMatches, scrollToSelection]);
+  }, [searchTerm, caseSensitive, currentMatch, editor, findMatches, scrollToSelection, updateHighlights]);
 
   const findPrev = useCallback(() => {
     const matches = findMatches(searchTerm, caseSensitive);
@@ -70,8 +102,9 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
     const prev = currentMatch <= 1 ? matches.length : currentMatch - 1;
     setCurrentMatch(prev);
     editor.commands.setTextSelection(matches[prev - 1]);
+    updateHighlights(matches, prev - 1);
     scrollToSelection();
-  }, [searchTerm, caseSensitive, currentMatch, editor, findMatches, scrollToSelection]);
+  }, [searchTerm, caseSensitive, currentMatch, editor, findMatches, scrollToSelection, updateHighlights]);
 
   const replaceOne = useCallback(() => {
     const matches = findMatches(searchTerm, caseSensitive);
@@ -128,11 +161,11 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
           value={searchTerm}
           onChange={(e) => handleSearchChange(e.target.value)}
         />
-        <span className="find-bar-count">
+        <span className={`find-bar-count ${matchCount > 0 ? 'find-bar-count-active' : ''}`}>
           {searchTerm ? `${currentMatch}/${matchCount}` : ''}
         </span>
-        <button className="find-bar-btn" onClick={findPrev} title="Previous (Shift+Enter)">▲</button>
-        <button className="find-bar-btn" onClick={findNext} title="Next (Enter)">▼</button>
+        <button className="find-bar-btn" onClick={findPrev} disabled={matchCount <= 1} title="Previous (Shift+Enter)">▲</button>
+        <button className="find-bar-btn" onClick={findNext} disabled={matchCount <= 1} title="Next (Enter)">▼</button>
         <button
           className={`find-bar-btn find-bar-case ${caseSensitive ? 'active' : ''}`}
           onClick={() => {
@@ -154,8 +187,16 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
           value={replaceTerm}
           onChange={(e) => setReplaceTerm(e.target.value)}
         />
-        <button className="find-bar-btn" onClick={replaceOne} title="Replace">Replace</button>
-        <button className="find-bar-btn" onClick={replaceAll} title="Replace All">All</button>
+        <button className="find-bar-btn" onClick={replaceOne} disabled={matchCount === 0} title="Replace">Replace</button>
+        {confirmingAll ? (
+          <>
+            <span className="find-bar-confirm-label">Replace {matchCount}?</span>
+            <button className="find-bar-btn btn-primary" onClick={() => { setConfirmingAll(false); replaceAll(); }}>Yes</button>
+            <button className="find-bar-btn" onClick={() => setConfirmingAll(false)}>No</button>
+          </>
+        ) : (
+          <button className="find-bar-btn" onClick={() => matchCount > 0 && setConfirmingAll(true)} disabled={matchCount === 0} title="Replace All">All</button>
+        )}
       </div>
     </div>
   );

@@ -50,17 +50,23 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 - TODO: Test the .docx & .pdf flow.
   - How much do they lose of the original structure & content?
 
+- Support .csv files too. Plan this out.
+
 ### For Claude
 
-- In the Find & Replace bar:
-  - The Up + Down arrows look good but should be grayed/disabled (like toolbar buttons) if 0 or 1 matches are found so no next/prev is relevant.
-  - The smooth-scroll is nice but it should be like 200ms instead of like 1s. Currently way too slow, it's distracting.
-  - Can you yellow-border any found matches in the page so your eye is drawn to the match? And yellow-highlight the current match? Especially important if you're doing a replace.
-  - "Replace All" button should prompt to confirm before executing.
--  Hey, so I'm looking at the PDF and DocX conversion flow, logic and UI. So far it looks good. the confirmation dialogue, I like your initial stab at it, but we need to tweak the formatting. So the title definitely needs to be bold and maybe it should be also centered. Also there should be at least one rem of margin above buttons and between the buttons. And let's also center the buttons div, please. Actually, you know what I'm realizing? There are... The text, the description text that you have in that dialogue confirmation box, it's like several paragraphs... It's like three different paragraphs and then the buttons div. But there's not any spacing between the paragraphs. So please, whether they're paragraphs or flex elements or whatever, please ensure that there's... I don't know. Well, okay, for the text... Let's just keep it one paragraph. Let's smoosh it into one paragraph. It doesn't need to be three separate lines. But the buttons div def definitely needs a rem spacing above it and a rem between the buttons, and it needs to be centered.
-- Also, once I finish reading that and I actually click the blue convert and open button, I get an error message saying parse pdf is not a function.
-- Also, minor visual glitch, when you select some text and then you press Command Key or you click the Link button, it'll pop down the... But the selection itself disappears. You cannot see which text you selected. And that is useful queuing information. Is it possible to keep the selection, to retain the selection visible, even though your focus is in a different element?
+- "Convert PDF" confirmation dialog: There's still no margin above the buttons, between the buttons, and the buttons are still not centered. Did this fall through the cracks?
+- Also, "Convert & Open" button fails again on this error msg: `Conversion failed: Setting up fake worker failed: "Cannot find module './pdf.worker.mjs'".`
+- Find & Replace panel, further fixes:
+  - If there's one or more match, the indicator of how many matches there are, the like the whatever, should be bold white. I'm sorry, not bold, just white instead of grey.
+  - If no matches are found, the Replace button should be disabled/grayed, not just the All button.
 
 ---
 
-- Support .csv files too
+- In the "Convert PDF to Markdown" (or DOCX ...) dialog: wrap the filenames in <code></code> please so they stand out better.
+- "Convert PDF to markdown" still failed: `Conversion failed: Setting up fake worker failed: "Cannot find module '/Users/topher/Sites/personal/mde/.webpack/main/pdf.worker.mjs' imported from /Users/topher/Sites/personal/mde/.webpack/main/index.js".` Can you set up a test in the suite to test converting a PDF? Do you already have one? Glaring omission if not, please note the importance of test coverage in CLAUDE.md. Use `test-conversion/2026-02 HDP32 ....pdf` to see the error.
+- .docx conversion likewise fails. Please ensure a test for this, use the .docx in test-conversion/ for an example.
+- Please add a right-click menu to each item in the File Explorer, with the following options:
+  - Rename
+  - Delete (with confirm dialog, moves to trash, does NOT perma-delete)
+  - Copy Relative Path
+- File Explorer, root folder name bar, right side, please add icon buttons for adding a new .md file (use `file-earmark-plus` icon) and adding a new folder (use folder-plus).

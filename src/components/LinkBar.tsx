@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Editor as TipTapEditor } from '@tiptap/react';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
 
 interface LinkBarProps {
   editor: TipTapEditor;
@@ -10,11 +12,31 @@ export default function LinkBar({ editor, onClose }: LinkBarProps) {
   const previousUrl = editor.getAttributes('link').href || '';
   const [url, setUrl] = useState(previousUrl);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectionRef = useRef<{ from: number; to: number } | null>(null);
 
   useEffect(() => {
+    const { from, to } = editor.state.selection;
+    selectionRef.current = { from, to };
+
+    const key = new PluginKey('link-bar-selection');
+    const deco = Decoration.inline(from, to, { class: 'link-bar-selection' });
+    const decoSet = DecorationSet.create(editor.state.doc, [deco]);
+    const plugin = new Plugin({
+      key,
+      props: { decorations: () => decoSet },
+    });
+    const plugins = [...editor.state.plugins, plugin];
+    editor.view.updateState(editor.state.reconfigure({ plugins }));
+
     inputRef.current?.focus();
     inputRef.current?.select();
-  }, []);
+    return () => {
+      const remaining = editor.state.plugins.filter(p => p.spec.key !== key);
+      if (remaining.length !== editor.state.plugins.length) {
+        editor.view.updateState(editor.state.reconfigure({ plugins: remaining }));
+      }
+    };
+  }, [editor]);
 
   const apply = useCallback(() => {
     const trimmed = url.trim();
