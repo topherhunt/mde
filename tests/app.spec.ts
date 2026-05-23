@@ -406,7 +406,7 @@ test.describe('Toolbar', () => {
     await paragraph.click();
     await page.keyboard.press('Meta+a');
 
-    const boldBtn = page.locator('.toolbar-bold');
+    const boldBtn = page.locator('.toolbar-btn[title*="Bold"]');
     await boldBtn.click();
 
     await expect(boldBtn).toHaveClass(/active/);

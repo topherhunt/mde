@@ -1,4 +1,5 @@
 import './types';
+import './fonts/bootstrap-icons.css';
 import './index.css';
 import React from 'react';
 import { createRoot } from 'react-dom/client';

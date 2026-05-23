@@ -464,7 +464,6 @@ export default function App() {
           activeEditor={activeEditor}
         />
         <div className="main-area">
-          <Toolbar editor={activeEditor} />
           <TabBar
             tabs={state.tabs}
             activeIndex={state.activeTabIndex}
@@ -473,6 +472,7 @@ export default function App() {
             onReorder={(from, to) => dispatch({ type: 'REORDER_TABS', fromIndex: from, toIndex: to })}
             onPinTab={(tabId) => dispatch({ type: 'PIN_TAB', tabId })}
           />
+          <Toolbar editor={activeEditor} />
           <div className="editor-area">
             {activeTab?.conflict && (
               <ConflictBanner onReload={reloadActiveTab} onSaveAs={saveActiveTabAs} />

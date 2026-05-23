@@ -304,12 +304,6 @@ body {
   border-color: var(--accent);
 }
 
-.toolbar-bold { font-weight: 700; }
-.toolbar-italic { font-style: italic; }
-.toolbar-strike { text-decoration: line-through; }
-.toolbar-highlight { background: var(--highlight-bg); color: var(--text); }
-.toolbar-highlight:hover { background: var(--highlight-bg); opacity: 0.8; }
-
 .toolbar-link-input {
   display: flex;
   align-items: center;
@@ -632,6 +626,10 @@ body {
   font-weight: 600;
 }
 
+.editor-content .tiptap .selectedCell {
+  background: var(--accent-light);
+}
+
 /* --- Syntax highlighting (lowlight / VS Code Dark+ inspired) --- */
 .editor-content .tiptap pre .hljs-comment,
 .editor-content .tiptap pre .hljs-quote { color: #6a9955; }
@@ -646,6 +644,27 @@ body {
 .editor-content .tiptap pre .hljs-title { color: #4ec9b0; }
 .editor-content .tiptap pre .hljs-function { color: #dcdcaa; }
 .editor-content .tiptap pre .hljs-variable { color: #9cdcfe; }
+
+/* --- Code copy button --- */
+.code-copy-btn {
+  position: absolute;
+  z-index: 10;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 4px 6px;
+  cursor: pointer;
+  color: var(--code-text);
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.code-copy-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.2);
+}
 
 /* --- Conflict banner --- */
 .conflict-banner {
@@ -901,6 +920,7 @@ body {
 .table-menu {
   position: absolute;
   z-index: 50;
+  transform: translate(-50%, -50%);
 }
 
 .table-menu-trigger {

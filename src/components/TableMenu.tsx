@@ -36,12 +36,13 @@ export default function TableMenu({ editor }: TableMenuProps) {
 
       const dom = editor.view.nodeDOM(cellPos);
       if (dom instanceof HTMLElement) {
-        const editorRect = editor.view.dom.closest('.editor-content')?.getBoundingClientRect();
+        const wrapper = editor.view.dom.closest('.editor-wrapper');
         const cellRect = dom.getBoundingClientRect();
-        if (editorRect) {
+        const wrapperRect = wrapper?.getBoundingClientRect();
+        if (wrapperRect) {
           setPosition({
-            top: cellRect.top - editorRect.top,
-            left: cellRect.right - editorRect.left + 4,
+            top: cellRect.top - wrapperRect.top,
+            left: cellRect.left - wrapperRect.left,
           });
         }
       }

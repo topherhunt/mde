@@ -18,6 +18,10 @@ const rendererRules = [
     use: [{ loader: 'style-loader' }, { loader: 'css-loader' }],
   },
   {
+    test: /\.(woff2?|ttf|eot)$/,
+    type: 'asset/resource',
+  },
+  {
     test: /\.m?js$/,
     resolve: {
       fullySpecified: false,

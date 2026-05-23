@@ -8,6 +8,7 @@ import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import Placeholder from '@tiptap/extension-placeholder';
 import { common, createLowlight } from 'lowlight';
 import { Markdown as MarkdownExt } from 'tiptap-markdown';
+import { TextSelection } from '@tiptap/pm/state';
 import { Tab } from '../types';
 import TableMenu from './TableMenu';
 
@@ -49,6 +50,17 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
         transformPastedText: true,
       }),
     ],
+    editorProps: {
+      handleTripleClickOn(view, pos, node, nodePos) {
+        if (node.type.name === 'tableCell' || node.type.name === 'tableHeader') {
+          const from = nodePos + 1;
+          const to = nodePos + 1 + node.content.size;
+          view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to)));
+          return true;
+        }
+        return false;
+      },
+    },
     onUpdate: ({ editor: e }) => {
       if (loadedRef.current) {
         const current = JSON.stringify(e.state.doc.toJSON());
@@ -96,6 +108,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       <EditorContent editor={editor} className="editor-content" />
       <LinkPreview editor={editor} />
       <TableMenu editor={editor} />
+      <CodeCopyButton editor={editor} />
     </div>
   );
 }
@@ -170,5 +183,115 @@ function LinkPreview({ editor }: { editor: TipTapEditor }) {
         ✕
       </button>
     </div>
+  );
+}
+
+function CodeCopyButton({ editor }: { editor: TipTapEditor }) {
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [hoverBlock, setHoverBlock] = useState<HTMLElement | null>(null);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const updateFromCursor = useCallback(() => {
+    if (editor.isActive('codeBlock')) {
+      const { $from } = editor.state.selection;
+      let codePos: number | null = null;
+      for (let d = $from.depth; d > 0; d--) {
+        if ($from.node(d).type.name === 'codeBlock') {
+          codePos = $from.before(d);
+          break;
+        }
+      }
+      if (codePos !== null) {
+        const dom = editor.view.nodeDOM(codePos);
+        if (dom instanceof HTMLElement) {
+          positionFromDom(dom);
+          return;
+        }
+      }
+    }
+    if (!hoverBlock) setPos(null);
+  }, [editor, hoverBlock]);
+
+  const positionFromDom = useCallback((pre: HTMLElement) => {
+    const wrapper = editor.view.dom.closest('.editor-wrapper');
+    if (!wrapper) return;
+    const wRect = wrapper.getBoundingClientRect();
+    const pRect = pre.getBoundingClientRect();
+    setPos({
+      top: pRect.top - wRect.top + 6,
+      right: wRect.right - pRect.right + 6,
+    });
+  }, [editor]);
+
+  useEffect(() => {
+    editor.on('selectionUpdate', updateFromCursor);
+    editor.on('transaction', updateFromCursor);
+    return () => {
+      editor.off('selectionUpdate', updateFromCursor);
+      editor.off('transaction', updateFromCursor);
+    };
+  }, [editor, updateFromCursor]);
+
+  useEffect(() => {
+    const editorDom = editor.view.dom;
+    const onEnter = (e: Event) => {
+      const target = (e.target as HTMLElement).closest('pre');
+      if (target && editorDom.contains(target)) {
+        setHoverBlock(target);
+        positionFromDom(target);
+      }
+    };
+    const onLeave = (e: Event) => {
+      const target = (e.target as HTMLElement).closest('pre');
+      if (target) {
+        setHoverBlock(null);
+        updateFromCursor();
+      }
+    };
+    editorDom.addEventListener('mouseenter', onEnter, true);
+    editorDom.addEventListener('mouseleave', onLeave, true);
+    return () => {
+      editorDom.removeEventListener('mouseenter', onEnter, true);
+      editorDom.removeEventListener('mouseleave', onLeave, true);
+    };
+  }, [editor, positionFromDom, updateFromCursor]);
+
+  useEffect(() => {
+    if (hoverBlock) positionFromDom(hoverBlock);
+  }, [hoverBlock, positionFromDom]);
+
+  const handleCopy = useCallback(() => {
+    const target = hoverBlock || (() => {
+      if (!editor.isActive('codeBlock')) return null;
+      const { $from } = editor.state.selection;
+      for (let d = $from.depth; d > 0; d--) {
+        if ($from.node(d).type.name === 'codeBlock') {
+          const dom = editor.view.nodeDOM($from.before(d));
+          return dom instanceof HTMLElement ? dom : null;
+        }
+      }
+      return null;
+    })();
+    if (!target) return;
+    const code = target.querySelector('code');
+    const text = code ? code.textContent || '' : target.textContent || '';
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    copiedTimer.current = setTimeout(() => setCopied(false), 1500);
+  }, [editor, hoverBlock]);
+
+  if (!pos) return null;
+
+  return (
+    <button
+      className="code-copy-btn"
+      style={{ top: pos.top, right: pos.right }}
+      onMouseDown={(e) => { e.preventDefault(); handleCopy(); }}
+      title="Copy code"
+    >
+      <i className={`bi bi-${copied ? 'check-lg' : 'clipboard'}`} />
+    </button>
   );
 }

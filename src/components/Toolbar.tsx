@@ -61,14 +61,14 @@ export default function Toolbar({ editor }: ToolbarProps) {
     <div className="toolbar">
       <div className="toolbar-group">
         <ToolbarButton
-          label="↩"
+          icon="arrow-counterclockwise"
           title="Undo (Cmd+Z)"
           active={false}
           disabled={!editor.can().undo()}
           onClick={() => editor.chain().focus().undo().run()}
         />
         <ToolbarButton
-          label="↪"
+          icon="arrow-clockwise"
           title="Redo (Cmd+Shift+Z)"
           active={false}
           disabled={!editor.can().redo()}
@@ -112,32 +112,28 @@ export default function Toolbar({ editor }: ToolbarProps) {
 
       <div className="toolbar-group">
         <ToolbarButton
-          label="B"
+          icon="type-bold"
           title="Bold (Cmd+B)"
           active={editor.isActive('bold')}
           onClick={() => editor.chain().focus().toggleBold().run()}
-          className="toolbar-bold"
         />
         <ToolbarButton
-          label="I"
+          icon="type-italic"
           title="Italic (Cmd+I)"
           active={editor.isActive('italic')}
           onClick={() => editor.chain().focus().toggleItalic().run()}
-          className="toolbar-italic"
         />
         <ToolbarButton
-          label="S"
+          icon="type-strikethrough"
           title="Strikethrough (Cmd+Shift+X)"
           active={editor.isActive('strike')}
           onClick={() => editor.chain().focus().toggleStrike().run()}
-          className="toolbar-strike"
         />
         <ToolbarButton
-          label="H"
+          icon="highlighter"
           title="Highlight"
           active={editor.isActive('highlight')}
           onClick={() => editor.chain().focus().toggleHighlight().run()}
-          className="toolbar-highlight"
         />
       </div>
 
@@ -145,19 +141,19 @@ export default function Toolbar({ editor }: ToolbarProps) {
 
       <div className="toolbar-group">
         <ToolbarButton
-          label="1."
+          icon="list-ol"
           title="Ordered List (Cmd+Shift+7)"
           active={editor.isActive('orderedList')}
           onClick={() => editor.chain().focus().toggleOrderedList().run()}
         />
         <ToolbarButton
-          label="•"
+          icon="list-ul"
           title="Unordered List (Cmd+Shift+8)"
           active={editor.isActive('bulletList')}
           onClick={() => editor.chain().focus().toggleBulletList().run()}
         />
         <ToolbarButton
-          label="❝"
+          icon="quote"
           title="Blockquote (Cmd+Shift+B)"
           active={editor.isActive('blockquote')}
           onClick={() => editor.chain().focus().toggleBlockquote().run()}
@@ -168,13 +164,13 @@ export default function Toolbar({ editor }: ToolbarProps) {
 
       <div className="toolbar-group">
         <ToolbarButton
-          label="<>"
+          icon="code"
           title="Inline Code (Cmd+E)"
           active={editor.isActive('code')}
           onClick={() => editor.chain().focus().toggleCode().run()}
         />
         <ToolbarButton
-          label="[>]"
+          icon="code-square"
           title="Code Block (Cmd+Shift+E)"
           active={editor.isActive('codeBlock')}
           onClick={() => editor.chain().focus().toggleCodeBlock().run()}
@@ -185,19 +181,19 @@ export default function Toolbar({ editor }: ToolbarProps) {
 
       <div className="toolbar-group">
         <ToolbarButton
-          label="🔗"
+          icon="link-45deg"
           title="Link (Cmd+K)"
           active={editor.isActive('link')}
           onClick={startSetLink}
         />
         <ToolbarButton
-          label="⊞"
+          icon="table"
           title="Insert Table"
           active={false}
           onClick={insertTable}
         />
         <ToolbarButton
-          label="―"
+          icon="hr"
           title="Horizontal Rule"
           active={false}
           onClick={() => editor.chain().focus().setHorizontalRule().run()}
@@ -226,7 +222,8 @@ export default function Toolbar({ editor }: ToolbarProps) {
 }
 
 interface ToolbarButtonProps {
-  label: string;
+  icon?: string;
+  label?: string;
   title: string;
   active: boolean;
   disabled?: boolean;
@@ -234,7 +231,7 @@ interface ToolbarButtonProps {
   className?: string;
 }
 
-function ToolbarButton({ label, title, active, disabled, onClick, className }: ToolbarButtonProps) {
+function ToolbarButton({ icon, label, title, active, disabled, onClick, className }: ToolbarButtonProps) {
   return (
     <button
       className={`toolbar-btn ${active ? 'active' : ''} ${disabled ? 'disabled' : ''} ${className || ''}`}
@@ -245,7 +242,7 @@ function ToolbarButton({ label, title, active, disabled, onClick, className }: T
         if (!disabled) onClick();
       }}
     >
-      {label}
+      {icon ? <i className={`bi bi-${icon}`} /> : label}
     </button>
   );
 }
