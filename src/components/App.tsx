@@ -6,6 +6,7 @@ import Toolbar from './Toolbar';
 import Editor from './Editor';
 import ConflictBanner from './ConflictBanner';
 import FindBar from './FindBar';
+import QuickOpen from './QuickOpen';
 import { Editor as TipTapEditor } from '@tiptap/react';
 
 interface AppState {
@@ -165,6 +166,10 @@ export default function App() {
   const [draggingOver, setDraggingOver] = useState(false);
   const dragCountRef = useRef(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [quickOpenVisible, setQuickOpenVisible] = useState(false);
+  const [linkTrigger, setLinkTrigger] = useState(0);
+  const [spellcheck, setSpellcheck] = useState(true);
+  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
 
   const showToast = useCallback((msg: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -344,6 +349,12 @@ export default function App() {
         await window.mde.exportPDF();
       }),
       window.mde.onOpenSettings(() => setSettingsOpen(true)),
+      window.mde.onQuickOpen(() => setQuickOpenVisible(true)),
+      window.mde.onToggleCodeBlock(() => {
+        const ed = editorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
+        if (ed) ed.chain().focus().toggleCodeBlock().run();
+      }),
+      window.mde.onInsertLink(() => setLinkTrigger(n => n + 1)),
       window.mde.onFileChanged(async (filePath) => {
         const tab = state.tabs.find(t => t.filePath === filePath);
         if (!tab) return;
@@ -375,8 +386,11 @@ export default function App() {
       if (root) dispatch({ type: 'SET_PROJECT_ROOT', root });
     });
     window.mde.getTheme().then(applyTheme);
-    const cleanup = window.mde.onThemeChanged(applyTheme);
-    return cleanup;
+    window.mde.getSpellcheck().then(setSpellcheck);
+    const cleanupTheme = window.mde.onThemeChanged(applyTheme);
+    const cleanupSpell = window.mde.onSpellcheckChanged(setSpellcheck);
+    const cleanupProjectFiles = window.mde.onProjectFilesChanged(() => setSidebarRefreshKey(n => n + 1));
+    return () => { cleanupTheme(); cleanupSpell(); cleanupProjectFiles(); };
   }, []);
 
   function applyTheme(t: string) {
@@ -391,7 +405,11 @@ export default function App() {
   useEffect(() => {
     if (state.projectRoot) {
       window.mde.saveLastProjectRoot(state.projectRoot);
+      window.mde.watchProject(state.projectRoot);
     }
+    return () => {
+      if (state.projectRoot) window.mde.unwatchProject(state.projectRoot);
+    };
   }, [state.projectRoot]);
 
   useEffect(() => {
@@ -428,11 +446,11 @@ export default function App() {
           }
           return;
         }
-        if (/\.(md|markdown)$/i.test(filePath)) {
+        if (/\.(md|markdown|txt)$/i.test(filePath)) {
           openFile(filePath);
         } else {
           const ext = filePath.split('/').pop() || filePath;
-          showToast(`Unsupported file type: ${ext} -- only .md and .markdown files are supported`);
+          showToast(`Unsupported file type: ${ext} -- only .md, .markdown, and .txt files are supported`);
         }
       }
     };
@@ -462,6 +480,8 @@ export default function App() {
           onSetMode={(mode) => dispatch({ type: 'SET_SIDEBAR_MODE', mode })}
           onOpenFile={openFile}
           activeEditor={activeEditor}
+          activeFilePath={activeTab?.filePath || null}
+          refreshKey={sidebarRefreshKey}
         />
         <div className="main-area">
           <TabBar
@@ -472,7 +492,7 @@ export default function App() {
             onReorder={(from, to) => dispatch({ type: 'REORDER_TABS', fromIndex: from, toIndex: to })}
             onPinTab={(tabId) => dispatch({ type: 'PIN_TAB', tabId })}
           />
-          <Toolbar editor={activeEditor} />
+          <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} />
           <div className="editor-area">
             {activeTab?.conflict && (
               <ConflictBanner onReload={reloadActiveTab} onSaveAs={saveActiveTabAs} />
@@ -502,13 +522,21 @@ export default function App() {
             {state.tabs.length === 0 && (
               <div className="empty-state">
                 <p>Open a file or drag a folder to get started</p>
+                <p className="fs-sm mt-2">or press <kbd>Cmd + O</kbd> to quick-search</p>
               </div>
             )}
           </div>
         </div>
       </div>
       {draggingOver && <div className="drop-overlay">Drop to open</div>}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} />}
+      {quickOpenVisible && state.projectRoot && (
+        <QuickOpen
+          projectRoot={state.projectRoot}
+          onSelect={(filePath) => { setQuickOpenVisible(false); openFile(filePath); }}
+          onClose={() => setQuickOpenVisible(false)}
+        />
+      )}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} spellcheck={spellcheck} />}
       {toast && (
         <div className="toast">{toast}</div>
       )}
@@ -516,7 +544,7 @@ export default function App() {
   );
 }
 
-function SettingsDialog({ onClose, theme }: { onClose: () => void; theme: string }) {
+function SettingsDialog({ onClose, theme, spellcheck }: { onClose: () => void; theme: string; spellcheck: boolean }) {
   const [status, setStatus] = useState<'checking' | 'idle' | 'installed' | 'installing' | 'done' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -524,6 +552,9 @@ function SettingsDialog({ onClose, theme }: { onClose: () => void; theme: string
     window.mde.checkTerminalLauncher().then(exists => {
       setStatus(exists ? 'installed' : 'idle');
     });
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   const install = async () => {
@@ -559,6 +590,21 @@ function SettingsDialog({ onClose, theme }: { onClose: () => void; theme: string
               <option value="light">Light</option>
               <option value="dark">Dark</option>
             </select>
+          </div>
+          <div className="settings-separator" />
+          <div className="settings-row">
+            <div>
+              <div className="fw-bold">Spell check</div>
+              <div className="text-muted fs-sm">Show spelling errors with a red underline.</div>
+            </div>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={spellcheck}
+                onChange={(e) => window.mde.setSpellcheck(e.target.checked)}
+              />
+              <span className="settings-toggle-slider" />
+            </label>
           </div>
           <div className="settings-separator" />
           <div className="settings-row">

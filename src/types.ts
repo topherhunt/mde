@@ -52,6 +52,16 @@ export interface MdeAPI {
   checkTerminalLauncher: () => Promise<boolean>;
   installTerminalLauncher: () => Promise<{ success: boolean; error?: string }>;
   onOpenSettings: (callback: () => void) => () => void;
+  onToggleCodeBlock: (callback: () => void) => () => void;
+  onInsertLink: (callback: () => void) => () => void;
+  getSpellcheck: () => Promise<boolean>;
+  setSpellcheck: (enabled: boolean) => Promise<void>;
+  onSpellcheckChanged: (callback: (enabled: boolean) => void) => () => void;
+  watchProject: (root: string) => void;
+  unwatchProject: (root: string) => void;
+  onProjectFilesChanged: (callback: () => void) => () => void;
+  listProjectFiles: (root: string) => Promise<string[]>;
+  onQuickOpen: (callback: () => void) => () => void;
   getPathForFile: (file: File) => string;
 }
 

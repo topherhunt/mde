@@ -8,9 +8,11 @@ interface SidebarProps {
   onSetMode: (mode: 'explorer' | 'outline') => void;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
   activeEditor: TipTapEditor | null;
+  activeFilePath: string | null;
+  refreshKey: number;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, activeEditor }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, activeEditor, activeFilePath, refreshKey }: SidebarProps) {
   return (
     <div className="sidebar">
       <div className="sidebar-tabs">
@@ -19,19 +21,19 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, acti
           onClick={() => onSetMode('explorer')}
           title="File Explorer"
         >
-          Files
+          <i className="bi bi-folder" />
         </button>
         <button
           className={`sidebar-tab ${mode === 'outline' ? 'active' : ''}`}
           onClick={() => onSetMode('outline')}
           title="Document Outline"
         >
-          Outline
+          <i className="bi bi-list-nested" />
         </button>
       </div>
       <div className="sidebar-content">
         {mode === 'explorer' ? (
-          <FileExplorer projectRoot={projectRoot} onOpenFile={onOpenFile} />
+          <FileExplorer projectRoot={projectRoot} onOpenFile={onOpenFile} activeFilePath={activeFilePath} refreshKey={refreshKey} />
         ) : (
           <DocumentOutline editor={activeEditor} />
         )}
@@ -43,36 +45,44 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, acti
 interface FileExplorerProps {
   projectRoot: string | null;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
+  activeFilePath: string | null;
+  refreshKey: number;
 }
 
-function FileExplorer({ projectRoot, onOpenFile }: FileExplorerProps) {
+function isEditable(name: string): boolean {
+  return /\.(md|markdown|txt)$/i.test(name);
+}
+
+function FileExplorer({ projectRoot, onOpenFile, activeFilePath, refreshKey }: FileExplorerProps) {
   if (!projectRoot) {
     return <div className="sidebar-empty">Open a folder to browse files</div>;
   }
 
-  return <DirectoryNode path={projectRoot} name={projectRoot.split('/').pop() || ''} onOpenFile={onOpenFile} isRoot />;
+  return <DirectoryNode path={projectRoot} name={projectRoot.split('/').pop() || ''} onOpenFile={onOpenFile} activeFilePath={activeFilePath} refreshKey={refreshKey} isRoot />;
 }
 
 interface DirectoryNodeProps {
   path: string;
   name: string;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
+  activeFilePath: string | null;
+  refreshKey: number;
   isRoot?: boolean;
 }
 
-function DirectoryNode({ path, name, onOpenFile, isRoot }: DirectoryNodeProps) {
+function DirectoryNode({ path, name, onOpenFile, activeFilePath, refreshKey, isRoot }: DirectoryNodeProps) {
   const [expanded, setExpanded] = useState(isRoot || false);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if ((isRoot || expanded) && !loaded) {
+    if (isRoot || expanded) {
       window.mde.listDirectory(path).then(result => {
         setEntries(result);
         setLoaded(true);
       });
     }
-  }, [isRoot, expanded, loaded, path]);
+  }, [isRoot, expanded, path, refreshKey]);
 
   if (isRoot) {
     return (
@@ -85,16 +95,11 @@ function DirectoryNode({ path, name, onOpenFile, isRoot }: DirectoryNodeProps) {
               path={entry.path}
               name={entry.name}
               onOpenFile={onOpenFile}
+              activeFilePath={activeFilePath}
+              refreshKey={refreshKey}
             />
           ) : (
-            <div
-              key={entry.path}
-              className="tree-item tree-file"
-              onClick={() => onOpenFile(entry.path, true)}
-              onDoubleClick={() => onOpenFile(entry.path, false)}
-            >
-              <span className="tree-name">{entry.name}</span>
-            </div>
+            <FileNode key={entry.path} entry={entry} onOpenFile={onOpenFile} active={entry.path === activeFilePath} />
           )
         )}
       </div>
@@ -119,23 +124,31 @@ function DirectoryNode({ path, name, onOpenFile, isRoot }: DirectoryNodeProps) {
                 path={entry.path}
                 name={entry.name}
                 onOpenFile={onOpenFile}
+                activeFilePath={activeFilePath}
+                refreshKey={refreshKey}
               />
             ) : (
-              <div
-                key={entry.path}
-                className="tree-item tree-file"
-                onClick={() => onOpenFile(entry.path, true)}
-                onDoubleClick={() => onOpenFile(entry.path, false)}
-              >
-                <span className="tree-name">{entry.name}</span>
-              </div>
+              <FileNode key={entry.path} entry={entry} onOpenFile={onOpenFile} active={entry.path === activeFilePath} />
             )
           )}
           {loaded && entries.length === 0 && (
-            <div className="tree-empty">No markdown files</div>
+            <div className="tree-empty">Empty folder</div>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function FileNode({ entry, onOpenFile, active }: { entry: FileEntry; onOpenFile: (path: string, tentative?: boolean) => void; active?: boolean }) {
+  const md = isEditable(entry.name);
+  return (
+    <div
+      className={`tree-item tree-file ${md ? '' : 'tree-file-disabled'} ${active ? 'tree-file-active' : ''}`}
+      onClick={md ? () => onOpenFile(entry.path, true) : undefined}
+      onDoubleClick={md ? () => onOpenFile(entry.path, false) : undefined}
+    >
+      <span className="tree-name">{entry.name}</span>
     </div>
   );
 }

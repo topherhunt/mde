@@ -70,6 +70,9 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
   windowStates.set(win, { projectRoot });
   if (projectRoot) saveLastProjectRoot(projectRoot);
 
+  const spellcheckEnabled = loadState().spellcheck !== false;
+  win.webContents.session.setSpellCheckerEnabled(spellcheckEnabled);
+
   win.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
   win.on('closed', () => {
@@ -115,18 +118,11 @@ function buildMenu(): void {
       label: 'File',
       submenu: [
         {
-          label: 'Open File...',
+          label: 'Quick Open...',
           accelerator: 'CmdOrCtrl+O',
-          click: async () => {
+          click: () => {
             const win = BrowserWindow.getFocusedWindow();
-            if (!win) return;
-            const result = await dialog.showOpenDialog(win, {
-              properties: ['openFile'],
-              filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
-            });
-            if (!result.canceled && result.filePaths.length > 0) {
-              win.webContents.send('open-file', result.filePaths[0]);
-            }
+            if (win) win.webContents.send('quick-open');
           },
         },
         {
@@ -227,6 +223,23 @@ function buildMenu(): void {
             if (win) win.webContents.send('toggle-find');
           },
         },
+        { type: 'separator' },
+        {
+          label: 'Toggle Code Block',
+          accelerator: 'CmdOrCtrl+Shift+E',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('toggle-code-block');
+          },
+        },
+        {
+          label: 'Insert Link',
+          accelerator: 'CmdOrCtrl+K',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('insert-link');
+          },
+        },
       ],
     },
     {
@@ -273,11 +286,7 @@ ipcMain.handle('list-directory', async (_event, dirPath: string) => {
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const fullPath = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      result.push({ name: entry.name, path: fullPath, isDirectory: true });
-    } else if (/\.(md|markdown)$/i.test(entry.name)) {
-      result.push({ name: entry.name, path: fullPath, isDirectory: false });
-    }
+    result.push({ name: entry.name, path: fullPath, isDirectory: entry.isDirectory() });
   }
 
   result.sort((a, b) => {
@@ -286,6 +295,41 @@ ipcMain.handle('list-directory', async (_event, dirPath: string) => {
   });
 
   return result;
+});
+
+const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', '.webpack', '__pycache__', '.venv', 'dist', 'out', '.DS_Store', 'vendor', 'build']);
+const FILE_INDEX_TTL = 10_000;
+const FILE_INDEX_CAP = 50_000;
+
+const fileIndexCache = new Map<string, { files: string[]; time: number }>();
+
+async function walkProjectFiles(root: string): Promise<string[]> {
+  const cached = fileIndexCache.get(root);
+  if (cached && Date.now() - cached.time < FILE_INDEX_TTL) return cached.files;
+
+  const files: string[] = [];
+  const queue: string[] = [root];
+  while (queue.length > 0 && files.length < FILE_INDEX_CAP) {
+    const dir = queue.shift()!;
+    let entries: fs.Dirent[];
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(full);
+      } else {
+        files.push(path.relative(root, full));
+      }
+    }
+  }
+  files.sort();
+  fileIndexCache.set(root, { files, time: Date.now() });
+  return files;
+}
+
+ipcMain.handle('list-project-files', async (_event, root: string) => {
+  return walkProjectFiles(root);
 });
 
 ipcMain.handle('show-save-dialog', async (_event, defaultPath?: string) => {
@@ -348,6 +392,36 @@ ipcMain.on('save-last-project-root', (_event, root: string) => {
   saveLastProjectRoot(root);
 });
 
+const projectWatchers = new Map<string, fs.FSWatcher>();
+const projectWatchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+ipcMain.on('watch-project', (_event, root: string) => {
+  if (projectWatchers.has(root)) return;
+  try {
+    const watcher = fs.watch(root, { recursive: true }, () => {
+      const existing = projectWatchTimers.get(root);
+      if (existing) clearTimeout(existing);
+      projectWatchTimers.set(root, setTimeout(() => {
+        projectWatchTimers.delete(root);
+        fileIndexCache.delete(root);
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('project-files-changed');
+          }
+        }
+      }, 2000));
+    });
+    projectWatchers.set(root, watcher);
+  } catch {}
+});
+
+ipcMain.on('unwatch-project', (_event, root: string) => {
+  const watcher = projectWatchers.get(root);
+  if (watcher) { watcher.close(); projectWatchers.delete(root); }
+  const timer = projectWatchTimers.get(root);
+  if (timer) { clearTimeout(timer); projectWatchTimers.delete(root); }
+});
+
 ipcMain.on('close-window', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win) win.close();
@@ -370,6 +444,21 @@ ipcMain.handle('set-theme', (_event, theme: string) => {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send('theme-changed', theme);
+    }
+  }
+});
+
+ipcMain.handle('get-spellcheck', () => {
+  const state = loadState();
+  return state.spellcheck !== false;
+});
+
+ipcMain.handle('set-spellcheck', (_event, enabled: boolean) => {
+  saveState({ spellcheck: enabled });
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.session.setSpellCheckerEnabled(enabled);
+      win.webContents.send('spellcheck-changed', enabled);
     }
   }
 });

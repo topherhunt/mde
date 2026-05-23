@@ -3,9 +3,11 @@ import { Editor as TipTapEditor } from '@tiptap/react';
 
 interface ToolbarProps {
   editor: TipTapEditor | null;
+  linkTrigger?: number;
+  onToast?: (msg: string) => void;
 }
 
-export default function Toolbar({ editor }: ToolbarProps) {
+export default function Toolbar({ editor, linkTrigger, onToast }: ToolbarProps) {
   const [, forceUpdate] = useState(0);
   const [linkInput, setLinkInput] = useState<{ visible: boolean; url: string }>({ visible: false, url: '' });
   const linkInputRef = useRef<HTMLInputElement>(null);
@@ -21,10 +23,14 @@ export default function Toolbar({ editor }: ToolbarProps) {
     };
   }, [editor]);
 
+  useEffect(() => {
+    if (linkTrigger && linkTrigger > 0) startSetLink();
+  }, [linkTrigger]);
+
   const startSetLink = useCallback(() => {
     if (!editor) return;
     if (editor.state.selection.empty && !editor.isActive('link')) {
-      alert('Select some text first.');
+      onToast?.('Select some text first.');
       return;
     }
     const previousUrl = editor.getAttributes('link').href || '';

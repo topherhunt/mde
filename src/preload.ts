@@ -142,6 +142,43 @@ const api = {
     return () => ipcRenderer.removeListener('open-settings', handler);
   },
 
+  onToggleCodeBlock: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('toggle-code-block', handler);
+    return () => ipcRenderer.removeListener('toggle-code-block', handler);
+  },
+
+  onInsertLink: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('insert-link', handler);
+    return () => ipcRenderer.removeListener('insert-link', handler);
+  },
+
+  getSpellcheck: (): Promise<boolean> => ipcRenderer.invoke('get-spellcheck'),
+  setSpellcheck: (enabled: boolean): Promise<void> => ipcRenderer.invoke('set-spellcheck', enabled),
+  onSpellcheckChanged: (callback: (enabled: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, enabled: boolean) => callback(enabled);
+    ipcRenderer.on('spellcheck-changed', handler);
+    return () => ipcRenderer.removeListener('spellcheck-changed', handler);
+  },
+
+  listProjectFiles: (root: string): Promise<string[]> =>
+    ipcRenderer.invoke('list-project-files', root),
+
+  watchProject: (root: string): void => ipcRenderer.send('watch-project', root),
+  unwatchProject: (root: string): void => ipcRenderer.send('unwatch-project', root),
+  onProjectFilesChanged: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('project-files-changed', handler);
+    return () => ipcRenderer.removeListener('project-files-changed', handler);
+  },
+
+  onQuickOpen: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('quick-open', handler);
+    return () => ipcRenderer.removeListener('quick-open', handler);
+  },
+
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 

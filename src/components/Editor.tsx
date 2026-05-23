@@ -14,6 +14,38 @@ import TableMenu from './TableMenu';
 
 const lowlight = createLowlight(common);
 
+const CodeBlockWithCopy = CodeBlockLowlight.extend({
+  addNodeView() {
+    return ({ node, editor: _editor, getPos }) => {
+      const wrapper = document.createElement('div');
+      wrapper.classList.add('code-block-wrapper');
+
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      if (node.attrs.language) code.classList.add(`language-${node.attrs.language}`);
+      pre.appendChild(code);
+
+      const btn = document.createElement('button');
+      btn.className = 'code-copy-btn';
+      btn.contentEditable = 'false';
+      btn.title = 'Copy code';
+      btn.innerHTML = '<i class="bi bi-clipboard"></i>';
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        navigator.clipboard.writeText(code.textContent || '');
+        btn.innerHTML = '<i class="bi bi-check-lg"></i>';
+        setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 1500);
+      });
+
+      wrapper.appendChild(btn);
+      wrapper.appendChild(pre);
+
+      return { dom: wrapper, contentDOM: code };
+    };
+  },
+});
+
 interface EditorProps {
   tab: Tab;
   onReady: (editor: TipTapEditor) => void;
@@ -37,7 +69,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       TableKit.configure({
         table: { resizable: true },
       }),
-      CodeBlockLowlight.configure({
+      CodeBlockWithCopy.configure({
         lowlight,
       }),
       Placeholder.configure({
@@ -108,7 +140,6 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       <EditorContent editor={editor} className="editor-content" />
       <LinkPreview editor={editor} />
       <TableMenu editor={editor} />
-      <CodeCopyButton editor={editor} />
     </div>
   );
 }
@@ -186,112 +217,3 @@ function LinkPreview({ editor }: { editor: TipTapEditor }) {
   );
 }
 
-function CodeCopyButton({ editor }: { editor: TipTapEditor }) {
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [hoverBlock, setHoverBlock] = useState<HTMLElement | null>(null);
-  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const updateFromCursor = useCallback(() => {
-    if (editor.isActive('codeBlock')) {
-      const { $from } = editor.state.selection;
-      let codePos: number | null = null;
-      for (let d = $from.depth; d > 0; d--) {
-        if ($from.node(d).type.name === 'codeBlock') {
-          codePos = $from.before(d);
-          break;
-        }
-      }
-      if (codePos !== null) {
-        const dom = editor.view.nodeDOM(codePos);
-        if (dom instanceof HTMLElement) {
-          positionFromDom(dom);
-          return;
-        }
-      }
-    }
-    if (!hoverBlock) setPos(null);
-  }, [editor, hoverBlock]);
-
-  const positionFromDom = useCallback((pre: HTMLElement) => {
-    const wrapper = editor.view.dom.closest('.editor-wrapper');
-    if (!wrapper) return;
-    const wRect = wrapper.getBoundingClientRect();
-    const pRect = pre.getBoundingClientRect();
-    setPos({
-      top: pRect.top - wRect.top + 6,
-      right: wRect.right - pRect.right + 6,
-    });
-  }, [editor]);
-
-  useEffect(() => {
-    editor.on('selectionUpdate', updateFromCursor);
-    editor.on('transaction', updateFromCursor);
-    return () => {
-      editor.off('selectionUpdate', updateFromCursor);
-      editor.off('transaction', updateFromCursor);
-    };
-  }, [editor, updateFromCursor]);
-
-  useEffect(() => {
-    const editorDom = editor.view.dom;
-    const onEnter = (e: Event) => {
-      const target = (e.target as HTMLElement).closest('pre');
-      if (target && editorDom.contains(target)) {
-        setHoverBlock(target);
-        positionFromDom(target);
-      }
-    };
-    const onLeave = (e: Event) => {
-      const target = (e.target as HTMLElement).closest('pre');
-      if (target) {
-        setHoverBlock(null);
-        updateFromCursor();
-      }
-    };
-    editorDom.addEventListener('mouseenter', onEnter, true);
-    editorDom.addEventListener('mouseleave', onLeave, true);
-    return () => {
-      editorDom.removeEventListener('mouseenter', onEnter, true);
-      editorDom.removeEventListener('mouseleave', onLeave, true);
-    };
-  }, [editor, positionFromDom, updateFromCursor]);
-
-  useEffect(() => {
-    if (hoverBlock) positionFromDom(hoverBlock);
-  }, [hoverBlock, positionFromDom]);
-
-  const handleCopy = useCallback(() => {
-    const target = hoverBlock || (() => {
-      if (!editor.isActive('codeBlock')) return null;
-      const { $from } = editor.state.selection;
-      for (let d = $from.depth; d > 0; d--) {
-        if ($from.node(d).type.name === 'codeBlock') {
-          const dom = editor.view.nodeDOM($from.before(d));
-          return dom instanceof HTMLElement ? dom : null;
-        }
-      }
-      return null;
-    })();
-    if (!target) return;
-    const code = target.querySelector('code');
-    const text = code ? code.textContent || '' : target.textContent || '';
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    if (copiedTimer.current) clearTimeout(copiedTimer.current);
-    copiedTimer.current = setTimeout(() => setCopied(false), 1500);
-  }, [editor, hoverBlock]);
-
-  if (!pos) return null;
-
-  return (
-    <button
-      className="code-copy-btn"
-      style={{ top: pos.top, right: pos.right }}
-      onMouseDown={(e) => { e.preventDefault(); handleCopy(); }}
-      title="Copy code"
-    >
-      <i className={`bi bi-${copied ? 'check-lg' : 'clipboard'}`} />
-    </button>
-  );
-}

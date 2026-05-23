@@ -114,29 +114,29 @@ body {
 
 .sidebar-tabs {
   display: flex;
+  gap: 4px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
 .sidebar-tab {
-  flex: 1;
-  padding: 8px 12px;
+  padding: 5px 10px;
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 15px;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  border-radius: 6px;
+  line-height: 1;
 }
 
 .sidebar-tab.active {
   color: var(--text);
-  border-bottom: 2px solid var(--accent);
+  background: var(--accent-light);
 }
 
-.sidebar-tab:hover {
+.sidebar-tab:hover:not(.active) {
   background: var(--bg-tertiary);
 }
 
@@ -199,6 +199,19 @@ body {
 
 .tree-file .tree-name {
   color: var(--text);
+}
+
+.tree-file-active {
+  background: var(--bg-tertiary);
+}
+
+.tree-file-disabled {
+  cursor: default;
+}
+
+.tree-file-disabled .tree-name {
+  color: var(--text-muted);
+  opacity: 0.6;
 }
 
 .tree-children {
@@ -279,13 +292,17 @@ body {
   border: 1px solid transparent;
   background: transparent;
   border-radius: 4px;
-  padding: 3px 6px;
+  padding: 3px 4px;
   cursor: pointer;
   font-size: 13px;
   color: var(--text);
   line-height: 1;
   min-width: 24px;
   text-align: center;
+}
+
+.toolbar-btn .bi {
+  font-size: 16px;
 }
 
 .toolbar-btn:hover:not(:disabled) {
@@ -556,6 +573,10 @@ body {
   font-size: 0.9em;
 }
 
+.editor-content .tiptap .code-block-wrapper {
+  position: relative;
+}
+
 .editor-content .tiptap pre {
   background: var(--code-bg);
   color: var(--code-text);
@@ -648,6 +669,8 @@ body {
 /* --- Code copy button --- */
 .code-copy-btn {
   position: absolute;
+  top: 6px;
+  right: 6px;
   z-index: 10;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.1);
@@ -657,11 +680,15 @@ body {
   color: var(--code-text);
   font-size: 14px;
   line-height: 1;
-  opacity: 0.6;
+  opacity: 0;
   transition: opacity 0.15s;
 }
 
-.code-copy-btn:hover {
+.code-block-wrapper:hover > .code-copy-btn {
+  opacity: 0.6;
+}
+
+.code-block-wrapper:hover > .code-copy-btn:hover {
   opacity: 1;
   background: rgba(255, 255, 255, 0.2);
 }
@@ -784,10 +811,20 @@ body {
 .empty-state {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
   font-size: 15px;
+}
+
+.empty-state kbd {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: inherit;
+  font-size: 12px;
 }
 
 .modal-backdrop {
@@ -828,6 +865,10 @@ body {
   gap: 16px;
 }
 
+.settings-row .text-muted {
+  opacity: 0.7;
+}
+
 .settings-select {
   padding: 6px 10px;
   border: 1px solid var(--border);
@@ -861,6 +902,49 @@ body {
 .settings-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.settings-toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.settings-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.settings-toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-tertiary);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.settings-toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 3px;
+  bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.settings-toggle input:checked + .settings-toggle-slider {
+  background: var(--accent);
+}
+
+.settings-toggle input:checked + .settings-toggle-slider::before {
+  transform: translateX(16px);
 }
 
 .settings-success {
@@ -917,10 +1001,104 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
+/* --- Quick Open palette --- */
+.quick-open-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  justify-content: center;
+  padding-top: 60px;
+}
+
+.quick-open {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 520px;
+  max-width: 90vw;
+  max-height: 400px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.quick-open-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.quick-open-search-icon {
+  color: var(--text-muted);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.quick-open-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  color: var(--text);
+  outline: none;
+}
+
+.quick-open-results {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.quick-open-item {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 14px;
+  cursor: pointer;
+  gap: 1px;
+}
+
+.quick-open-item.selected {
+  background: var(--accent-light);
+}
+
+.quick-open-filename {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.quick-open-filename b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.quick-open-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-open-path b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.quick-open-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .table-menu {
   position: absolute;
   z-index: 50;
-  transform: translate(-50%, -50%);
+  transform: translate(-100%, -50%);
 }
 
 .table-menu-trigger {
@@ -949,7 +1127,7 @@ body {
   border-radius: 6px;
   padding: 4px 0;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  min-width: 160px;
+  width: max-content;
 }
 
 .table-menu-dropdown button {
@@ -962,11 +1140,20 @@ body {
   color: var(--text);
   cursor: pointer;
   text-align: left;
+  white-space: nowrap;
 }
 
 .table-menu-dropdown button:hover {
   background: var(--accent-light);
 }
+
+.table-menu-dropdown button .bi {
+  margin-right: 6px;
+}
+
+.table-icon-col-after { display: inline-block; transform: scaleX(-1); }
+.table-icon-row-before { display: inline-block; transform: rotate(90deg); }
+.table-icon-row-after { display: inline-block; transform: rotate(-90deg); }
 
 .table-menu-divider {
   height: 1px;

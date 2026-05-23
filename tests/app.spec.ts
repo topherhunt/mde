@@ -37,8 +37,8 @@ test.describe('App launch', () => {
   test('sidebar shows Files and Outline tabs', async () => {
     ({ app, page } = await launchApp());
 
-    const filesTab = page.locator('.sidebar-tab', { hasText: 'Files' });
-    const outlineTab = page.locator('.sidebar-tab', { hasText: 'Outline' });
+    const filesTab = page.locator('.sidebar-tab[title="File Explorer"]');
+    const outlineTab = page.locator('.sidebar-tab[title="Document Outline"]');
 
     await expect(filesTab).toBeVisible();
     await expect(outlineTab).toBeVisible();
@@ -453,7 +453,7 @@ test.describe('Document outline', () => {
     await expect(page.locator('.tiptap')).toBeVisible({ timeout: 5000 });
 
     // Switch to outline tab
-    await page.locator('.sidebar-tab', { hasText: 'Outline' }).click();
+    await page.locator('.sidebar-tab[title="Document Outline"]').click();
 
     // Should show headings
     await expect(page.locator('.outline-item')).not.toHaveCount(0, { timeout: 5000 });
@@ -471,7 +471,7 @@ test.describe('Document outline', () => {
 
     await expect(page.locator('.tiptap')).toBeVisible({ timeout: 5000 });
 
-    await page.locator('.sidebar-tab', { hasText: 'Outline' }).click();
+    await page.locator('.sidebar-tab[title="Document Outline"]').click();
     await expect(page.locator('.outline-item')).not.toHaveCount(0, { timeout: 5000 });
 
     // Click "Section Two" in outline
