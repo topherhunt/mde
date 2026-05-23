@@ -495,8 +495,8 @@ test.describe('File explorer', () => {
       BrowserWindow.getAllWindows()[0].webContents.send('open-project', dir);
     }, projectDir);
 
-    // File explorer should show the project contents
-    await expect(page.locator('.tree-folder').first()).toBeVisible({ timeout: 5000 });
+    // File explorer should show the project root header
+    await expect(page.locator('.tree-root-header')).toBeVisible({ timeout: 5000 });
 
     // Should see .md files
     await expect(page.locator('.tree-file', { hasText: 'doc1.md' })).toBeVisible();

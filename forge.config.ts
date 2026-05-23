@@ -14,6 +14,8 @@ import { rendererConfig } from './webpack.renderer.config';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    name: 'MDE',
+    icon: './icon',
     extendInfo: {
       CFBundleDocumentTypes: [
         {

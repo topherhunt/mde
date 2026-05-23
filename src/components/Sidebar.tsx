@@ -66,13 +66,40 @@ function DirectoryNode({ path, name, onOpenFile, isRoot }: DirectoryNodeProps) {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (expanded && !loaded) {
+    if ((isRoot || expanded) && !loaded) {
       window.mde.listDirectory(path).then(result => {
         setEntries(result);
         setLoaded(true);
       });
     }
-  }, [expanded, loaded, path]);
+  }, [isRoot, expanded, loaded, path]);
+
+  if (isRoot) {
+    return (
+      <div className="tree-node">
+        <div className="tree-root-header">{name}</div>
+        {entries.map(entry =>
+          entry.isDirectory ? (
+            <DirectoryNode
+              key={entry.path}
+              path={entry.path}
+              name={entry.name}
+              onOpenFile={onOpenFile}
+            />
+          ) : (
+            <div
+              key={entry.path}
+              className="tree-item tree-file"
+              onClick={() => onOpenFile(entry.path, true)}
+              onDoubleClick={() => onOpenFile(entry.path, false)}
+            >
+              <span className="tree-name">{entry.name}</span>
+            </div>
+          )
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="tree-node">

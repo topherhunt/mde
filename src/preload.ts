@@ -122,6 +122,18 @@ const api = {
 
   openExternal: (url: string): void => ipcRenderer.send('open-external', url),
 
+  checkTerminalLauncher: (): Promise<boolean> =>
+    ipcRenderer.invoke('check-terminal-launcher'),
+
+  installTerminalLauncher: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('install-terminal-launcher'),
+
+  onOpenSettings: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('open-settings', handler);
+    return () => ipcRenderer.removeListener('open-settings', handler);
+  },
+
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 

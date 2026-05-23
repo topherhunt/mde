@@ -111,15 +111,32 @@ function LinkPreview({ editor }: { editor: TipTapEditor }) {
     const href = editor.getAttributes('link').href;
     if (!href) { setLink(null); return; }
 
-    const { from } = editor.state.selection;
-    const coords = editor.view.coordsAtPos(from);
+    const { $from } = editor.state.selection;
+    const linkMark = $from.marks().find(m => m.type.name === 'link');
+    if (!linkMark) { setLink(null); return; }
+
+    let linkStart = $from.pos;
+    let linkEnd = $from.pos;
+    const parent = $from.parent;
+    const parentOffset = $from.start();
+    parent.forEach((child, offset) => {
+      const childStart = parentOffset + offset;
+      const childEnd = childStart + child.nodeSize;
+      if (child.marks.some(m => m.eq(linkMark)) && childStart <= $from.pos && childEnd >= $from.pos) {
+        linkStart = childStart;
+        linkEnd = childEnd;
+      }
+    });
+
+    const startCoords = editor.view.coordsAtPos(linkStart);
+    const endCoords = editor.view.coordsAtPos(linkEnd);
     const wrapper = editor.view.dom.closest('.editor-wrapper');
     if (!wrapper) { setLink(null); return; }
     const rect = wrapper.getBoundingClientRect();
     setLink({
       url: href,
-      top: coords.bottom - rect.top + 4,
-      left: coords.left - rect.left,
+      top: endCoords.bottom - rect.top + 4,
+      left: startCoords.left - rect.left,
     });
   }, [editor]);
 
@@ -138,7 +155,7 @@ function LinkPreview({ editor }: { editor: TipTapEditor }) {
     <div className="link-preview" style={{ top: link.top, left: link.left }}>
       <a
         href={link.url}
-        onMouseDown={(e) => {
+        onClick={(e) => {
           e.preventDefault();
           window.mde.openExternal(link.url);
         }}

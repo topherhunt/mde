@@ -1,6 +1,6 @@
 {
-  "name": "app",
-  "productName": "app",
+  "name": "mde",
+  "productName": "MDE",
   "version": "1.0.0",
   "description": "My Electron application description",
   "main": ".webpack/main",

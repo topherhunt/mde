@@ -42,7 +42,7 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
 
   const win = new BrowserWindow({
     height: 800,
-    width: 1200,
+    width: 800,
     x,
     y,
     minWidth: 600,
@@ -62,10 +62,6 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
 
   win.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
-  if (process.env.NODE_ENV === 'development') {
-    win.webContents.openDevTools();
-  }
-
   win.on('closed', () => {
     windowStates.delete(win);
   });
@@ -74,9 +70,12 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
     event.preventDefault();
   });
 
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
   win.webContents.on('did-finish-load', () => {
     if (projectRoot) {
       win.webContents.send('open-project', projectRoot);
+      win.setTitle(path.basename(projectRoot));
     }
   });
 
@@ -89,6 +88,15 @@ function buildMenu(): void {
       label: app.name,
       submenu: [
         { role: 'about' },
+        { type: 'separator' },
+        {
+          label: 'Settings...',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('open-settings');
+          },
+        },
         { type: 'separator' },
         { role: 'quit' },
       ],
@@ -343,18 +351,62 @@ ipcMain.on('open-external', (_event, url: string) => {
   if (/^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 
+ipcMain.handle('check-terminal-launcher', () => {
+  return fs.existsSync('/usr/local/bin/mde');
+});
+
+ipcMain.handle('install-terminal-launcher', async () => {
+  const dest = '/usr/local/bin/mde';
+  const appBundle = app.getPath('exe').replace(/\/Contents\/MacOS\/.*$/, '');
+  const script = `#!/bin/bash\nopen -a "${appBundle}" "$(cd "\${1:-.}" && pwd)"\n`;
+  const tmp = path.join(app.getPath('temp'), 'mde-launcher');
+  try {
+    fs.writeFileSync(tmp, script, { mode: 0o755 });
+    try {
+      fs.copyFileSync(tmp, dest);
+      fs.chmodSync(dest, 0o755);
+    } catch {
+      const { execSync } = require('child_process');
+      execSync(`osascript -e 'do shell script "cp ${tmp} ${dest} && chmod +x ${dest}" with administrator privileges'`);
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+});
+
 // --- Drag and drop at app level ---
+
+let launchFileHandled = false;
 
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
-  const stat = fs.statSync(filePath);
+  let stat: fs.Stats;
+  try { stat = fs.statSync(filePath); } catch { return; }
+
   if (stat.isDirectory()) {
-    createWindow(filePath);
+    const existing = BrowserWindow.getAllWindows().find(w => {
+      const ws = windowStates.get(w);
+      return ws && ws.projectRoot === filePath;
+    });
+    if (existing) {
+      existing.focus();
+    } else {
+      if (app.isReady()) {
+        createWindow(filePath);
+      } else {
+        launchFileHandled = true;
+        app.whenReady().then(() => createWindow(filePath));
+      }
+    }
   } else {
     const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
     if (win) {
       win.webContents.send('open-file', filePath);
     } else {
+      launchFileHandled = true;
       app.whenReady().then(() => {
         const newWin = createWindow();
         newWin.webContents.on('did-finish-load', () => {
@@ -369,7 +421,18 @@ app.on('open-file', (event, filePath) => {
 
 app.on('ready', () => {
   buildMenu();
-  createWindow(loadLastProjectRoot());
+  if (launchFileHandled) return;
+  const cliPath = process.argv.find((arg, i) =>
+    i > 0 && !arg.startsWith('-') && !arg.includes('electron') && !arg.includes('.webpack')
+  );
+  let projectRoot: string | null = null;
+  if (cliPath) {
+    try {
+      const resolved = path.resolve(cliPath);
+      if (fs.statSync(resolved).isDirectory()) projectRoot = resolved;
+    } catch {}
+  }
+  createWindow(projectRoot || loadLastProjectRoot());
 });
 
 let isQuitting = false;

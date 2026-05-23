@@ -161,6 +161,9 @@ export default function App() {
   const [activeEditor, setActiveEditor] = useState<TipTapEditor | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [draggingOver, setDraggingOver] = useState(false);
+  const dragCountRef = useRef(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const showToast = useCallback((msg: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -339,6 +342,7 @@ export default function App() {
       window.mde.onExportPDF(async () => {
         await window.mde.exportPDF();
       }),
+      window.mde.onOpenSettings(() => setSettingsOpen(true)),
       window.mde.onFileChanged(async (filePath) => {
         const tab = state.tabs.find(t => t.filePath === filePath);
         if (!tab) return;
@@ -382,9 +386,21 @@ export default function App() {
       e.preventDefault();
       e.stopPropagation();
     };
+    const handleDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCountRef.current++;
+      if (dragCountRef.current === 1) setDraggingOver(true);
+    };
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCountRef.current--;
+      if (dragCountRef.current === 0) setDraggingOver(false);
+    };
     const handleDrop = async (e: DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      dragCountRef.current = 0;
+      setDraggingOver(false);
       if (!e.dataTransfer) return;
       const files = Array.from(e.dataTransfer.files);
       for (const file of files) {
@@ -408,16 +424,24 @@ export default function App() {
       }
     };
     document.addEventListener('dragover', handleDragOver);
+    document.addEventListener('dragenter', handleDragEnter);
+    document.addEventListener('dragleave', handleDragLeave);
     document.addEventListener('drop', handleDrop);
     return () => {
       document.removeEventListener('dragover', handleDragOver);
+      document.removeEventListener('dragenter', handleDragEnter);
+      document.removeEventListener('dragleave', handleDragLeave);
       document.removeEventListener('drop', handleDrop);
     };
   }, [openFile, showToast, state.projectRoot, state.tabs.length]);
 
   return (
     <div className="app">
-      <div className="app-drag-region" />
+      <div className="app-drag-region">
+        {state.projectRoot && (
+          <span className="app-title">{state.projectRoot.split('/').pop()}</span>
+        )}
+      </div>
       <div className="app-body">
         <Sidebar
           projectRoot={state.projectRoot}
@@ -470,9 +494,74 @@ export default function App() {
           </div>
         </div>
       </div>
+      {draggingOver && <div className="drop-overlay">Drop to open</div>}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       {toast && (
         <div className="toast">{toast}</div>
       )}
+    </div>
+  );
+}
+
+function SettingsDialog({ onClose }: { onClose: () => void }) {
+  const [status, setStatus] = useState<'checking' | 'idle' | 'installed' | 'installing' | 'done' | 'error'>('checking');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    window.mde.checkTerminalLauncher().then(exists => {
+      setStatus(exists ? 'installed' : 'idle');
+    });
+  }, []);
+
+  const install = async () => {
+    setStatus('installing');
+    const result = await window.mde.installTerminalLauncher();
+    if (result.success) {
+      setStatus('done');
+    } else {
+      setStatus('error');
+      setErrorMsg(result.error || 'Unknown error');
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="fw-bold">Settings</span>
+          <button className="toolbar-btn" onClick={onClose}>&times;</button>
+        </div>
+        <div className="modal-body">
+          <div className="settings-row">
+            <div>
+              <div className="fw-bold">Terminal launcher</div>
+              <div className="text-muted fs-sm">
+                Install the <code>mde</code> command so you can open folders from your terminal.
+              </div>
+            </div>
+            <button
+              className="settings-btn"
+              onClick={install}
+              disabled={status === 'checking' || status === 'installing' || status === 'done'}
+            >
+              {status === 'checking' && '...'}
+              {status === 'idle' && 'Install terminal launcher'}
+              {status === 'installed' && 'Reinstall terminal launcher'}
+              {status === 'installing' && 'Installing...'}
+              {status === 'done' && 'Installed'}
+              {status === 'error' && 'Retry'}
+            </button>
+          </div>
+          {(status === 'installed' || status === 'done') && (
+            <div className="settings-success">
+              {status === 'done' ? 'Installed.' : 'Already installed.'} Run <code>mde .</code> from any directory to open it.
+            </div>
+          )}
+          {status === 'error' && (
+            <div className="settings-error">{errorMsg}</div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
