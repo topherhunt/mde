@@ -54,19 +54,15 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ### For Claude
 
-- "Convert PDF" confirmation dialog: There's still no margin above the buttons, between the buttons, and the buttons are still not centered. Did this fall through the cracks?
-- Also, "Convert & Open" button fails again on this error msg: `Conversion failed: Setting up fake worker failed: "Cannot find module './pdf.worker.mjs'".`
-- Find & Replace panel, further fixes:
-  - If there's one or more match, the indicator of how many matches there are, the like the whatever, should be bold white. I'm sorry, not bold, just white instead of grey.
-  - If no matches are found, the Replace button should be disabled/grayed, not just the All button.
-
----
-
-- In the "Convert PDF to Markdown" (or DOCX ...) dialog: wrap the filenames in <code></code> please so they stand out better.
-- "Convert PDF to markdown" still failed: `Conversion failed: Setting up fake worker failed: "Cannot find module '/Users/topher/Sites/personal/mde/.webpack/main/pdf.worker.mjs' imported from /Users/topher/Sites/personal/mde/.webpack/main/index.js".` Can you set up a test in the suite to test converting a PDF? Do you already have one? Glaring omission if not, please note the importance of test coverage in CLAUDE.md. Use `test-conversion/2026-02 HDP32 ....pdf` to see the error.
-- .docx conversion likewise fails. Please ensure a test for this, use the .docx in test-conversion/ for an example.
-- Please add a right-click menu to each item in the File Explorer, with the following options:
-  - Rename
-  - Delete (with confirm dialog, moves to trash, does NOT perma-delete)
-  - Copy Relative Path
-- File Explorer, root folder name bar, right side, please add icon buttons for adding a new .md file (use `file-earmark-plus` icon) and adding a new folder (use folder-plus).
+- For the toasts etc, the Bootstrap-style semantic colors aren't dialed in. The text color needs to be lighter & brighter so it doesn't come across as dimmed and squinty against that blue/red background. At least in dark mode. So the semantic text color needs to not be the same as the alert border color.
+- PDF conversion is substantially better, but still substantially broken. See for example test-conversion/hdp32-tax-bill.pdf.md - It now has lots of new lines like it should and the text is semi-readable but you can see that there's lots of sections where in the original PDF there were two visually very clearly delineated divs or containers which maybe the markup doesn't exist for the text to be properly scoped within those containers but two side-by-side containers each of which has multiple lines of text and in the final markdown version each line is is it kind of hops back and forth between the two containers for each line so the lines are interleaved between the containers so you're constantly switching context trying to make sense of what you're reading. It's not how it's supposed to look, and it's not particularly usable. Do you think that sort of thing can be fixed?
+  - Also, see the test-conversion/sample-20-page-pdf-a4-size.pdf, when it autoconverts, why is the 1st table not rendered in .md as a table but just as separate text-lines, whereas the other tables DO properly render as markdown tables yay?
+  - Please be careful and thoughtful in thinking through what we do from here and what pathways we have available. I would like to improve this, but I'm afraid of making it worse again. It could get worse again.
+- Likewise the .docx conversion is wayyyy better now, but it's still doing rigid weird stuff and not producing particularly clean markdown. For example many tables in the sample .docx file convert to markdown riddled with html like `     <table style="min-width: 100px;"><colgroup><col style="min-width: 25px;"><col style="min-width: 25px;"><col style="min-width: 25px;"><col style="min-width: 25px;"></colgroup><tbody><tr><td colspan="1" rowspan="1"><p>Code</p></td><td colspan="1" rowspan="1"><p>Status</p></td><td colspan="1" rowspan="1"><p>Category</p></td><td colspan="1" rowspan="1"><p>Description</p></td></tr><tr><td colspan="1" rowspan="1"><p>200</p></td><td colspan="1" rowspan="1"><p>OK2</p></td><td colspan="1" rowspan="1"><p>Success</p></td><td colspan="1" rowspan="1"><p>Request succeeded</p></td></tr><tr><td colspan="1" rowspan="1"><p>...` -- Can we convince it to clean this up so that it just prints out as a markdown table and strips out all of that HTML? Ideally, it should convert to Markdown with zero HTML tags in it. We don't care about preserving the fancy formatting.
+- The file explorer sidebar does not persist folder collapse expand state. So, if you switch to the outline view and then you switch back to the file explorer, everything all the folders have gotten collapsed again. That should not be the case, it should remember that state. So, folders that were expanded should stay expanded. Additionally, to the right of the new file and new folder icons, we also need a "close all folders" button, use the `arrows-collapse` icon please.
+- Also, the root folder title in the top centered title bar should be white, not gray, please. Or maybe, you know what? White and, oh, you know what? Let's have some fun with that. Let's pick a kind of rainbow of colors and then slowly, very slowly, each letter will individually animate through those colors. Like, almost like a wave. Like the first one turns... It starts out white and the first one turns a little bit rose and then the second one turns a little bit rose and the first one turns a little bit orange and something like that. It like it like does like a like a wave style color animation where there's a sequence of colors that it slowly cycles through very subtly, almost like hard to notice, except that each time you glance back, it's a slightly different color wave.
+- When a file or folder is selected in the sidebar:
+  - `Cmd + Backspace` triggers deletion flow (with prompt) same as right-click -> Delete.
+  - arrow key up/down switches focus to the prev/next item in the sidebar list.
+  - if focusing on a folder, arrow key RIGHT expands the folder and LEFT collapses it.
+  - clicking in the editor or on a tab or anywhere else de-selects it.

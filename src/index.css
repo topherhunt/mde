@@ -103,13 +103,24 @@ body {
 
 /* --- Sidebar --- */
 .sidebar {
-  width: 240px;
-  min-width: 180px;
+  min-width: 140px;
+  max-width: 600px;
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
   flex-shrink: 0;
+  position: relative;
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
 }
 
 .sidebar-tabs {
@@ -159,6 +170,9 @@ body {
 }
 
 .tree-root-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-weight: 700;
   font-size: 12px;
   padding: 6px 8px;
@@ -167,6 +181,27 @@ body {
   color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+.tree-root-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.tree-root-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tree-root-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text);
 }
 
 .tree-item {
@@ -203,6 +238,13 @@ body {
 
 .tree-file-active {
   background: var(--bg-tertiary);
+}
+
+.tree-item-selected {
+  background: rgba(56, 189, 195, 0.08);
+  outline: 1px solid rgba(56, 189, 195, 0.4);
+  outline-offset: -1px;
+  border-radius: 3px;
 }
 
 .tree-file-disabled {
@@ -1102,6 +1144,12 @@ body {
   border-color: var(--danger-border);
 }
 
+.toast-info {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* --- Quick Open palette --- */
 .quick-open-backdrop {
   position: fixed;
@@ -1266,4 +1314,58 @@ body {
   height: 1px;
   background: var(--border);
   margin: 4px 0;
+}
+
+/* --- Context menu --- */
+.ctx-menu {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  min-width: 160px;
+  font-size: 13px;
+}
+
+.ctx-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ctx-menu-item:hover {
+  background: var(--accent-light);
+}
+
+.ctx-menu-item-danger:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.ctx-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* --- Inline rename input --- */
+.tree-rename-input {
+  flex: 1;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  min-width: 0;
 }

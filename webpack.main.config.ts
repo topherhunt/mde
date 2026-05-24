@@ -17,4 +17,11 @@ export const mainConfig: Configuration = {
   resolve: {
     extensions: ['.js', '.ts', '.jsx', '.tsx', '.css', '.json'],
   },
+  externals: {
+    'pdfjs-dist/legacy/build/pdf.mjs': 'commonjs pdfjs-dist/legacy/build/pdf.mjs',
+    'pdfjs-dist/legacy/build/pdf.worker.mjs': 'commonjs pdfjs-dist/legacy/build/pdf.worker.mjs',
+    'mammoth': 'commonjs mammoth',
+    'turndown': 'commonjs turndown',
+    'turndown-plugin-gfm': 'commonjs turndown-plugin-gfm',
+  },
 };

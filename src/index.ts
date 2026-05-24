@@ -48,11 +48,14 @@ function saveLastProjectRoot(root: string): void {
 
 function createWindow(projectRoot: string | null = null): BrowserWindow {
   const focused = BrowserWindow.getFocusedWindow();
-  const [x, y] = focused ? focused.getPosition().map((v, i) => v + 30) : [undefined, undefined];
+  const savedBounds = isTest ? null : loadState().windowBounds;
+  const [x, y] = focused
+    ? focused.getPosition().map((v) => v + 30)
+    : [savedBounds?.x, savedBounds?.y];
 
   const win = new BrowserWindow({
-    height: 800,
-    width: 800,
+    height: savedBounds?.height || 800,
+    width: savedBounds?.width || 800,
     x,
     y,
     minWidth: 600,
@@ -74,6 +77,18 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
   win.webContents.session.setSpellCheckerEnabled(spellcheckEnabled);
 
   win.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+
+  let boundsTimer: ReturnType<typeof setTimeout> | null = null;
+  const saveBounds = () => {
+    if (boundsTimer) clearTimeout(boundsTimer);
+    boundsTimer = setTimeout(() => {
+      if (!win.isDestroyed() && !win.isMinimized()) {
+        saveState({ windowBounds: win.getBounds() });
+      }
+    }, 500);
+  };
+  win.on('resize', saveBounds);
+  win.on('move', saveBounds);
 
   win.on('closed', () => {
     windowStates.delete(win);
@@ -286,6 +301,22 @@ ipcMain.handle('get-file-stats', async (_event, filePath: string) => {
   }
 });
 
+ipcMain.handle('rename-file', async (_event, oldPath: string, newPath: string) => {
+  await fs.promises.rename(oldPath, newPath);
+});
+
+ipcMain.handle('trash-file', async (_event, filePath: string) => {
+  await shell.trashItem(filePath);
+});
+
+ipcMain.handle('create-file', async (_event, filePath: string) => {
+  await fs.promises.writeFile(filePath, '', 'utf-8');
+});
+
+ipcMain.handle('create-directory', async (_event, dirPath: string) => {
+  await fs.promises.mkdir(dirPath, { recursive: true });
+});
+
 ipcMain.handle('list-directory', async (_event, dirPath: string) => {
   const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
   const result: Array<{ name: string; path: string; isDirectory: boolean }> = [];
@@ -357,13 +388,13 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
   const ext = path.extname(filePath).toLowerCase();
   const baseName = path.basename(filePath, ext);
   const dir = path.dirname(filePath);
-  const mdPath = path.join(dir, `${baseName}.md`);
+  const mdPath = path.join(dir, `${baseName}${ext}.md`);
   const backupPath = path.join(dir, `${baseName}${BACKUP_INFIX}${ext}`);
 
   try {
     const existingMd = await fs.promises.access(mdPath).then(() => true).catch(() => false);
     if (existingMd) {
-      return { error: `${baseName}.md already exists. Delete or rename it first.` };
+      return { error: `${baseName}${ext}.md already exists. Delete or rename it first.` };
     }
 
     let markdown = '';
@@ -373,16 +404,141 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
       const TurndownService = require('turndown');
       const result = await mammoth.convertToHtml({ path: filePath });
       const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+      const { tables, strikethrough } = require('turndown-plugin-gfm');
+      td.use([tables, strikethrough]);
       markdown = td.turndown(result.value);
     } else if (ext === '.pdf') {
+      (globalThis as any).pdfjsWorker = require('pdfjs-dist/legacy/build/pdf.worker.mjs');
       const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs');
       const buffer = await fs.promises.readFile(filePath);
       const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer), useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true }).promise;
+
       const pages: string[] = [];
       for (let i = 1; i <= doc.numPages; i++) {
         const page = await doc.getPage(i);
         const content = await page.getTextContent();
-        pages.push(content.items.map((item: any) => item.str).join(' '));
+        const items: { str: string; x: number; y: number; width: number; height: number }[] = [];
+        for (const item of content.items as any[]) {
+          if (!item.str || item.str.trim() === '') continue;
+          items.push({ str: item.str, x: item.transform[4], y: item.transform[5], width: item.width, height: item.height });
+        }
+        if (items.length === 0) continue;
+
+        // Group items into lines by Y position (tolerance ~2px)
+        const lines: { y: number; height: number; items: typeof items }[] = [];
+        for (const item of items) {
+          const existing = lines.find(l => Math.abs(l.y - item.y) <= 2);
+          if (existing) {
+            existing.items.push(item);
+          } else {
+            lines.push({ y: item.y, height: item.height, items: [item] });
+          }
+        }
+
+        // Sort lines top-to-bottom (PDF Y decreases going down)
+        lines.sort((a, b) => b.y - a.y);
+        // Sort items within each line left-to-right
+        for (const line of lines) {
+          line.items.sort((a, b) => a.x - b.x);
+        }
+
+        // Compute median line height for paragraph detection
+        const heights = lines.map(l => l.height).filter(h => h > 0);
+        heights.sort((a, b) => a - b);
+        const medianHeight = heights.length > 0 ? heights[Math.floor(heights.length / 2)] : 12;
+
+        // Try to detect table regions: 3+ consecutive lines with 3+ aligned columns
+        const lineXClusters: number[][] = lines.map(line => {
+          const xs = line.items.map(it => it.x);
+          // Cluster X positions within ~10px
+          const clusters: number[] = [];
+          for (const x of xs) {
+            if (!clusters.some(c => Math.abs(c - x) <= 10)) {
+              clusters.push(x);
+            }
+          }
+          clusters.sort((a, b) => a - b);
+          return clusters;
+        });
+
+        // Find runs of lines that share 3+ column positions
+        const isTableLine: boolean[] = new Array(lines.length).fill(false);
+        let runStart = 0;
+        while (runStart < lines.length) {
+          if (lineXClusters[runStart].length < 3) { runStart++; continue; }
+          let runEnd = runStart + 1;
+          while (runEnd < lines.length && lineXClusters[runEnd].length >= 3) {
+            // Check if columns align with the first line's columns
+            const refCols = lineXClusters[runStart];
+            const curCols = lineXClusters[runEnd];
+            let matched = 0;
+            for (const rc of refCols) {
+              if (curCols.some(cc => Math.abs(cc - rc) <= 10)) matched++;
+            }
+            if (matched < 3) break;
+            runEnd++;
+          }
+          if (runEnd - runStart >= 3) {
+            for (let j = runStart; j < runEnd; j++) isTableLine[j] = true;
+          }
+          runStart = runEnd;
+        }
+
+        // Build output
+        const outputParts: string[] = [];
+        let tableBuffer: { cols: number[]; rows: string[][] }  | null = null;
+
+        const flushTable = () => {
+          if (!tableBuffer || tableBuffer.rows.length === 0) return;
+          const { cols, rows } = tableBuffer;
+          // Determine max width per column
+          const widths = cols.map((_, ci) => Math.max(3, ...rows.map(r => (r[ci] || '').length)));
+          const formatRow = (r: string[]) => '| ' + cols.map((_, ci) => (r[ci] || '').padEnd(widths[ci])).join(' | ') + ' |';
+          outputParts.push(formatRow(rows[0]));
+          outputParts.push('| ' + cols.map((_, ci) => '-'.repeat(widths[ci])).join(' | ') + ' |');
+          for (let ri = 1; ri < rows.length; ri++) {
+            outputParts.push(formatRow(rows[ri]));
+          }
+          tableBuffer = null;
+        };
+
+        for (let li = 0; li < lines.length; li++) {
+          const line = lines[li];
+          const lineText = line.items.map(it => it.str).join(' ');
+
+          if (isTableLine[li]) {
+            // Start or continue table
+            if (!tableBuffer) {
+              // Determine column positions from reference line cluster
+              const cols = lineXClusters[li].slice();
+              tableBuffer = { cols, rows: [] };
+            }
+            // Place items into columns
+            const row: string[] = new Array(tableBuffer.cols.length).fill('');
+            for (const item of line.items) {
+              let bestCol = 0;
+              let bestDist = Infinity;
+              for (let ci = 0; ci < tableBuffer.cols.length; ci++) {
+                const dist = Math.abs(item.x - tableBuffer.cols[ci]);
+                if (dist < bestDist) { bestDist = dist; bestCol = ci; }
+              }
+              row[bestCol] = row[bestCol] ? row[bestCol] + ' ' + item.str : item.str;
+            }
+            tableBuffer.rows.push(row);
+          } else {
+            flushTable();
+            // Determine gap from previous line
+            if (li > 0 && !isTableLine[li - 1]) {
+              const gap = lines[li - 1].y - line.y;
+              if (gap > medianHeight * 1.5) {
+                outputParts.push('');
+              }
+            }
+            outputParts.push(lineText);
+          }
+        }
+        flushTable();
+        pages.push(outputParts.join('\n'));
       }
       markdown = pages.join('\n\n');
       doc.destroy();
@@ -528,6 +684,14 @@ ipcMain.handle('set-spellcheck', (_event, enabled: boolean) => {
       win.webContents.send('spellcheck-changed', enabled);
     }
   }
+});
+
+ipcMain.handle('get-sidebar-width', () => {
+  return loadState().sidebarWidth || null;
+});
+
+ipcMain.handle('set-sidebar-width', (_event, width: number) => {
+  saveState({ sidebarWidth: width });
 });
 
 ipcMain.handle('check-terminal-launcher', () => {

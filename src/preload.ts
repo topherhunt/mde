@@ -183,6 +183,24 @@ const api = {
   },
 
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+
+  renameFile: (oldPath: string, newPath: string): Promise<void> =>
+    ipcRenderer.invoke('rename-file', oldPath, newPath),
+
+  trashFile: (filePath: string): Promise<void> =>
+    ipcRenderer.invoke('trash-file', filePath),
+
+  createFile: (filePath: string): Promise<void> =>
+    ipcRenderer.invoke('create-file', filePath),
+
+  createDirectory: (dirPath: string): Promise<void> =>
+    ipcRenderer.invoke('create-directory', dirPath),
+
+  getSidebarWidth: (): Promise<number | null> =>
+    ipcRenderer.invoke('get-sidebar-width'),
+
+  setSidebarWidth: (width: number): Promise<void> =>
+    ipcRenderer.invoke('set-sidebar-width', width),
 };
 
 contextBridge.exposeInMainWorld('mde', api);

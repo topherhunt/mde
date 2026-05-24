@@ -758,3 +758,55 @@ test.describe('Markdown round-trip', () => {
     fs.rmSync(tmpDir, { recursive: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 11. PDF / DOCX import conversion
+// ---------------------------------------------------------------------------
+
+test.describe('Import conversion', () => {
+  test('converts PDF to markdown', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const pdfSrc = fixturePath('sample-20-page-pdf-a4-size.pdf');
+    const pdfDst = path.join(tmpDir, 'sample.pdf');
+    fs.copyFileSync(pdfSrc, pdfDst);
+
+    const result: any = await page.evaluate(
+      (fp: string) => (window as any).mde.convertImport(fp),
+      pdfDst
+    );
+
+    expect(result).toHaveProperty('mdPath');
+    expect(result.mdPath).toBe(path.join(tmpDir, 'sample.pdf.md'));
+    expect(fs.existsSync(result.mdPath)).toBe(true);
+    const content = fs.readFileSync(result.mdPath, 'utf-8');
+    expect(content.length).toBeGreaterThan(0);
+    expect(fs.existsSync(path.join(tmpDir, 'sample.bak.pdf'))).toBe(true);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('converts DOCX to markdown', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const docxSrc = fixturePath('sample-files.com-large-document.docx');
+    const docxDst = path.join(tmpDir, 'sample.docx');
+    fs.copyFileSync(docxSrc, docxDst);
+
+    const result: any = await page.evaluate(
+      (fp: string) => (window as any).mde.convertImport(fp),
+      docxDst
+    );
+
+    expect(result).toHaveProperty('mdPath');
+    expect(result.mdPath).toBe(path.join(tmpDir, 'sample.docx.md'));
+    expect(fs.existsSync(result.mdPath)).toBe(true);
+    const content = fs.readFileSync(result.mdPath, 'utf-8');
+    expect(content.length).toBeGreaterThan(0);
+    expect(fs.existsSync(path.join(tmpDir, 'sample.bak.docx'))).toBe(true);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});

@@ -514,6 +514,7 @@ export default function App() {
           activeEditor={activeEditor}
           activeFilePath={activeTab?.filePath || null}
           refreshKey={sidebarRefreshKey}
+          onToast={showToast}
         />
         <div className="main-area">
           <TabBar
@@ -709,8 +710,8 @@ function ImportConfirmDialog({ filePath, onConfirm, onCancel }: { filePath: stri
         </div>
         <div className="modal-body">
           <p className="text-muted fs-sm">
-            This will convert <strong>{fileName}</strong> to Markdown for editing.
-            The original will be kept as a backup ({backupName}).
+            This will convert <code>{fileName}</code> to Markdown for editing.
+            The original will be kept as a backup (<code>{backupName}</code>).
             Some formatting may be simplified.
           </p>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>

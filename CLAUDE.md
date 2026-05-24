@@ -29,7 +29,9 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - `confirm()` and `alert()` don't work in Electron's renderer. Use in-app toasts or inline confirmation UI instead.
 - ProseMirror decorations (via Plugin with DecorationSet) are used for find-match highlighting and link-bar selection preservation. Always clean up decoration plugins on component unmount.
 - File sidebar auto-refreshes via recursive `fs.watch` on the project root (debounced 2s). On macOS this uses FSEvents (kernel-level, zero CPU idle cost).
-- PDF text extraction uses `pdfjs-dist/legacy/build/pdf.mjs` directly (not pdf-parse) to avoid worker bundling issues with webpack.
+- PDF text extraction uses `pdfjs-dist/legacy/build/pdf.mjs` with the worker loaded into `globalThis.pdfjsWorker` (fake worker mode). Both `pdfjs-dist` and its worker are webpack externals -- they resolve from `node_modules` at runtime. Do NOT bundle them with webpack; the worker spawning mechanism breaks.
+- DOCX/PDF import conversion (mammoth, turndown, pdfjs-dist) are all webpack externals in `webpack.main.config.ts`. Any new heavy Node library used only in the main process should be added there too.
+- File explorer context menu (rename, delete, copy path) and create file/folder use dedicated IPC handlers (`rename-file`, `trash-file`, `create-file`, `create-directory`). Delete moves to Trash via `shell.trashItem()`, never permanent delete.
 
 ## Commands
 
@@ -57,6 +59,10 @@ automatically via `electron.launch({ args: [mainPath, '--test-headless'] })`.
 first**, not the full suite. The full suite takes ~20s; a single test
 takes <1s. Use `--grep "test name fragment"` to isolate.
 
+**All features need E2E test coverage.** Conversion features (PDF, DOCX
+import) are especially important to test since they depend on external
+libraries and webpack bundling behavior that can break silently.
+
 All verification goes through E2E tests -- do not start the app
 interactively to check behavior.
 
@@ -65,7 +71,7 @@ interactively to check behavior.
 
 ## Current status
 
-34 E2E tests. The app has been manually tested and is in active use.
+36 E2E tests. The app has been manually tested and is in active use.
 Packaged app is named `MDE.app` (productName "MDE" in package.json,
 name "MDE" in forge.config.ts packagerConfig).
 
@@ -73,7 +79,7 @@ What exists:
 
 - Electron shell with IPC bridge, menu bar (including Window menu with Hide/Minimize), drag-drop (with blue pulse overlay)
 - TipTap WYSIWYG editor with Markdown load/save
-- File explorer sidebar (root shown as bold header, not collapsible; shows all files, non-editable ones grayed out; auto-refreshes on file changes; active file highlighted) + document outline sidebar (icon tabs with rounded bg, not text+underline)
+- File explorer sidebar (resizable via drag handle, width persisted; root header with new-file/new-folder buttons; selection state with teal highlight -- Enter to rename; creates files/folders in selected folder or as sibling to selected file; right-click context menu with Rename/Delete/Copy Relative Path) + document outline sidebar (icon tabs with rounded bg, not text+underline)
 - Tabbed editor with smart dirty tracking (undo back to original clears dirty)
 - Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, lists, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable
 - Link editing via floating LinkBar (top-right of editor, like FindBar) -- preserves text selection highlight via ProseMirror decorations while editing URL
@@ -83,12 +89,13 @@ What exists:
 - Table cell actions dropdown (three-dots trigger centered on top-right cell border, viewport-aware dropdown alignment, icons for insert/delete row/column)
 - File conflict detection (silent reload / red banner)
 - Quick Open command palette (Cmd+O) with fuzzy search, file indexing (10s TTL cache)
-- DOCX/PDF import: converts to .md on click, renames original to .bak.{ext}, backup files hidden from sidebar/quick-open
+- DOCX/PDF import: converts to .{ext}.md on click (preserves original extension), renames original to .bak.{ext}, backup files hidden from sidebar/quick-open. PDF extraction uses position-based line grouping and table detection. DOCX uses mammoth + turndown with GFM tables plugin.
 - PDF export (via Electron printToPDF)
 - Dark mode support (light / dark / system default, stored in user state file)
 - Settings dialog (Cmd+,) with theme selector, spellcheck toggle, terminal launcher installer
 - Terminal launcher: `mde .` opens a folder from the terminal (installed via Settings)
-- Toast notifications with semantic colors (danger variant) and scale animations
+- Toast notifications with semantic colors (danger, info variants) and scale animations
+- Window dimensions persisted and restored on reopen (sidebar width + window bounds, stored in mde-state.json)
 - Custom app icon (icon.icns, generated from icon.png)
 - Keyboard shortcuts: Cmd+K (link), Cmd+Shift+E (code block), Cmd+F (find), Cmd+O (quick open), Cmd+H (hide), Cmd+, (settings)
 
