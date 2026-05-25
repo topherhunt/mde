@@ -42,6 +42,10 @@ You only need to do this once. After that, macOS will remember your choice and l
 
 The app isn't code-signed, so Windows SmartScreen will show a warning the first time you launch it. Click **More info** → **Run anyway** to proceed.
 
+## Note on HTML in Markdown
+
+Handling `<` and `>` characters in Markdown is a surprisingly subtle problem. MDE does not render raw HTML -- tags like `<ol>` or `<div>` are displayed as literal text, not interpreted as HTML elements. As a side effect, if your `.md` files contain HTML entities like `&gt;` or `&lt;`, MDE may convert them to their literal characters (`>`, `<`) on save. This improves readability but means MDE-edited files may differ slightly from files authored in raw-text editors that preserve HTML entities verbatim.
+
 ## Getting started
 
 ```
@@ -97,10 +101,7 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ### For Claude
 
-- In the Find bar, please add a "whole-word only" filter button after the case-sensitive filter button. Use bootstrap icon `textarea-t`, I don't see a better fitting icon.
-- Also, I think the find panel should BE a bar below the toolbar, reducing the editor viewport size. Otherwise text matches can be concealed behind it, confusing the user ("wait, where's the highlighted match?").
-- When you right-click on a file/folder and click Delete, there should be a confirmation dialog pop up "Really delete {name}?" with Delete / Cancel buttons, rather than the confirmation being an inline click in the menu. so that hotkey-based deletion can trigger the same dialog.
-
----
-
-<code>...</code> is beautiful when INSIDE the editor window, it has a nice rounded border and a slightly lighter background. But outside of the editor window, in pop-up dialogs etc, it's just a font change with no border. Please make it have that border and different background color.
+- Dial in the support for < and > in markdowns (don't escape them, maintain compatibility with raw markdown editors as much as possible)
+- <code>...</code> is beautiful when INSIDE the editor window, it has a nice rounded border and a slightly lighter background. But outside of the editor window, in pop-up dialogs etc, it's just a font change with no border. Please make it have that border and different background color.
+- Text styling: line-height should be reduced by 2px, top + bottom margin of each <li> should be increased by 3px. Currently there's no visible separation between li bullets apart from the stardard line-height within each bullet.
+- When you delete a file, also close the tab for that file (and don't add it to the queue of closed tabs that can be re-opened via Cmd + Shift + T).

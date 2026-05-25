@@ -8,9 +8,27 @@ import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import Placeholder from '@tiptap/extension-placeholder';
 import { common, createLowlight } from 'lowlight';
 import { Markdown as MarkdownExt } from 'tiptap-markdown';
+import Text from '@tiptap/extension-text';
 import { TextSelection } from '@tiptap/pm/state';
 import { Tab } from '../types';
 import TableMenu from './TableMenu';
+
+// Override tiptap-markdown's text serializer which blindly converts all < and >
+// to &lt; &gt;, mangling prose like "Apples > oranges." on save.
+// With html:false, markdown-it already treats <ol> etc. as literal text on parse,
+// so we just need to output raw text without the escapeHTML step.
+const TextNode = Text.extend({
+  addStorage() {
+    return {
+      markdown: {
+        serialize(state: any, node: any) {
+          state.text(node.text);
+        },
+        parse: {},
+      },
+    };
+  },
+});
 
 const lowlight = createLowlight(common);
 
@@ -61,7 +79,9 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
     extensions: [
       StarterKit.configure({
         codeBlock: false,
+        text: false,
       }),
+      TextNode,
       Highlight,
       Link.configure({
         openOnClick: false,

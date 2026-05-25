@@ -37,7 +37,7 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - PDF table cell merging: continuation rows (col 0 empty) are merged into the previous logical row, handling multi-line cell content that spans multiple PDF text lines.
 - PDF table run detection allows single-cluster continuation lines mid-run (cell text wrapping to a line with content in only one column).
 - PDF conversion escapes lines matching `^\d+\.` to prevent Markdown OL interpretation of numbers like "994164972.".
-- tiptap-markdown is configured with `html: false` so raw HTML tags in Markdown (e.g. `<ol>` in body text) are treated as literal text, not parsed as HTML elements. On save, tiptap-markdown auto-escapes them to `&lt;ol&gt;`.
+- tiptap-markdown is configured with `html: false` so raw HTML tags in Markdown (e.g. `<ol>` in body text) are treated as literal text, not parsed as HTML elements. The text node serializer is overridden to skip tiptap-markdown's `escapeHTML` (which converts `<` `>` to `&lt;` `&gt;`), preserving prose like "Apples > oranges." verbatim on save. Standard Markdown character escaping (via prosemirror-markdown's `esc()`) is still applied.
 - Sidebar folder expand/collapse state is lifted to the `Sidebar` component (not `DirectoryNode`) via a `Set<string>` of expanded paths, so it persists across explorer/outline view switches.
 - File explorer context menu (rename, delete, copy path) and create file/folder use dedicated IPC handlers (`rename-file`, `trash-file`, `create-file`, `create-directory`). Delete moves to Trash via `shell.trashItem()`, never permanent delete.
 
