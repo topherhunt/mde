@@ -12,6 +12,7 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [replaceTerm, setReplaceTerm] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
   const [matchCount, setMatchCount] = useState(0);
   const [confirmingAll, setConfirmingAll] = useState(false);
   const [currentMatch, setCurrentMatch] = useState(0);
@@ -30,7 +31,7 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
     };
   }, [editor]);
 
-  const findMatches = useCallback((term: string, caseSens: boolean): { from: number; to: number }[] => {
+  const findMatches = useCallback((term: string, caseSens: boolean, whole: boolean): { from: number; to: number }[] => {
     if (!term) return [];
     const doc = editor.state.doc;
     const matches: { from: number; to: number }[] = [];
@@ -41,6 +42,14 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
       const text = caseSens ? node.text! : node.text!.toLowerCase();
       let index = 0;
       while ((index = text.indexOf(searchStr, index)) !== -1) {
+        if (whole) {
+          const before = index > 0 ? text[index - 1] : ' ';
+          const after = index + searchStr.length < text.length ? text[index + searchStr.length] : ' ';
+          if (/\w/.test(before) || /\w/.test(after)) {
+            index += 1;
+            continue;
+          }
+        }
         matches.push({ from: pos + index, to: pos + index + term.length });
         index += 1;
       }
@@ -66,8 +75,8 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
     editor.view.updateState(editor.state.reconfigure({ plugins: [...existingPlugins, plugin] }));
   }, [editor]);
 
-  const doSearch = useCallback((term: string, caseSens: boolean) => {
-    const matches = findMatches(term, caseSens);
+  const doSearch = useCallback((term: string, caseSens: boolean, whole: boolean) => {
+    const matches = findMatches(term, caseSens, whole);
     setMatchCount(matches.length);
     if (matches.length > 0) {
       setCurrentMatch(1);
@@ -87,27 +96,27 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
   }, [editor]);
 
   const findNext = useCallback(() => {
-    const matches = findMatches(searchTerm, caseSensitive);
+    const matches = findMatches(searchTerm, caseSensitive, wholeWord);
     if (matches.length === 0) return;
     const next = currentMatch >= matches.length ? 1 : currentMatch + 1;
     setCurrentMatch(next);
     editor.commands.setTextSelection(matches[next - 1]);
     updateHighlights(matches, next - 1);
     scrollToSelection();
-  }, [searchTerm, caseSensitive, currentMatch, editor, findMatches, scrollToSelection, updateHighlights]);
+  }, [searchTerm, caseSensitive, wholeWord, currentMatch, editor, findMatches, scrollToSelection, updateHighlights]);
 
   const findPrev = useCallback(() => {
-    const matches = findMatches(searchTerm, caseSensitive);
+    const matches = findMatches(searchTerm, caseSensitive, wholeWord);
     if (matches.length === 0) return;
     const prev = currentMatch <= 1 ? matches.length : currentMatch - 1;
     setCurrentMatch(prev);
     editor.commands.setTextSelection(matches[prev - 1]);
     updateHighlights(matches, prev - 1);
     scrollToSelection();
-  }, [searchTerm, caseSensitive, currentMatch, editor, findMatches, scrollToSelection, updateHighlights]);
+  }, [searchTerm, caseSensitive, wholeWord, currentMatch, editor, findMatches, scrollToSelection, updateHighlights]);
 
   const replaceOne = useCallback(() => {
-    const matches = findMatches(searchTerm, caseSensitive);
+    const matches = findMatches(searchTerm, caseSensitive, wholeWord);
     if (matches.length === 0 || currentMatch === 0) return;
     const match = matches[currentMatch - 1];
     editor.chain()
@@ -115,11 +124,11 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
       .setTextSelection(match)
       .insertContent(replaceTerm)
       .run();
-    doSearch(searchTerm, caseSensitive);
-  }, [searchTerm, replaceTerm, caseSensitive, currentMatch, editor, findMatches, doSearch]);
+    doSearch(searchTerm, caseSensitive, wholeWord);
+  }, [searchTerm, replaceTerm, caseSensitive, wholeWord, currentMatch, editor, findMatches, doSearch]);
 
   const replaceAll = useCallback(() => {
-    const matches = findMatches(searchTerm, caseSensitive);
+    const matches = findMatches(searchTerm, caseSensitive, wholeWord);
     if (matches.length === 0) return;
     // Replace from end to start so positions don't shift
     const reversed = [...matches].reverse();
@@ -130,13 +139,13 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
         .insertContent(replaceTerm)
         .run();
     }
-    doSearch(searchTerm, caseSensitive);
-  }, [searchTerm, replaceTerm, caseSensitive, editor, findMatches, doSearch]);
+    doSearch(searchTerm, caseSensitive, wholeWord);
+  }, [searchTerm, replaceTerm, caseSensitive, wholeWord, editor, findMatches, doSearch]);
 
   const handleSearchChange = useCallback((value: string) => {
     setSearchTerm(value);
-    doSearch(value, caseSensitive);
-  }, [caseSensitive, doSearch]);
+    doSearch(value, caseSensitive, wholeWord);
+  }, [caseSensitive, wholeWord, doSearch]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -171,11 +180,22 @@ export default function FindBar({ editor, onClose }: FindBarProps) {
           onClick={() => {
             const next = !caseSensitive;
             setCaseSensitive(next);
-            doSearch(searchTerm, next);
+            doSearch(searchTerm, next, wholeWord);
           }}
           title="Case Sensitive"
         >
           Aa
+        </button>
+        <button
+          className={`find-bar-btn find-bar-case ${wholeWord ? 'active' : ''}`}
+          onClick={() => {
+            const next = !wholeWord;
+            setWholeWord(next);
+            doSearch(searchTerm, caseSensitive, next);
+          }}
+          title="Whole Word"
+        >
+          <i className="bi bi-textarea-t" />
         </button>
         <button className="find-bar-btn find-bar-close" onClick={onClose} title="Close (Escape)">×</button>
       </div>

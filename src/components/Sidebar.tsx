@@ -150,12 +150,11 @@ interface ContextMenuProps {
   projectRoot: string;
   onClose: () => void;
   onStartRename: (entry: FileEntry) => void;
-  onDeleted: () => void;
+  onRequestDelete: (entry: FileEntry) => void;
   onToast: (msg: string, variant?: string) => void;
 }
 
-function ContextMenu({ menu, projectRoot, onClose, onStartRename, onDeleted, onToast }: ContextMenuProps) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
+function ContextMenu({ menu, projectRoot, onClose, onStartRename, onRequestDelete, onToast }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -179,7 +178,7 @@ function ContextMenu({ menu, projectRoot, onClose, onStartRename, onDeleted, onT
 
   const handleCopyPath = () => {
     navigator.clipboard.writeText(relativePath);
-    onToast(`✅ Copied path: ${relativePath}`, 'info');
+    onToast(`Copied path: ${relativePath}`, 'info');
     onClose();
   };
 
@@ -188,9 +187,8 @@ function ContextMenu({ menu, projectRoot, onClose, onStartRename, onDeleted, onT
     onClose();
   };
 
-  const handleDelete = async () => {
-    await window.mde.trashFile(menu.entry.path);
-    onDeleted();
+  const handleDelete = () => {
+    onRequestDelete(menu.entry);
     onClose();
   };
 
@@ -199,19 +197,43 @@ function ContextMenu({ menu, projectRoot, onClose, onStartRename, onDeleted, onT
       <button className="ctx-menu-item" onClick={handleRename}>
         <i className="bi bi-pencil" /> Rename
       </button>
-      {!confirmingDelete ? (
-        <button className="ctx-menu-item ctx-menu-item-danger" onClick={() => setConfirmingDelete(true)}>
-          <i className="bi bi-trash" /> Delete
-        </button>
-      ) : (
-        <button className="ctx-menu-item ctx-menu-item-danger" onClick={handleDelete}>
-          <i className="bi bi-trash" /> Move to Trash?
-        </button>
-      )}
+      <button className="ctx-menu-item ctx-menu-item-danger" onClick={handleDelete}>
+        <i className="bi bi-trash" /> Delete
+      </button>
       <div className="ctx-menu-divider" />
       <button className="ctx-menu-item" onClick={handleCopyPath}>
         <i className="bi bi-clipboard" /> Copy Relative Path
       </button>
+    </div>
+  );
+}
+
+function DeleteConfirmDialog({ entry, onConfirm, onCancel }: { entry: FileEntry; onConfirm: () => void; onCancel: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Enter') onConfirm();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onConfirm, onCancel]);
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header" style={{ justifyContent: 'center' }}>
+          <span className="fw-bold">Delete {entry.isDirectory ? 'folder' : 'file'}</span>
+        </div>
+        <div className="modal-body">
+          <p className="text-muted fs-sm">
+            Really delete <code>{entry.name}</code>? It will be moved to the Trash.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
+            <button className="settings-btn" onClick={onCancel}>Cancel</button>
+            <button className="settings-btn btn-danger" onClick={onConfirm}>Delete</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -238,11 +260,19 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
   const [localRefresh, setLocalRefresh] = useState(0);
   const [creating, setCreating] = useState<'file' | 'folder' | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [confirmingDeletePath, setConfirmingDeletePath] = useState<string | null>(null);
+  const [deletingEntry, setDeletingEntry] = useState<FileEntry | null>(null);
   // Cache of loaded directory entries for arrow key navigation
   const entriesCacheRef = useRef<Map<string, FileEntry[]>>(new Map());
 
   const triggerRefresh = useCallback(() => setLocalRefresh(n => n + 1), []);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deletingEntry) return;
+    await window.mde.trashFile(deletingEntry.path);
+    if (selectedPath === deletingEntry.path) setSelectedPath(null);
+    setDeletingEntry(null);
+    triggerRefresh();
+  }, [deletingEntry, selectedPath, triggerRefresh]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault();
@@ -262,7 +292,6 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
 
   const handleSelect = useCallback((entry: FileEntry) => {
     setSelectedPath(entry.path);
-    setConfirmingDeletePath(null);
   }, []);
 
   const handleCreate = useCallback(async (name: string, type: 'file' | 'folder') => {
@@ -304,7 +333,6 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
     const onMouseDown = (e: MouseEvent) => {
       if (sidebarRef.current && !sidebarRef.current.contains(e.target as Node)) {
         setSelectedPath(null);
-        setConfirmingDeletePath(null);
       }
     };
     document.addEventListener('mousedown', onMouseDown);
@@ -330,26 +358,21 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
         return;
       }
 
-      // Cmd+Backspace -> delete with two-step confirmation
+      // Cmd+Backspace -> delete with confirmation dialog
       if (e.key === 'Backspace' && e.metaKey && selectedPath && !renamingEntry && !creating) {
         e.preventDefault();
-        if (confirmingDeletePath === selectedPath) {
-          // Second press -- do the delete
-          window.mde.trashFile(selectedPath).then(() => {
-            setConfirmingDeletePath(null);
-            setSelectedPath(null);
-            triggerRefresh();
-          });
-        } else {
-          setConfirmingDeletePath(selectedPath);
-        }
+        window.mde.getFileStats(selectedPath).then(stats => {
+          if (stats) {
+            const name = selectedPath.split('/').pop() || '';
+            setDeletingEntry({ path: selectedPath, name, isDirectory: stats.isDirectory });
+          }
+        });
         return;
       }
 
-      // Arrow keys for navigation
-      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') && projectRoot) {
+      // Arrow keys for navigation (plain arrows only, not with modifiers)
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') && projectRoot && !e.metaKey && !e.altKey && !e.ctrlKey) {
         e.preventDefault();
-        setConfirmingDeletePath(null);
 
         const rootEntries = entriesCacheRef.current.get(projectRoot) || [];
         const visibleList = flattenVisibleEntries(rootEntries, expandedPaths, entriesCacheRef.current);
@@ -391,18 +414,12 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
       if (e.key === 'Escape' && selectedPath && !renamingEntry && !creating) {
         e.preventDefault();
         setSelectedPath(null);
-        setConfirmingDeletePath(null);
         return;
-      }
-
-      // Any other key cancels delete confirmation
-      if (confirmingDeletePath) {
-        setConfirmingDeletePath(null);
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [selectedPath, renamingEntry, creating, confirmingDeletePath, projectRoot, expandedPaths, onToggleExpanded, triggerRefresh, onOpenFile]);
+  }, [selectedPath, renamingEntry, creating, projectRoot, expandedPaths, onToggleExpanded, triggerRefresh, onOpenFile]);
 
   if (!projectRoot) {
     return <div className="sidebar-empty">Open a folder to browse files</div>;
@@ -429,16 +446,22 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
         expandedPaths={expandedPaths}
         onToggleExpanded={onToggleExpanded}
         onCollapseAll={onCollapseAll}
-        confirmingDeletePath={confirmingDeletePath}
         onRegisterEntries={registerEntries}
       />
+      {deletingEntry && (
+        <DeleteConfirmDialog
+          entry={deletingEntry}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeletingEntry(null)}
+        />
+      )}
       {contextMenu && (
         <ContextMenu
           menu={contextMenu}
           projectRoot={projectRoot}
           onClose={() => setContextMenu(null)}
           onStartRename={setRenamingEntry}
-          onDeleted={triggerRefresh}
+          onRequestDelete={setDeletingEntry}
           onToast={onToast}
         />
       )}
@@ -465,11 +488,10 @@ interface DirectoryNodeProps {
   expandedPaths: Set<string>;
   onToggleExpanded: (path: string) => void;
   onCollapseAll?: () => void;
-  confirmingDeletePath?: string | null;
   onRegisterEntries?: (path: string, entries: FileEntry[]) => void;
 }
 
-function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, refreshKey, isRoot, onContextMenu, renamingEntry, onRenameComplete, creating, onSetCreating, onCreate, selectedPath, onSelect, expandedPaths, onToggleExpanded, onCollapseAll, confirmingDeletePath, onRegisterEntries }: DirectoryNodeProps) {
+function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, refreshKey, isRoot, onContextMenu, renamingEntry, onRenameComplete, creating, onSetCreating, onCreate, selectedPath, onSelect, expandedPaths, onToggleExpanded, onCollapseAll, onRegisterEntries }: DirectoryNodeProps) {
   const expanded = expandedPaths.has(path);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -511,7 +533,6 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
           onCreate={onCreate}
           expandedPaths={expandedPaths}
           onToggleExpanded={onToggleExpanded}
-          confirmingDeletePath={confirmingDeletePath}
           onRegisterEntries={onRegisterEntries}
         />
       );
@@ -532,7 +553,6 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
           isRenaming={renamingEntry?.path === entry.path}
           onRenameComplete={onRenameComplete}
           onSelect={onSelect}
-          confirmingDelete={confirmingDeletePath === entry.path}
         />
         {showCreateAfter && (
           <InlineCreateInput
@@ -577,12 +597,10 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
   const dirEntry: FileEntry = { name, path, isDirectory: true };
   const isRenaming = renamingEntry?.path === path;
   const isSelected = selectedPath === path;
-  const isConfirmingDelete = confirmingDeletePath === path;
-
   return (
     <div className="tree-node">
       <div
-        className={`tree-item tree-folder ${expanded ? 'expanded' : ''} ${isSelected ? 'tree-item-selected' : ''} ${isConfirmingDelete ? 'tree-item-confirming-delete' : ''}`}
+        className={`tree-item tree-folder ${expanded ? 'expanded' : ''} ${isSelected ? 'tree-item-selected' : ''}`}
         onClick={() => { onToggleExpanded(path); onSelect(dirEntry); }}
         onContextMenu={(e) => onContextMenu(e, dirEntry)}
       >
@@ -677,7 +695,7 @@ function InlineCreateInput({ type, onSubmit, onCancel }: { type: 'file' | 'folde
   );
 }
 
-function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContextMenu, isRenaming, onRenameComplete, onSelect, confirmingDelete }: {
+function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContextMenu, isRenaming, onRenameComplete, onSelect }: {
   entry: FileEntry;
   onOpenFile: (path: string, tentative?: boolean) => void;
   onImportFile: (path: string) => void;
@@ -687,7 +705,6 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
   isRenaming?: boolean;
   onRenameComplete: (entry: FileEntry, newName: string) => void;
   onSelect: (entry: FileEntry) => void;
-  confirmingDelete?: boolean;
 }) {
   const editable = isEditable(entry.name);
   const importable = isImportable(entry.name);
@@ -701,7 +718,7 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
 
   return (
     <div
-      className={`tree-item tree-file ${clickable ? '' : 'tree-file-disabled'} ${importable ? 'tree-file-importable' : ''} ${active ? 'tree-file-active' : ''} ${selected ? 'tree-item-selected' : ''} ${confirmingDelete ? 'tree-item-confirming-delete' : ''}`}
+      className={`tree-item tree-file ${clickable ? '' : 'tree-file-disabled'} ${importable ? 'tree-file-importable' : ''} ${active ? 'tree-file-active' : ''} ${selected ? 'tree-item-selected' : ''}`}
       onClick={handleClick}
       onDoubleClick={editable ? () => onOpenFile(entry.path, false) : undefined}
       onContextMenu={(e) => onContextMenu(e, entry)}

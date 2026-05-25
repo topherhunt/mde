@@ -76,7 +76,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
         placeholder: 'Start writing...',
       }),
       MarkdownExt.configure({
-        html: true,
+        html: false,
         breaks: true,
         transformCopiedText: true,
         transformPastedText: true,

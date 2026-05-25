@@ -31,6 +31,13 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - File sidebar auto-refreshes via recursive `fs.watch` on the project root (debounced 2s). On macOS this uses FSEvents (kernel-level, zero CPU idle cost).
 - PDF text extraction uses `pdfjs-dist/legacy/build/pdf.mjs` with the worker loaded into `globalThis.pdfjsWorker` (fake worker mode). Both `pdfjs-dist` and its worker are webpack externals -- they resolve from `node_modules` at runtime. Do NOT bundle them with webpack; the worker spawning mechanism breaks. Extraction uses position-based line grouping, multi-column layout detection (splits left/right columns when a >15% page-width gap is found), paragraph break detection (>1.5x median line height), and table detection (2+ aligned columns across 3+ consecutive lines).
 - DOCX conversion preprocesses mammoth's HTML before turndown: strips `<p>` inside cells, promotes first row `<td>` to `<th>` with `<thead>`/`<tbody>` wrapping, so turndown-plugin-gfm's table rule can convert them. All conversion libraries (mammoth, turndown, turndown-plugin-gfm, pdfjs-dist) are webpack externals in `webpack.main.config.ts`.
+- PDF text item joining uses gap-based spacing (>1px gap inserts space) rather than unconditional spaces, to handle PDFs with per-character text items (e.g. web-to-PDF renders).
+- PDF heading detection: compares each line's font height to the page's most frequent (body) height. Lines >1.4x body height become headings; distinct sizes map to H1/H2/H3/H4 in descending order.
+- PDF column-split detection is suppressed when >30% of lines span both sides of the gap (indicating a wide table, not a two-column layout).
+- PDF table cell merging: continuation rows (col 0 empty) are merged into the previous logical row, handling multi-line cell content that spans multiple PDF text lines.
+- PDF table run detection allows single-cluster continuation lines mid-run (cell text wrapping to a line with content in only one column).
+- PDF conversion escapes lines matching `^\d+\.` to prevent Markdown OL interpretation of numbers like "994164972.".
+- tiptap-markdown is configured with `html: false` so raw HTML tags in Markdown (e.g. `<ol>` in body text) are treated as literal text, not parsed as HTML elements. On save, tiptap-markdown auto-escapes them to `&lt;ol&gt;`.
 - Sidebar folder expand/collapse state is lifted to the `Sidebar` component (not `DirectoryNode`) via a `Set<string>` of expanded paths, so it persists across explorer/outline view switches.
 - File explorer context menu (rename, delete, copy path) and create file/folder use dedicated IPC handlers (`rename-file`, `trash-file`, `create-file`, `create-directory`). Delete moves to Trash via `shell.trashItem()`, never permanent delete.
 
@@ -85,8 +92,8 @@ What exists:
   - Root header with New File (`bi-file-earmark-plus`), New Folder (`bi-folder-plus`), Collapse All (`bi-arrows-collapse`) buttons
   - Selection state with teal highlight; Enter to rename selected item
   - Creates files/folders in selected folder or as sibling to selected file
-  - Right-click context menu: Rename, Delete (two-step, moves to Trash), Copy Relative Path (shows info toast)
-  - Keyboard: Arrow Up/Down (navigate), Arrow Right/Left (expand/collapse folders), Enter (rename), Cmd+Backspace (delete with two-step red-highlight confirmation)
+  - Right-click context menu: Rename, Delete (confirmation dialog, moves to Trash), Copy Relative Path (shows info toast)
+  - Keyboard: Arrow Up/Down (navigate), Arrow Right/Left (expand/collapse folders), Enter (rename), Escape (deselect), Cmd+Backspace (delete with confirmation dialog)
   - Clicking outside sidebar deselects
   - Folder expand/collapse state persists across explorer/outline view switches
 - Document outline sidebar (icon tabs with rounded bg, not text+underline)
@@ -94,7 +101,7 @@ What exists:
 - Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, lists, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable
 - Link editing via floating LinkBar (top-right of editor, like FindBar) -- preserves text selection highlight via ProseMirror decorations while editing URL
 - Link preview popup (top-right of editor area when cursor is in a link)
-- Find/replace floating bar with match highlighting (yellow border for all matches, yellow bg for active match), disabled nav when <=1 match, inline "Replace all" confirmation
+- Find/replace bar (inline below toolbar) with match highlighting (yellow border for all matches, yellow bg for active match), case-sensitive and whole-word filters, disabled nav when <=1 match, inline "Replace all" confirmation
 - Code block copy button (NodeView-based, top-right corner, appears on hover)
 - Table cell actions dropdown (three-dots trigger centered on top-right cell border, viewport-aware dropdown alignment, icons for insert/delete row/column)
 - File conflict detection (silent reload / red banner)

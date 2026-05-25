@@ -186,7 +186,9 @@ export default function App() {
   const activeTab = state.tabs[state.activeTabIndex] || null;
 
   useEffect(() => {
-    setActiveEditor(activeTab ? editorsRef.current.get(activeTab.id) || null : null);
+    const editor = activeTab ? editorsRef.current.get(activeTab.id) || null : null;
+    setActiveEditor(editor);
+    if (editor) editor.commands.focus();
   }, [activeTab?.id]);
 
   const openFile = useCallback(async (filePath: string, tentative = false) => {
@@ -532,15 +534,15 @@ export default function App() {
             onPinTab={(tabId) => dispatch({ type: 'PIN_TAB', tabId })}
           />
           <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} />
+          {state.findBarOpen && activeEditor && (
+            <FindBar
+              editor={activeEditor}
+              onClose={() => dispatch({ type: 'TOGGLE_FIND_BAR' })}
+            />
+          )}
           <div className="editor-area">
             {activeTab?.conflict && (
               <ConflictBanner onReload={reloadActiveTab} onSaveAs={saveActiveTabAs} />
-            )}
-            {state.findBarOpen && activeEditor && (
-              <FindBar
-                editor={activeEditor}
-                onClose={() => dispatch({ type: 'TOGGLE_FIND_BAR' })}
-              />
             )}
             {linkBarVisible && activeEditor && (
               <LinkBar

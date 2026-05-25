@@ -775,20 +775,13 @@ body {
 
 /* --- Find bar --- */
 .find-bar {
-  position: absolute;
-  top: 0;
-  right: 16px;
-  z-index: 10;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 6px 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  padding: 8px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 12px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 360px;
+  flex-shrink: 0;
 }
 
 .find-bar-row {
@@ -1028,6 +1021,16 @@ body {
 }
 
 .settings-btn.btn-primary:hover {
+  opacity: 0.9;
+}
+
+.settings-btn.btn-danger {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+}
+
+.settings-btn.btn-danger:hover {
   opacity: 0.9;
 }
 

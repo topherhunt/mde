@@ -502,21 +502,29 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
             return clusters;
           });
 
-          // Find runs of lines that share 2+ column positions
+          // Find runs of lines that share 2+ column positions.
+          // Single-cluster lines are allowed mid-run (cell text wrapping to a
+          // continuation line that only has content in one column).
           const isTableLine: boolean[] = new Array(lines.length).fill(false);
           let runStart = 0;
           while (runStart < lines.length) {
             if (lineXClusters[runStart].length < 2) { runStart++; continue; }
             let runEnd = runStart + 1;
-            while (runEnd < lines.length && lineXClusters[runEnd].length >= 2) {
-              // Check if columns align with the first line's columns
+            while (runEnd < lines.length) {
               const refCols = lineXClusters[runStart];
               const curCols = lineXClusters[runEnd];
-              let matched = 0;
-              for (const rc of refCols) {
-                if (curCols.some(cc => Math.abs(cc - rc) <= 10)) matched++;
+              if (curCols.length >= 2) {
+                let matched = 0;
+                for (const rc of refCols) {
+                  if (curCols.some(cc => Math.abs(cc - rc) <= 10)) matched++;
+                }
+                if (matched < 2) break;
+              } else if (curCols.length === 1) {
+                // Allow single-cluster continuation if it aligns with a ref column
+                if (!refCols.some(rc => Math.abs(rc - curCols[0]) <= 10)) break;
+              } else {
+                break;
               }
-              if (matched < 2) break;
               runEnd++;
             }
             if (runEnd - runStart >= 3) {
@@ -532,13 +540,29 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
           const flushTable = () => {
             if (!tableBuffer || tableBuffer.rows.length === 0) return;
             const { cols, rows } = tableBuffer;
-            // Determine max width per column
-            const widths = cols.map((_, ci) => Math.max(3, ...rows.map(r => (r[ci] || '').length)));
+            // PDF tables have no cell boundaries -- each PDF line becomes a row.
+            // When cell text wraps, continuation lines have content only in some
+            // columns (col 0 empty). Merge these into the previous logical row
+            // so "Navigating long reports and\nmanuals." becomes one cell, not two rows.
+            const merged: string[][] = [];
+            for (const row of rows) {
+              if (merged.length > 0 && !row[0].trim()) {
+                const prev = merged[merged.length - 1];
+                for (let ci = 0; ci < cols.length; ci++) {
+                  if (row[ci].trim()) {
+                    prev[ci] = prev[ci] ? prev[ci] + ' ' + row[ci] : row[ci];
+                  }
+                }
+              } else {
+                merged.push([...row]);
+              }
+            }
+            const widths = cols.map((_, ci) => Math.max(3, ...merged.map(r => (r[ci] || '').length)));
             const formatRow = (r: string[]) => '| ' + cols.map((_, ci) => (r[ci] || '').padEnd(widths[ci])).join(' | ') + ' |';
-            outputParts.push(formatRow(rows[0]));
+            outputParts.push(formatRow(merged[0]));
             outputParts.push('| ' + cols.map((_, ci) => '-'.repeat(widths[ci])).join(' | ') + ' |');
-            for (let ri = 1; ri < rows.length; ri++) {
-              outputParts.push(formatRow(rows[ri]));
+            for (let ri = 1; ri < merged.length; ri++) {
+              outputParts.push(formatRow(merged[ri]));
             }
             tableBuffer = null;
           };
@@ -584,11 +608,13 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
                   outputParts.push('');
                 }
               }
+              // Escape lines that would be parsed as ordered lists (e.g. "994164972.")
+              const escaped = lineText.replace(/^(\d+)\./,  '$1\\.');
               const headingLevel = getHeadingLevel(line.maxHeight);
               if (headingLevel > 0) {
-                outputParts.push('#'.repeat(headingLevel) + ' ' + lineText);
+                outputParts.push('#'.repeat(headingLevel) + ' ' + escaped);
               } else {
-                outputParts.push(lineText);
+                outputParts.push(escaped);
               }
             }
           }
@@ -624,9 +650,27 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
               if (gap > maxGap) { maxGap = gap; gapX = mid; }
             }
           }
-          // If the gap is significant (> 15% of page width), treat as two columns
+          // If the gap is significant (> 15% of page width), might be two columns
+          // But first check it's not a wide table: if many lines span both sides, skip
           if (maxGap > pageWidth * 0.15) {
-            columnSplit = gapX;
+            const linesByY: Map<number, typeof items> = new Map();
+            for (const item of items) {
+              const yKey = Math.round(item.y);
+              const bucket = linesByY.get(yKey) || [];
+              bucket.push(item);
+              linesByY.set(yKey, bucket);
+            }
+            let spanning = 0;
+            let total = 0;
+            for (const lineItems of linesByY.values()) {
+              total++;
+              const hasLeft = lineItems.some(it => it.x < gapX);
+              const hasRight = lineItems.some(it => it.x >= gapX);
+              if (hasLeft && hasRight) spanning++;
+            }
+            if (spanning / total < 0.3) {
+              columnSplit = gapX;
+            }
           }
         }
 
