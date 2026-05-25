@@ -6,7 +6,7 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 
 ## Architecture
 
-- **Main process** (`src/index.ts`): Window management, file I/O, IPC handlers, file watching, menu bar, drag-drop at the OS level, DOCX/PDF import conversion. No rendering.
+- **Main process** (`src/index.ts`): Window management, file I/O, 22 IPC handlers, file watching, menu bar, drag-drop at the OS level, DOCX/PDF import conversion. No rendering.
 - **Preload** (`src/preload.ts`): Exposes `window.mde` API via contextBridge. All file system access goes through this bridge.
 - **Renderer** (`src/renderer.tsx`): React entry point. Imports Bootstrap Icons CSS and app styles.
 - **Components** (`src/components/`): App, Sidebar, TabBar, Toolbar, Editor, FindBar, LinkBar, QuickOpen, ConflictBanner, TableMenu.
@@ -20,7 +20,7 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - No auto-save. Explicit Cmd+S only.
 - File conflict detection: poll mtime, show red banner, disable Save (but not editing).
 - State management: React context + useReducer, no external state lib.
-- User preferences (theme, spellcheck, last project root) stored in `mde-state.json` in Electron's userData dir via `loadState`/`saveState` helpers in index.ts.
+- User preferences (theme, spellcheck, sidebar width, window bounds, last project root) stored in `mde-state.json` in Electron's userData dir via `loadState`/`saveState` helpers in index.ts.
 - Initial file load uses a manual ProseMirror transaction with `addToHistory: false` so undo doesn't clear the buffer. Do not use `editor.commands.setContent()` for initial load -- TipTap's `beforeTransaction` event fires after history has already recorded the transaction.
 - The `open-file` macOS event fires before `app.on('ready')` when launched via `mde .`. A `launchFileHandled` flag prevents the ready handler from creating a duplicate default window.
 - Renderer webpack config does NOT use the `@vercel/webpack-asset-relocator-loader`. That loader breaks ESM imports from TipTap packages. It's only needed for native node modules in the main process.
@@ -29,8 +29,9 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - `confirm()` and `alert()` don't work in Electron's renderer. Use in-app toasts or inline confirmation UI instead.
 - ProseMirror decorations (via Plugin with DecorationSet) are used for find-match highlighting and link-bar selection preservation. Always clean up decoration plugins on component unmount.
 - File sidebar auto-refreshes via recursive `fs.watch` on the project root (debounced 2s). On macOS this uses FSEvents (kernel-level, zero CPU idle cost).
-- PDF text extraction uses `pdfjs-dist/legacy/build/pdf.mjs` with the worker loaded into `globalThis.pdfjsWorker` (fake worker mode). Both `pdfjs-dist` and its worker are webpack externals -- they resolve from `node_modules` at runtime. Do NOT bundle them with webpack; the worker spawning mechanism breaks.
-- DOCX/PDF import conversion (mammoth, turndown, pdfjs-dist) are all webpack externals in `webpack.main.config.ts`. Any new heavy Node library used only in the main process should be added there too.
+- PDF text extraction uses `pdfjs-dist/legacy/build/pdf.mjs` with the worker loaded into `globalThis.pdfjsWorker` (fake worker mode). Both `pdfjs-dist` and its worker are webpack externals -- they resolve from `node_modules` at runtime. Do NOT bundle them with webpack; the worker spawning mechanism breaks. Extraction uses position-based line grouping, multi-column layout detection (splits left/right columns when a >15% page-width gap is found), paragraph break detection (>1.5x median line height), and table detection (2+ aligned columns across 3+ consecutive lines).
+- DOCX conversion preprocesses mammoth's HTML before turndown: strips `<p>` inside cells, promotes first row `<td>` to `<th>` with `<thead>`/`<tbody>` wrapping, so turndown-plugin-gfm's table rule can convert them. All conversion libraries (mammoth, turndown, turndown-plugin-gfm, pdfjs-dist) are webpack externals in `webpack.main.config.ts`.
+- Sidebar folder expand/collapse state is lifted to the `Sidebar` component (not `DirectoryNode`) via a `Set<string>` of expanded paths, so it persists across explorer/outline view switches.
 - File explorer context menu (rename, delete, copy path) and create file/folder use dedicated IPC handlers (`rename-file`, `trash-file`, `create-file`, `create-directory`). Delete moves to Trash via `shell.trashItem()`, never permanent delete.
 
 ## Commands
@@ -79,7 +80,16 @@ What exists:
 
 - Electron shell with IPC bridge, menu bar (including Window menu with Hide/Minimize), drag-drop (with blue pulse overlay)
 - TipTap WYSIWYG editor with Markdown load/save
-- File explorer sidebar (resizable via drag handle, width persisted; root header with new-file/new-folder buttons; selection state with teal highlight -- Enter to rename; creates files/folders in selected folder or as sibling to selected file; right-click context menu with Rename/Delete/Copy Relative Path) + document outline sidebar (icon tabs with rounded bg, not text+underline)
+- File explorer sidebar:
+  - Resizable via drag handle (140--600px, width persisted to mde-state.json)
+  - Root header with New File (`bi-file-earmark-plus`), New Folder (`bi-folder-plus`), Collapse All (`bi-arrows-collapse`) buttons
+  - Selection state with teal highlight; Enter to rename selected item
+  - Creates files/folders in selected folder or as sibling to selected file
+  - Right-click context menu: Rename, Delete (two-step, moves to Trash), Copy Relative Path (shows info toast)
+  - Keyboard: Arrow Up/Down (navigate), Arrow Right/Left (expand/collapse folders), Enter (rename), Cmd+Backspace (delete with two-step red-highlight confirmation)
+  - Clicking outside sidebar deselects
+  - Folder expand/collapse state persists across explorer/outline view switches
+- Document outline sidebar (icon tabs with rounded bg, not text+underline)
 - Tabbed editor with smart dirty tracking (undo back to original clears dirty)
 - Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, lists, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable
 - Link editing via floating LinkBar (top-right of editor, like FindBar) -- preserves text selection highlight via ProseMirror decorations while editing URL
@@ -89,15 +99,16 @@ What exists:
 - Table cell actions dropdown (three-dots trigger centered on top-right cell border, viewport-aware dropdown alignment, icons for insert/delete row/column)
 - File conflict detection (silent reload / red banner)
 - Quick Open command palette (Cmd+O) with fuzzy search, file indexing (10s TTL cache)
-- DOCX/PDF import: converts to .{ext}.md on click (preserves original extension), renames original to .bak.{ext}, backup files hidden from sidebar/quick-open. PDF extraction uses position-based line grouping and table detection. DOCX uses mammoth + turndown with GFM tables plugin.
+- DOCX/PDF import: converts to `.{ext}.md` on click (e.g. `report.pdf.md` -- preserves original extension), renames original to `.bak.{ext}`, backup files hidden from sidebar/quick-open. PDF extraction: position-based line grouping, multi-column layout detection, paragraph break detection, table detection. DOCX: mammoth + turndown with HTML table preprocessing for clean Markdown table output (zero HTML in output).
 - PDF export (via Electron printToPDF)
 - Dark mode support (light / dark / system default, stored in user state file)
 - Settings dialog (Cmd+,) with theme selector, spellcheck toggle, terminal launcher installer
 - Terminal launcher: `mde .` opens a folder from the terminal (installed via Settings)
-- Toast notifications with semantic colors (danger, info variants) and scale animations
-- Window dimensions persisted and restored on reopen (sidebar width + window bounds, stored in mde-state.json)
+- Toast notifications with semantic colors (danger, info variants -- separate text/border color variables for contrast in dark mode) and scale animations
+- Window dimensions and position persisted and restored on reopen (debounced 500ms save on resize/move)
 - Custom app icon (icon.icns, generated from icon.png)
-- Keyboard shortcuts: Cmd+K (link), Cmd+Shift+E (code block), Cmd+F (find), Cmd+O (quick open), Cmd+H (hide), Cmd+, (settings)
+- Rainbow wave color animation on project title in the title bar (12s cycle, 0.6s stagger per letter)
+- Keyboard shortcuts: Cmd+S (save), Cmd+Shift+S (save as), Cmd+K (link), Cmd+Shift+E (code block), Cmd+F (find), Cmd+O (quick open), Cmd+Shift+O (open folder), Cmd+W (close tab), Cmd+Shift+T (reopen tab), Cmd+H (hide), Cmd+, (settings), Cmd+Alt+Left/Right (prev/next tab)
 
 **Not yet done / known gaps:**
 
@@ -113,10 +124,19 @@ like `d-flex`, `mt-3`, `gap-2` exist -- they are not included. Use
 inline styles or define component-specific classes when layout needs
 arise.
 
+CSS variables for theming (defined in `:root`, `[data-theme="dark"]`,
+and `@media (prefers-color-scheme: dark)` blocks in `src/index.css`):
+- Layout: `--bg`, `--bg-secondary`, `--bg-tertiary`, `--border`
+- Text: `--text`, `--text-muted`
+- Accent: `--accent`, `--accent-light`
+- Danger: `--danger`, `--danger-bg`, `--danger-border`, `--danger-text`
+- Info: `--info-text`
+- Code: `--code-bg`, `--code-text`
+- Highlight: `--highlight-bg`
+
 When adding component styles:
-- Use CSS variables (`var(--bg)`, `var(--text)`, `var(--border)`, etc.)
-  for theme compatibility. Always set `color` and `background` on inputs
-  and buttons so they work in dark mode.
+- Use CSS variables for theme compatibility. Always set `color` and
+  `background` on inputs and buttons so they work in dark mode.
 - Component-specific classes are fine for anything with multi-property
   styling. Don't over-abstract.
 - Keep utility definitions in `src/index.css` if adding new ones.

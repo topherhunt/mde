@@ -501,7 +501,13 @@ export default function App() {
     <div className="app">
       <div className="app-drag-region">
         {state.projectRoot && (
-          <span className="app-title">{state.projectRoot.split('/').pop()}</span>
+          <span className="app-title">
+            {(state.projectRoot.split('/').pop() || '').split('').map((ch, i) => (
+              <span key={i} className="app-title-letter" style={{ animationDelay: `${i * 6}s` }}>
+                {ch}
+              </span>
+            ))}
+          </span>
         )}
       </div>
       <div className="app-body">

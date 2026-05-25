@@ -20,6 +20,8 @@
   --highlight-bg: #fef08a;
   --code-bg: #1e1e1e;
   --code-text: #d4d4d4;
+  --danger-text: #b91c1c;
+  --info-text: #1d4ed8;
 }
 
 [data-theme="dark"] {
@@ -37,6 +39,8 @@
   --highlight-bg: #7a6318;
   --code-bg: #141414;
   --code-text: #d4d4d4;
+  --danger-text: #fca5a5;
+  --info-text: #93c5fd;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -55,6 +59,8 @@
     --highlight-bg: #7a6318;
     --code-bg: #141414;
     --code-text: #d4d4d4;
+    --danger-text: #fca5a5;
+    --info-text: #93c5fd;
   }
 }
 
@@ -1140,13 +1146,13 @@ body {
 
 .toast-danger {
   background: var(--danger-bg);
-  color: var(--danger);
+  color: var(--danger-text);
   border-color: var(--danger-border);
 }
 
 .toast-info {
   background: var(--accent-light);
-  color: var(--accent);
+  color: var(--info-text);
   border-color: var(--accent);
 }
 
@@ -1368,4 +1374,30 @@ body {
   color: var(--text);
   outline: none;
   min-width: 0;
+}
+
+/* --- Delete confirmation highlight --- */
+.tree-item-confirming-delete {
+  background: var(--danger-bg);
+  outline: 1px solid var(--danger-border);
+  outline-offset: -1px;
+}
+
+/* --- Rainbow wave title --- */
+.app-title-letter {
+  animation: rainbow-wave 120s ease-in-out infinite;
+  display: inline;
+}
+
+@keyframes rainbow-wave {
+  0%, 100% { color: #ffffff; }
+  10% { color: #fda4af; }
+  20% { color: #fb923c; }
+  30% { color: #fbbf24; }
+  40% { color: #a3e635; }
+  50% { color: #5eead4; }
+  60% { color: #67e8f9; }
+  70% { color: #93c5fd; }
+  80% { color: #c4b5fd; }
+  90% { color: #f0abfc; }
 }

@@ -17,6 +17,19 @@ interface SidebarProps {
 export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast }: SidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const resizing = useRef(false);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const sidebarRef = useRef<HTMLDivElement>(null);
+
+  // Initialize root as expanded when projectRoot changes
+  useEffect(() => {
+    if (projectRoot) {
+      setExpandedPaths(prev => {
+        const next = new Set(prev);
+        next.add(projectRoot);
+        return next;
+      });
+    }
+  }, [projectRoot]);
 
   useEffect(() => {
     window.mde.getSidebarWidth().then(w => { if (w) setSidebarWidth(w); });
@@ -46,8 +59,26 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onIm
     document.addEventListener('mouseup', onUp);
   }, [sidebarWidth]);
 
+  const toggleExpanded = useCallback((path: string) => {
+    setExpandedPaths(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const collapseAll = useCallback(() => {
+    setExpandedPaths(prev => {
+      const next = new Set<string>();
+      // Keep root expanded
+      if (projectRoot) next.add(projectRoot);
+      return next;
+    });
+  }, [projectRoot]);
+
   return (
-    <div className="sidebar" style={{ width: sidebarWidth }}>
+    <div className="sidebar" ref={sidebarRef} style={{ width: sidebarWidth }}>
       <div className="sidebar-tabs">
         <button
           className={`sidebar-tab ${mode === 'explorer' ? 'active' : ''}`}
@@ -66,7 +97,18 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onIm
       </div>
       <div className="sidebar-content">
         {mode === 'explorer' ? (
-          <FileExplorer projectRoot={projectRoot} onOpenFile={onOpenFile} onImportFile={onImportFile} activeFilePath={activeFilePath} refreshKey={refreshKey} onToast={onToast} />
+          <FileExplorer
+            projectRoot={projectRoot}
+            onOpenFile={onOpenFile}
+            onImportFile={onImportFile}
+            activeFilePath={activeFilePath}
+            refreshKey={refreshKey}
+            onToast={onToast}
+            expandedPaths={expandedPaths}
+            onToggleExpanded={toggleExpanded}
+            onCollapseAll={collapseAll}
+            sidebarRef={sidebarRef}
+          />
         ) : (
           <DocumentOutline editor={activeEditor} />
         )}
@@ -83,6 +125,10 @@ interface FileExplorerProps {
   activeFilePath: string | null;
   refreshKey: number;
   onToast: (msg: string, variant?: string) => void;
+  expandedPaths: Set<string>;
+  onToggleExpanded: (path: string) => void;
+  onCollapseAll: () => void;
+  sidebarRef: React.RefObject<HTMLDivElement>;
 }
 
 function isEditable(name: string): boolean {
@@ -170,12 +216,31 @@ function ContextMenu({ menu, projectRoot, onClose, onStartRename, onDeleted, onT
   );
 }
 
-function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast }: FileExplorerProps) {
+function flattenVisibleEntries(
+  entries: FileEntry[],
+  expandedPaths: Set<string>,
+  entriesCache: Map<string, FileEntry[]>,
+): FileEntry[] {
+  const result: FileEntry[] = [];
+  for (const entry of entries) {
+    result.push(entry);
+    if (entry.isDirectory && expandedPaths.has(entry.path)) {
+      const children = entriesCache.get(entry.path) || [];
+      result.push(...flattenVisibleEntries(children, expandedPaths, entriesCache));
+    }
+  }
+  return result;
+}
+
+function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef }: FileExplorerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingEntry, setRenamingEntry] = useState<FileEntry | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
   const [creating, setCreating] = useState<'file' | 'folder' | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [confirmingDeletePath, setConfirmingDeletePath] = useState<string | null>(null);
+  // Cache of loaded directory entries for arrow key navigation
+  const entriesCacheRef = useRef<Map<string, FileEntry[]>>(new Map());
 
   const triggerRefresh = useCallback(() => setLocalRefresh(n => n + 1), []);
 
@@ -197,6 +262,7 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
 
   const handleSelect = useCallback((entry: FileEntry) => {
     setSelectedPath(entry.path);
+    setConfirmingDeletePath(null);
   }, []);
 
   const handleCreate = useCallback(async (name: string, type: 'file' | 'folder') => {
@@ -207,8 +273,6 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
     // Determine target directory based on selection
     let targetDir = projectRoot;
     if (selectedPath) {
-      // We need to know if selectedPath is a directory or file
-      // Use getFileStats to check
       const stats = await window.mde.getFileStats(selectedPath);
       if (stats?.isDirectory) {
         targetDir = selectedPath;
@@ -231,12 +295,30 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
     setCreating(null);
   }, [projectRoot, selectedPath, triggerRefresh, onOpenFile]);
 
-  // Handle Enter to rename -- only when focus is NOT in an editable element
+  const registerEntries = useCallback((path: string, entries: FileEntry[]) => {
+    entriesCacheRef.current.set(path, entries);
+  }, []);
+
+  // Deselect when clicking outside sidebar
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      if (sidebarRef.current && !sidebarRef.current.contains(e.target as Node)) {
+        setSelectedPath(null);
+        setConfirmingDeletePath(null);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [sidebarRef]);
+
+  // Keyboard shortcuts: Enter (rename), Cmd+Backspace (delete), Arrow keys (navigation)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       const editable = (e.target as HTMLElement)?.isContentEditable;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || editable) return;
+
+      // Enter -> rename
       if (e.key === 'Enter' && selectedPath && !renamingEntry && !creating) {
         e.preventDefault();
         window.mde.getFileStats(selectedPath).then(stats => {
@@ -245,11 +327,82 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
             setRenamingEntry({ path: selectedPath, name, isDirectory: stats.isDirectory });
           }
         });
+        return;
+      }
+
+      // Cmd+Backspace -> delete with two-step confirmation
+      if (e.key === 'Backspace' && e.metaKey && selectedPath && !renamingEntry && !creating) {
+        e.preventDefault();
+        if (confirmingDeletePath === selectedPath) {
+          // Second press -- do the delete
+          window.mde.trashFile(selectedPath).then(() => {
+            setConfirmingDeletePath(null);
+            setSelectedPath(null);
+            triggerRefresh();
+          });
+        } else {
+          setConfirmingDeletePath(selectedPath);
+        }
+        return;
+      }
+
+      // Arrow keys for navigation
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') && projectRoot) {
+        e.preventDefault();
+        setConfirmingDeletePath(null);
+
+        const rootEntries = entriesCacheRef.current.get(projectRoot) || [];
+        const visibleList = flattenVisibleEntries(rootEntries, expandedPaths, entriesCacheRef.current);
+
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          if (!selectedPath) {
+            // Select first item
+            if (visibleList.length > 0) setSelectedPath(visibleList[0].path);
+            return;
+          }
+          const idx = visibleList.findIndex(entry => entry.path === selectedPath);
+          if (idx < 0) return;
+          const newIdx = e.key === 'ArrowUp' ? idx - 1 : idx + 1;
+          if (newIdx >= 0 && newIdx < visibleList.length) {
+            const newEntry = visibleList[newIdx];
+            setSelectedPath(newEntry.path);
+            // Open file on arrow key selection (tentative)
+            if (!newEntry.isDirectory && isEditable(newEntry.name)) {
+              onOpenFile(newEntry.path, true);
+            }
+          }
+        } else if (e.key === 'ArrowRight' && selectedPath) {
+          // Expand folder
+          const entry = visibleList.find(e => e.path === selectedPath);
+          if (entry?.isDirectory && !expandedPaths.has(selectedPath)) {
+            onToggleExpanded(selectedPath);
+          }
+        } else if (e.key === 'ArrowLeft' && selectedPath) {
+          // Collapse folder
+          const entry = visibleList.find(e => e.path === selectedPath);
+          if (entry?.isDirectory && expandedPaths.has(selectedPath)) {
+            onToggleExpanded(selectedPath);
+          }
+        }
+        return;
+      }
+
+      // Escape -> deselect
+      if (e.key === 'Escape' && selectedPath && !renamingEntry && !creating) {
+        e.preventDefault();
+        setSelectedPath(null);
+        setConfirmingDeletePath(null);
+        return;
+      }
+
+      // Any other key cancels delete confirmation
+      if (confirmingDeletePath) {
+        setConfirmingDeletePath(null);
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [selectedPath, renamingEntry, creating]);
+  }, [selectedPath, renamingEntry, creating, confirmingDeletePath, projectRoot, expandedPaths, onToggleExpanded, triggerRefresh, onOpenFile]);
 
   if (!projectRoot) {
     return <div className="sidebar-empty">Open a folder to browse files</div>;
@@ -273,6 +426,11 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
         onCreate={handleCreate}
         selectedPath={selectedPath}
         onSelect={handleSelect}
+        expandedPaths={expandedPaths}
+        onToggleExpanded={onToggleExpanded}
+        onCollapseAll={onCollapseAll}
+        confirmingDeletePath={confirmingDeletePath}
+        onRegisterEntries={registerEntries}
       />
       {contextMenu && (
         <ContextMenu
@@ -304,10 +462,15 @@ interface DirectoryNodeProps {
   onCreate?: (name: string, type: 'file' | 'folder') => void;
   selectedPath: string | null;
   onSelect: (entry: FileEntry) => void;
+  expandedPaths: Set<string>;
+  onToggleExpanded: (path: string) => void;
+  onCollapseAll?: () => void;
+  confirmingDeletePath?: string | null;
+  onRegisterEntries?: (path: string, entries: FileEntry[]) => void;
 }
 
-function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, refreshKey, isRoot, onContextMenu, renamingEntry, onRenameComplete, creating, onSetCreating, onCreate, selectedPath, onSelect }: DirectoryNodeProps) {
-  const [expanded, setExpanded] = useState(isRoot || false);
+function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, refreshKey, isRoot, onContextMenu, renamingEntry, onRenameComplete, creating, onSetCreating, onCreate, selectedPath, onSelect, expandedPaths, onToggleExpanded, onCollapseAll, confirmingDeletePath, onRegisterEntries }: DirectoryNodeProps) {
+  const expanded = expandedPaths.has(path);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -316,6 +479,7 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
       window.mde.listDirectory(path).then(result => {
         setEntries(result);
         setLoaded(true);
+        onRegisterEntries?.(path, result);
       });
     }
   }, [isRoot, expanded, path, refreshKey]);
@@ -345,6 +509,10 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
           creating={creating}
           onSetCreating={onSetCreating}
           onCreate={onCreate}
+          expandedPaths={expandedPaths}
+          onToggleExpanded={onToggleExpanded}
+          confirmingDeletePath={confirmingDeletePath}
+          onRegisterEntries={onRegisterEntries}
         />
       );
     }
@@ -364,6 +532,7 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
           isRenaming={renamingEntry?.path === entry.path}
           onRenameComplete={onRenameComplete}
           onSelect={onSelect}
+          confirmingDelete={confirmingDeletePath === entry.path}
         />
         {showCreateAfter && (
           <InlineCreateInput
@@ -388,6 +557,9 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
             <button className="tree-root-btn" title="New Folder" onClick={() => onSetCreating?.('folder')}>
               <i className="bi bi-folder-plus" />
             </button>
+            <button className="tree-root-btn" title="Collapse All" onClick={() => onCollapseAll?.()}>
+              <i className="bi bi-arrows-collapse" />
+            </button>
           </span>
         </div>
         {showCreateHere && (
@@ -405,12 +577,13 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
   const dirEntry: FileEntry = { name, path, isDirectory: true };
   const isRenaming = renamingEntry?.path === path;
   const isSelected = selectedPath === path;
+  const isConfirmingDelete = confirmingDeletePath === path;
 
   return (
     <div className="tree-node">
       <div
-        className={`tree-item tree-folder ${expanded ? 'expanded' : ''} ${isSelected ? 'tree-item-selected' : ''}`}
-        onClick={() => { setExpanded(!expanded); onSelect(dirEntry); }}
+        className={`tree-item tree-folder ${expanded ? 'expanded' : ''} ${isSelected ? 'tree-item-selected' : ''} ${isConfirmingDelete ? 'tree-item-confirming-delete' : ''}`}
+        onClick={() => { onToggleExpanded(path); onSelect(dirEntry); }}
         onContextMenu={(e) => onContextMenu(e, dirEntry)}
       >
         <span className="tree-arrow">{expanded ? '▼' : '▶'}</span>
@@ -504,7 +677,7 @@ function InlineCreateInput({ type, onSubmit, onCancel }: { type: 'file' | 'folde
   );
 }
 
-function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContextMenu, isRenaming, onRenameComplete, onSelect }: {
+function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContextMenu, isRenaming, onRenameComplete, onSelect, confirmingDelete }: {
   entry: FileEntry;
   onOpenFile: (path: string, tentative?: boolean) => void;
   onImportFile: (path: string) => void;
@@ -514,6 +687,7 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
   isRenaming?: boolean;
   onRenameComplete: (entry: FileEntry, newName: string) => void;
   onSelect: (entry: FileEntry) => void;
+  confirmingDelete?: boolean;
 }) {
   const editable = isEditable(entry.name);
   const importable = isImportable(entry.name);
@@ -527,7 +701,7 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
 
   return (
     <div
-      className={`tree-item tree-file ${clickable ? '' : 'tree-file-disabled'} ${importable ? 'tree-file-importable' : ''} ${active ? 'tree-file-active' : ''} ${selected ? 'tree-item-selected' : ''}`}
+      className={`tree-item tree-file ${clickable ? '' : 'tree-file-disabled'} ${importable ? 'tree-file-importable' : ''} ${active ? 'tree-file-active' : ''} ${selected ? 'tree-item-selected' : ''} ${confirmingDelete ? 'tree-item-confirming-delete' : ''}`}
       onClick={handleClick}
       onDoubleClick={editable ? () => onOpenFile(entry.path, false) : undefined}
       onContextMenu={(e) => onContextMenu(e, entry)}

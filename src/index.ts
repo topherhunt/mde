@@ -403,10 +403,28 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
       const mammoth = require('mammoth');
       const TurndownService = require('turndown');
       const result = await mammoth.convertToHtml({ path: filePath });
+      // Preprocess table HTML for turndown-plugin-gfm compatibility:
+      // mammoth produces all <td> (no <th>), and wraps cell content in <p> tags.
+      // The gfm tables plugin only converts tables with <th> header rows.
+      let html = result.value;
+      html = html.replace(/<table[^>]*>([\s\S]*?)<\/table>/g, (_match: string, inner: string) => {
+        // Strip <p> tags inside cells
+        let cleaned = inner.replace(/<td([^>]*)><p>([\s\S]*?)<\/p><\/td>/g, '<td$1>$2</td>');
+        // Also handle multiple <p> in one cell
+        cleaned = cleaned.replace(/<p>([\s\S]*?)<\/p>/g, '$1');
+        // Find first <tr>...</tr> and convert its <td> to <th>
+        const rows = cleaned.match(/<tr[\s\S]*?<\/tr>/g);
+        if (rows && rows.length > 0) {
+          const headerRow = rows[0].replace(/<td([^>]*)>/g, '<th$1>').replace(/<\/td>/g, '</th>');
+          const bodyRows = rows.slice(1).join('');
+          return '<table><thead>' + headerRow + '</thead><tbody>' + bodyRows + '</tbody></table>';
+        }
+        return '<table>' + cleaned + '</table>';
+      });
       const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
       const { tables, strikethrough } = require('turndown-plugin-gfm');
       td.use([tables, strikethrough]);
-      markdown = td.turndown(result.value);
+      markdown = td.turndown(html);
     } else if (ext === '.pdf') {
       (globalThis as any).pdfjsWorker = require('pdfjs-dist/legacy/build/pdf.worker.mjs');
       const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs');
@@ -417,128 +435,210 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
       for (let i = 1; i <= doc.numPages; i++) {
         const page = await doc.getPage(i);
         const content = await page.getTextContent();
-        const items: { str: string; x: number; y: number; width: number; height: number }[] = [];
+        const items: { str: string; x: number; y: number; width: number; height: number; fontName: string }[] = [];
         for (const item of content.items as any[]) {
           if (!item.str || item.str.trim() === '') continue;
-          items.push({ str: item.str, x: item.transform[4], y: item.transform[5], width: item.width, height: item.height });
+          items.push({ str: item.str, x: item.transform[4], y: item.transform[5], width: item.width, height: item.height, fontName: item.fontName || '' });
         }
         if (items.length === 0) continue;
 
-        // Group items into lines by Y position (tolerance ~2px)
-        const lines: { y: number; height: number; items: typeof items }[] = [];
-        for (const item of items) {
-          const existing = lines.find(l => Math.abs(l.y - item.y) <= 2);
-          if (existing) {
-            existing.items.push(item);
-          } else {
-            lines.push({ y: item.y, height: item.height, items: [item] });
-          }
-        }
+        type PdfItem = { str: string; x: number; y: number; width: number; height: number; fontName: string };
 
-        // Sort lines top-to-bottom (PDF Y decreases going down)
-        lines.sort((a, b) => b.y - a.y);
-        // Sort items within each line left-to-right
-        for (const line of lines) {
-          line.items.sort((a, b) => a.x - b.x);
-        }
-
-        // Compute median line height for paragraph detection
-        const heights = lines.map(l => l.height).filter(h => h > 0);
-        heights.sort((a, b) => a - b);
-        const medianHeight = heights.length > 0 ? heights[Math.floor(heights.length / 2)] : 12;
-
-        // Try to detect table regions: 3+ consecutive lines with 3+ aligned columns
-        const lineXClusters: number[][] = lines.map(line => {
-          const xs = line.items.map(it => it.x);
-          // Cluster X positions within ~10px
-          const clusters: number[] = [];
-          for (const x of xs) {
-            if (!clusters.some(c => Math.abs(c - x) <= 10)) {
-              clusters.push(x);
+        const processItems = (itemsToProcess: PdfItem[]): string => {
+          // Group items into lines by Y position (tolerance ~2px)
+          const lines: { y: number; height: number; maxHeight: number; items: PdfItem[] }[] = [];
+          for (const item of itemsToProcess) {
+            const existing = lines.find(l => Math.abs(l.y - item.y) <= 2);
+            if (existing) {
+              existing.items.push(item);
+              if (item.height > existing.maxHeight) existing.maxHeight = item.height;
+            } else {
+              lines.push({ y: item.y, height: item.height, maxHeight: item.height, items: [item] });
             }
           }
-          clusters.sort((a, b) => a - b);
-          return clusters;
-        });
 
-        // Find runs of lines that share 3+ column positions
-        const isTableLine: boolean[] = new Array(lines.length).fill(false);
-        let runStart = 0;
-        while (runStart < lines.length) {
-          if (lineXClusters[runStart].length < 3) { runStart++; continue; }
-          let runEnd = runStart + 1;
-          while (runEnd < lines.length && lineXClusters[runEnd].length >= 3) {
-            // Check if columns align with the first line's columns
-            const refCols = lineXClusters[runStart];
-            const curCols = lineXClusters[runEnd];
-            let matched = 0;
-            for (const rc of refCols) {
-              if (curCols.some(cc => Math.abs(cc - rc) <= 10)) matched++;
+          // Sort lines top-to-bottom (PDF Y decreases going down)
+          lines.sort((a, b) => b.y - a.y);
+          // Sort items within each line left-to-right
+          for (const line of lines) {
+            line.items.sort((a, b) => a.x - b.x);
+          }
+
+          // Compute body text height as the most frequent (mode) line height
+          const heightCounts = new Map<number, number>();
+          for (const line of lines) {
+            if (line.height > 0) {
+              const rounded = Math.round(line.height);
+              heightCounts.set(rounded, (heightCounts.get(rounded) || 0) + 1);
             }
-            if (matched < 3) break;
-            runEnd++;
           }
-          if (runEnd - runStart >= 3) {
-            for (let j = runStart; j < runEnd; j++) isTableLine[j] = true;
+          let bodyHeight = 12;
+          let maxCount = 0;
+          for (const [h, count] of heightCounts) {
+            if (count > maxCount) { maxCount = count; bodyHeight = h; }
           }
-          runStart = runEnd;
-        }
 
-        // Build output
-        const outputParts: string[] = [];
-        let tableBuffer: { cols: number[]; rows: string[][] }  | null = null;
+          // Collect distinct font sizes larger than body text for heading detection
+          const headingSizes = [...new Set(lines.map(l => l.maxHeight).filter(h => h > bodyHeight * 1.4))];
+          headingSizes.sort((a, b) => b - a);
+          const getHeadingLevel = (h: number): number => {
+            if (headingSizes.length === 0) return 0;
+            const idx = headingSizes.findIndex(s => Math.abs(s - h) < 1);
+            if (idx < 0) return 0;
+            return Math.min(idx + 1, 4);
+          };
 
-        const flushTable = () => {
-          if (!tableBuffer || tableBuffer.rows.length === 0) return;
-          const { cols, rows } = tableBuffer;
-          // Determine max width per column
-          const widths = cols.map((_, ci) => Math.max(3, ...rows.map(r => (r[ci] || '').length)));
-          const formatRow = (r: string[]) => '| ' + cols.map((_, ci) => (r[ci] || '').padEnd(widths[ci])).join(' | ') + ' |';
-          outputParts.push(formatRow(rows[0]));
-          outputParts.push('| ' + cols.map((_, ci) => '-'.repeat(widths[ci])).join(' | ') + ' |');
-          for (let ri = 1; ri < rows.length; ri++) {
-            outputParts.push(formatRow(rows[ri]));
+          // Try to detect table regions: 3+ consecutive lines with 2+ aligned columns
+          const lineXClusters: number[][] = lines.map(line => {
+            const xs = line.items.map(it => it.x);
+            // Cluster X positions within ~10px
+            const clusters: number[] = [];
+            for (const x of xs) {
+              if (!clusters.some(c => Math.abs(c - x) <= 10)) {
+                clusters.push(x);
+              }
+            }
+            clusters.sort((a, b) => a - b);
+            return clusters;
+          });
+
+          // Find runs of lines that share 2+ column positions
+          const isTableLine: boolean[] = new Array(lines.length).fill(false);
+          let runStart = 0;
+          while (runStart < lines.length) {
+            if (lineXClusters[runStart].length < 2) { runStart++; continue; }
+            let runEnd = runStart + 1;
+            while (runEnd < lines.length && lineXClusters[runEnd].length >= 2) {
+              // Check if columns align with the first line's columns
+              const refCols = lineXClusters[runStart];
+              const curCols = lineXClusters[runEnd];
+              let matched = 0;
+              for (const rc of refCols) {
+                if (curCols.some(cc => Math.abs(cc - rc) <= 10)) matched++;
+              }
+              if (matched < 2) break;
+              runEnd++;
+            }
+            if (runEnd - runStart >= 3) {
+              for (let j = runStart; j < runEnd; j++) isTableLine[j] = true;
+            }
+            runStart = runEnd;
           }
-          tableBuffer = null;
+
+          // Build output
+          const outputParts: string[] = [];
+          let tableBuffer: { cols: number[]; rows: string[][] } | null = null;
+
+          const flushTable = () => {
+            if (!tableBuffer || tableBuffer.rows.length === 0) return;
+            const { cols, rows } = tableBuffer;
+            // Determine max width per column
+            const widths = cols.map((_, ci) => Math.max(3, ...rows.map(r => (r[ci] || '').length)));
+            const formatRow = (r: string[]) => '| ' + cols.map((_, ci) => (r[ci] || '').padEnd(widths[ci])).join(' | ') + ' |';
+            outputParts.push(formatRow(rows[0]));
+            outputParts.push('| ' + cols.map((_, ci) => '-'.repeat(widths[ci])).join(' | ') + ' |');
+            for (let ri = 1; ri < rows.length; ri++) {
+              outputParts.push(formatRow(rows[ri]));
+            }
+            tableBuffer = null;
+          };
+
+          for (let li = 0; li < lines.length; li++) {
+            const line = lines[li];
+            let lineText = '';
+            for (let ii = 0; ii < line.items.length; ii++) {
+              const item = line.items[ii];
+              if (ii > 0) {
+                const prev = line.items[ii - 1];
+                const gap = item.x - (prev.x + prev.width);
+                lineText += gap > 1 ? ' ' : '';
+              }
+              lineText += item.str;
+            }
+
+            if (isTableLine[li]) {
+              // Start or continue table
+              if (!tableBuffer) {
+                // Determine column positions from reference line cluster
+                const cols = lineXClusters[li].slice();
+                tableBuffer = { cols, rows: [] };
+              }
+              // Place items into columns
+              const row: string[] = new Array(tableBuffer.cols.length).fill('');
+              for (const item of line.items) {
+                let bestCol = 0;
+                let bestDist = Infinity;
+                for (let ci = 0; ci < tableBuffer.cols.length; ci++) {
+                  const dist = Math.abs(item.x - tableBuffer.cols[ci]);
+                  if (dist < bestDist) { bestDist = dist; bestCol = ci; }
+                }
+                row[bestCol] = row[bestCol] ? row[bestCol] + ' ' + item.str : item.str;
+              }
+              tableBuffer.rows.push(row);
+            } else {
+              flushTable();
+              // Determine gap from previous line
+              if (li > 0 && !isTableLine[li - 1]) {
+                const gap = lines[li - 1].y - line.y;
+                if (gap > bodyHeight * 1.5) {
+                  outputParts.push('');
+                }
+              }
+              const headingLevel = getHeadingLevel(line.maxHeight);
+              if (headingLevel > 0) {
+                outputParts.push('#'.repeat(headingLevel) + ' ' + lineText);
+              } else {
+                outputParts.push(lineText);
+              }
+            }
+          }
+          flushTable();
+          return outputParts.join('\n');
         };
 
-        for (let li = 0; li < lines.length; li++) {
-          const line = lines[li];
-          const lineText = line.items.map(it => it.str).join(' ');
+        // Detect multi-column layout
+        const xPositions = items.map(it => it.x).sort((a, b) => a - b);
+        const minX = xPositions[0];
+        const maxX = xPositions[xPositions.length - 1];
+        const pageWidth = maxX - minX;
 
-          if (isTableLine[li]) {
-            // Start or continue table
-            if (!tableBuffer) {
-              // Determine column positions from reference line cluster
-              const cols = lineXClusters[li].slice();
-              tableBuffer = { cols, rows: [] };
+        // Group items by approximate X position to find column starts
+        const xBuckets: number[] = [];
+        for (const x of xPositions) {
+          if (!xBuckets.some(b => Math.abs(b - x) < 20)) xBuckets.push(x);
+        }
+        xBuckets.sort((a, b) => a - b);
+
+        // Check for a significant gap that divides content into columns
+        let columnSplit: number | null = null;
+        if (xBuckets.length >= 4 && pageWidth > 200) {
+          // Find the largest gap in the middle 60% of the page
+          const midStart = minX + pageWidth * 0.2;
+          const midEnd = minX + pageWidth * 0.8;
+          let maxGap = 0;
+          let gapX = 0;
+          for (let i = 1; i < xBuckets.length; i++) {
+            const mid = (xBuckets[i] + xBuckets[i - 1]) / 2;
+            if (mid > midStart && mid < midEnd) {
+              const gap = xBuckets[i] - xBuckets[i - 1];
+              if (gap > maxGap) { maxGap = gap; gapX = mid; }
             }
-            // Place items into columns
-            const row: string[] = new Array(tableBuffer.cols.length).fill('');
-            for (const item of line.items) {
-              let bestCol = 0;
-              let bestDist = Infinity;
-              for (let ci = 0; ci < tableBuffer.cols.length; ci++) {
-                const dist = Math.abs(item.x - tableBuffer.cols[ci]);
-                if (dist < bestDist) { bestDist = dist; bestCol = ci; }
-              }
-              row[bestCol] = row[bestCol] ? row[bestCol] + ' ' + item.str : item.str;
-            }
-            tableBuffer.rows.push(row);
-          } else {
-            flushTable();
-            // Determine gap from previous line
-            if (li > 0 && !isTableLine[li - 1]) {
-              const gap = lines[li - 1].y - line.y;
-              if (gap > medianHeight * 1.5) {
-                outputParts.push('');
-              }
-            }
-            outputParts.push(lineText);
+          }
+          // If the gap is significant (> 15% of page width), treat as two columns
+          if (maxGap > pageWidth * 0.15) {
+            columnSplit = gapX;
           }
         }
-        flushTable();
-        pages.push(outputParts.join('\n'));
+
+        if (columnSplit !== null) {
+          const leftItems = items.filter(it => it.x < columnSplit);
+          const rightItems = items.filter(it => it.x >= columnSplit);
+          const leftText = processItems(leftItems);
+          const rightText = processItems(rightItems);
+          pages.push(leftText + '\n\n' + rightText);
+        } else {
+          pages.push(processItems(items));
+        }
       }
       markdown = pages.join('\n\n');
       doc.destroy();

@@ -17,3 +17,5 @@ out/
 
 .env
 .env.test
+
+test-conversion/
