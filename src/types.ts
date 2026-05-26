@@ -18,6 +18,8 @@ export interface Tab {
   diskMtime: number | null;
   conflict: boolean;
   tentative: boolean;
+  readOnly?: boolean;
+  initialContent?: string;
 }
 
 export interface MdeAPI {
@@ -63,6 +65,7 @@ export interface MdeAPI {
   onProjectFilesChanged: (callback: () => void) => () => void;
   listProjectFiles: (root: string) => Promise<string[]>;
   onQuickOpen: (callback: () => void) => () => void;
+  onShowKeyboardShortcuts: (callback: () => void) => () => void;
   getPathForFile: (file: File) => string;
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   trashFile: (filePath: string) => Promise<void>;

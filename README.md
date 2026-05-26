@@ -6,28 +6,32 @@ Inspired by [Thomas Ptacek's MDV app](https://sockpuppet.org/blog/2026/05/12/ema
 
 > ❗ **Alpha (v0.1).** Stable and usable, but expect rough edges. Bug reports and feature requests welcome.
 
+## Why MDE?
+
+MDE fills the gap between Obsidian and VS Code for Markdown editing:
+
+- **True WYSIWYG** -- like Obsidian, you see formatted text as you type, not raw Markdown syntax
+- **Folder-based, no vault lock-in** -- open any folder from the terminal (`mde .`) or drag it onto the window or dock icon, like VS Code
+- **Auto-convert PDF & DOCX** -- click a PDF or DOCX in the sidebar and it's converted to editable Markdown on the spot, with the original kept as a backup (Warning: conversion is not perfect)
+
 ## Features
 
-- **WYSIWYG editing** -- write Markdown visually with a formatting toolbar
-- **File Explorer & File Outline sidebar**
-- **Tabbed editing** -- open multiple files, switch between them
-- **Find and replace** -- match highlighting, inline replace-all confirmation
-- **Code blocks** -- syntax-highlighted with one-click copy button
-- **Table editing** -- insert/delete rows and columns via a cell actions menu
-- **Link editing** -- floating link bar for editing URLs without losing your text selection
+- **WYSIWYG editing** -- formatting toolbar with headings, bold, italic, strikethrough, highlight, lists, todo lists, blockquotes, code, links, tables, and horizontal rules
+- **File Explorer & Document Outline sidebar** -- keyboard-navigable, resizable, with context menu (rename, delete, copy path)
+- **Tabbed editing** -- open multiple files, reorder by drag, tentative (preview) tabs on single-click
+- **Find and replace** -- match highlighting, case-sensitive and whole-word filters, inline replace-all confirmation
 - **Quick Open** -- Cmd+O fuzzy file search across the project
-- **DOCX and PDF import** -- converts to Markdown on click, preserving structure where possible
-- **PDF export** -- print any document to PDF
+- **Standard editing tools** -- links, code blocks, tables
+- **DOCX and PDF import/export** -- converts to Markdown on click, preserving structure (tables, headings, columns) where possible (not perfect!)
 - **File conflict detection** -- detects external changes; silent reload or warning banner
 - **Dark mode** -- light, dark, or follow system preference
 - **Terminal launcher** -- `mde .` to open a folder from the command line
-- **Spellcheck** -- toggleable in settings
 
 ![Preview](docs/preview1.png)
 
 ## How to install
 
-Download the latest build for your platform from the releases page.
+Download the latest build for your platform from the [releases page](https://github.com/topherhunt/mde/releases).
 
 ### macOS (Apple Silicon)
 
@@ -89,19 +93,20 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ### For me
 
-- Keyboard Shortcuts help page (maybe open as a readonly tab/buffer?)
-- Todo lists (checkable)
-- TODO: Test the .docx & .pdf flow.
-  - How much do they lose of the original structure & content?
-- Support .csv files too. Plan this out.
+
 - Support right-click to convert to .docx or .pdf, w standard nice-looking formatting & colors (customizable)
   - PDF export -- does this require chrome/puppeteer? can it just use the built-in engine?
 - **Add Claude agent support.**
 - Build to Windows (for Claire & Anny). Claude says this is straightforward w Electron Forge.
+- Support .csv files too. Plan this out.
 
 ### For Claude
 
-- Dial in the support for < and > in markdowns (don't escape them, maintain compatibility with raw markdown editors as much as possible)
-- <code>...</code> is beautiful when INSIDE the editor window, it has a nice rounded border and a slightly lighter background. But outside of the editor window, in pop-up dialogs etc, it's just a font change with no border. Please make it have that border and different background color.
-- Text styling: line-height should be reduced by 2px, top + bottom margin of each <li> should be increased by 3px. Currently there's no visible separation between li bullets apart from the stardard line-height within each bullet.
-- When you delete a file, also close the tab for that file (and don't add it to the queue of closed tabs that can be re-opened via Cmd + Shift + T).
+- Thanks, the readme "what's different from Obsidian/VS Code" list is a good start, but what other unique or special advantages / features does this app have? I didn't mean for you to treat that as an exhaustive list.
+- Toolbar buttons' text/icon color should be light gray, maybe #d6d6d6, not white please. It's too distractey currently. The selected-button style/colors can stay same.
+- The new keyboard shortcuts non-editable buffer works fantastic, but let's hide the toolbar and hide any conceivable controls for editing. For example, you should not be able to place your cursor within a table cell, and if you do, then the controls to-like the drop-down button of options to add or delete rows should not show.
+- Please also write the Keyboard Shortcuts help file to docs/help/keyboard_shortcuts.md so it doesn't need to be hard-coded as a constant in KEYBOARD_SHORTCUTS_CONTENT, that seems wasteful, right?
+- Empty buffer when there's no page open: add 0.5rem margin between lines. (use standard bootstrap5-style utils like my-2)
+- When the text cursor is in the editor, the hotkey Cmd + Enter cycles that line between 3 states: bullet, unchecked task, and checked task. This applies to all lines selected if you selected a range of lines. Under NO circumstances does Cmd + Enter insert a line break.
+- Pressing `tab` when cursor is in a li (ol, ul, or task) attempts to indent it. The 1st line cannot be indented. This previously worked but it seems to have switched to selecting DOM inputs like in a browser page (not desireable).
+- BUG: Something in our cleaning-html logic caused file-reload to break. So if you open a file, then it gets altered on-disk by VS Code or something else, it will reload in the buffer as ugly raw html.

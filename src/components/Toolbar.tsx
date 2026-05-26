@@ -140,6 +140,12 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
           onClick={() => editor.chain().focus().toggleBulletList().run()}
         />
         <ToolbarButton
+          icon="ui-checks"
+          title="Todo List"
+          active={editor.isActive('taskList')}
+          onClick={() => editor.chain().focus().toggleTaskList().run()}
+        />
+        <ToolbarButton
           icon="quote"
           title="Blockquote (Cmd+Shift+B)"
           active={editor.isActive('blockquote')}

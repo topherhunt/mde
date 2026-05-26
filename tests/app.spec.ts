@@ -810,3 +810,114 @@ test.describe('Import conversion', () => {
     fs.rmSync(tmpDir, { recursive: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 12. Todo lists
+// ---------------------------------------------------------------------------
+
+test.describe('Todo lists', () => {
+  test('todo list toolbar button creates a task list', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'todo.md');
+    fs.writeFileSync(tmpFile, '# Todo\n\nSome text.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('My task');
+
+    // Select the line
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Shift+End');
+
+    // Click todo list toolbar button
+    await page.locator('.toolbar-btn[title="Todo List"]').click();
+
+    // Verify task list is rendered
+    await expect(editor.locator('ul[data-type="taskList"]')).toBeVisible();
+    await expect(editor.locator('input[type="checkbox"]').first()).toBeVisible();
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('todo list round-trips through markdown save', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'todo.md');
+    fs.writeFileSync(tmpFile, '# Tasks\n\n- [ ] Unchecked\n- [x] Checked\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    // Verify both items render
+    const checkboxes = editor.locator('input[type="checkbox"]');
+    await expect(checkboxes).toHaveCount(2);
+
+    // Add a change to trigger save
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' ');
+
+    // Save
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+    });
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+
+    const saved = fs.readFileSync(tmpFile, 'utf-8');
+    expect(saved).toContain('- [ ]');
+    expect(saved).toContain('- [x]');
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. Keyboard Shortcuts help page
+// ---------------------------------------------------------------------------
+
+test.describe('Keyboard Shortcuts', () => {
+  test('opens keyboard shortcuts tab from Help menu', async () => {
+    ({ app, page } = await launchApp());
+
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('show-keyboard-shortcuts');
+    });
+
+    const tab = page.locator('.tab');
+    await expect(tab).toBeVisible({ timeout: 5000 });
+    await expect(tab.locator('.tab-name')).toContainText('Keyboard Shortcuts');
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Cmd + O');
+    await expect(editor).toContainText('Bold');
+  });
+
+  test('empty state shows keyboard shortcuts link', async () => {
+    ({ app, page } = await launchApp());
+
+    const link = page.locator('.empty-state-link');
+    await expect(link).toBeVisible();
+    await expect(link).toContainText('Keyboard Shortcuts');
+
+    await link.click();
+
+    const tab = page.locator('.tab');
+    await expect(tab).toBeVisible({ timeout: 5000 });
+    await expect(tab.locator('.tab-name')).toContainText('Keyboard Shortcuts');
+  });
+});

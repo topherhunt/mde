@@ -12,9 +12,10 @@ interface SidebarProps {
   activeFilePath: string | null;
   refreshKey: number;
   onToast: (msg: string, variant?: string) => void;
+  onDeleteFile: (filePath: string) => void;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile }: SidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const resizing = useRef(false);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -108,6 +109,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onIm
             onToggleExpanded={toggleExpanded}
             onCollapseAll={collapseAll}
             sidebarRef={sidebarRef}
+            onDeleteFile={onDeleteFile}
           />
         ) : (
           <DocumentOutline editor={activeEditor} />
@@ -129,6 +131,7 @@ interface FileExplorerProps {
   onToggleExpanded: (path: string) => void;
   onCollapseAll: () => void;
   sidebarRef: React.RefObject<HTMLDivElement>;
+  onDeleteFile: (filePath: string) => void;
 }
 
 function isEditable(name: string): boolean {
@@ -254,7 +257,7 @@ function flattenVisibleEntries(
   return result;
 }
 
-function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef }: FileExplorerProps) {
+function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef, onDeleteFile }: FileExplorerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingEntry, setRenamingEntry] = useState<FileEntry | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -269,10 +272,11 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
   const confirmDelete = useCallback(async () => {
     if (!deletingEntry) return;
     await window.mde.trashFile(deletingEntry.path);
+    onDeleteFile(deletingEntry.path);
     if (selectedPath === deletingEntry.path) setSelectedPath(null);
     setDeletingEntry(null);
     triggerRefresh();
-  }, [deletingEntry, selectedPath, triggerRefresh]);
+  }, [deletingEntry, selectedPath, triggerRefresh, onDeleteFile]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault();

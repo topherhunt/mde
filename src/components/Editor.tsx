@@ -6,6 +6,8 @@ import Link from '@tiptap/extension-link';
 import { TableKit } from '@tiptap/extension-table';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import Placeholder from '@tiptap/extension-placeholder';
+import TaskList from '@tiptap/extension-task-list';
+import TaskItem from '@tiptap/extension-task-item';
 import { common, createLowlight } from 'lowlight';
 import { Markdown as MarkdownExt } from 'tiptap-markdown';
 import Text from '@tiptap/extension-text';
@@ -92,6 +94,10 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       CodeBlockWithCopy.configure({
         lowlight,
       }),
+      TaskList,
+      TaskItem.configure({
+        nested: true,
+      }),
       Placeholder.configure({
         placeholder: 'Start writing...',
       }),
@@ -103,6 +109,23 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       }),
     ],
     editorProps: {
+      handleKeyDown(view, event) {
+        if (event.key === 'Enter' && event.metaKey) {
+          const { state } = view;
+          const { $from } = state.selection;
+          for (let d = $from.depth; d > 0; d--) {
+            const node = $from.node(d);
+            if (node.type.name === 'taskItem') {
+              view.dispatch(state.tr.setNodeMarkup($from.before(d), undefined, {
+                ...node.attrs,
+                checked: !node.attrs.checked,
+              }));
+              return true;
+            }
+          }
+        }
+        return false;
+      },
       handleTripleClickOn(view, pos, node, nodePos) {
         if (node.type.name === 'tableCell' || node.type.name === 'tableHeader') {
           const from = nodePos + 1;
@@ -136,7 +159,28 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
   }, [tab.dirty, editor]);
 
   useEffect(() => {
-    if (!editor || !tab.filePath || loadedRef.current) return;
+    if (!editor || loadedRef.current) return;
+    if (tab.readOnly) editor.setEditable(false);
+  }, [editor, tab.readOnly]);
+
+  useEffect(() => {
+    if (!editor || loadedRef.current) return;
+
+    if (tab.initialContent) {
+      // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
+      const html = editor.storage.markdown.parser.parse(tab.initialContent);
+      const doc = createNodeFromContent(html, editor.schema, { slice: false });
+      const { tr } = editor.state;
+      tr.replaceWith(0, tr.doc.content.size, (doc as any).content);
+      tr.setMeta('addToHistory', false);
+      editor.view.dispatch(tr);
+      editor.commands.setTextSelection(0);
+      cleanDocRef.current = JSON.stringify(editor.state.doc.toJSON());
+      loadedRef.current = true;
+      return;
+    }
+
+    if (!tab.filePath) return;
 
     window.mde.readFile(tab.filePath).then(content => {
       // @ts-expect-error tiptap-markdown adds storage.markdown at runtime

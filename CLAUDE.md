@@ -39,6 +39,8 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - PDF conversion escapes lines matching `^\d+\.` to prevent Markdown OL interpretation of numbers like "994164972.".
 - tiptap-markdown is configured with `html: false` so raw HTML tags in Markdown (e.g. `<ol>` in body text) are treated as literal text, not parsed as HTML elements. The text node serializer is overridden to skip tiptap-markdown's `escapeHTML` (which converts `<` `>` to `&lt;` `&gt;`), preserving prose like "Apples > oranges." verbatim on save. Standard Markdown character escaping (via prosemirror-markdown's `esc()`) is still applied.
 - Sidebar folder expand/collapse state is lifted to the `Sidebar` component (not `DirectoryNode`) via a `Set<string>` of expanded paths, so it persists across explorer/outline view switches.
+- Todo lists use `@tiptap/extension-task-list` and `@tiptap/extension-task-item` with `nested: true`. Checkboxes can be clicked or toggled with Cmd+Enter. Checked items show strikethrough. tiptap-markdown serializes as `- [ ]` / `- [x]`.
+- Deleting a file via the sidebar also closes any tab open to that file, without adding it to the reopenable closed-tabs queue.
 - File explorer context menu (rename, delete, copy path) and create file/folder use dedicated IPC handlers (`rename-file`, `trash-file`, `create-file`, `create-directory`). Delete moves to Trash via `shell.trashItem()`, never permanent delete.
 
 ## Commands
@@ -52,36 +54,21 @@ rm -rf .webpack/ out/ && npm test  # Clean build (required after webpack config 
 
 ## Testing
 
-Playwright in Electron mode. Tests live in `tests/`. Run with `npm test`.
-The `pretest` script in package.json runs `electron-forge package` to
-build the `.webpack/` bundle before tests execute. To skip the rebuild
-when iterating on tests without source changes, run
-`npx playwright test` directly.
+Playwright in Electron mode. Tests live in `tests/`. Run with `npm test`. The `pretest` script in package.json runs `electron-forge package` to build the `.webpack/` bundle before tests execute. To skip the rebuild when iterating on tests without source changes, run `npx playwright test` directly.
 
-**Tests MUST be headless.** No windows should pop up when tests run. The
-main process checks for `--test-headless` in `process.argv` and sets
-`show: false` on the BrowserWindow. The test helper passes this flag
-automatically via `electron.launch({ args: [mainPath, '--test-headless'] })`.
+**Tests MUST be headless.** No windows should pop up when tests run. The main process checks for `--test-headless` in `process.argv` and sets `show: false` on the BrowserWindow. The test helper passes this flag automatically via `electron.launch({ args: [mainPath, '--test-headless'] })`.
 
-**When troubleshooting test failures, run one test or one grep pattern
-first**, not the full suite. The full suite takes ~20s; a single test
-takes <1s. Use `--grep "test name fragment"` to isolate.
+**When troubleshooting test failures, run one test or one grep pattern first**, not the full suite. The full suite takes \~20s; a single test takes <1s. Use `--grep "test name fragment"` to isolate.
 
-**All features need E2E test coverage.** Conversion features (PDF, DOCX
-import) are especially important to test since they depend on external
-libraries and webpack bundling behavior that can break silently.
+**All features need E2E test coverage.** Conversion features (PDF, DOCX import) are especially important to test since they depend on external libraries and webpack bundling behavior that can break silently.
 
-All verification goes through E2E tests -- do not start the app
-interactively to check behavior.
+All verification goes through E2E tests -- do not start the app interactively to check behavior.
 
-**Sidebar tab selectors** use `[title="File Explorer"]` and
-`[title="Document Outline"]` (not text content) since tabs show icons.
+**Sidebar tab selectors** use `[title="File Explorer"]` and `[title="Document Outline"]` (not text content) since tabs show icons.
 
 ## Current status
 
-36 E2E tests. The app has been manually tested and is in active use.
-Packaged app is named `MDE.app` (productName "MDE" in package.json,
-name "MDE" in forge.config.ts packagerConfig).
+36 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 What exists:
 
@@ -98,7 +85,7 @@ What exists:
   - Folder expand/collapse state persists across explorer/outline view switches
 - Document outline sidebar (icon tabs with rounded bg, not text+underline)
 - Tabbed editor with smart dirty tracking (undo back to original clears dirty)
-- Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, lists, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable
+- Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, lists, todo list, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable
 - Link editing via floating LinkBar (top-right of editor, like FindBar) -- preserves text selection highlight via ProseMirror decorations while editing URL
 - Link preview popup (top-right of editor area when cursor is in a link)
 - Find/replace bar (inline below toolbar) with match highlighting (yellow border for all matches, yellow bg for active match), case-sensitive and whole-word filters, disabled nav when <=1 match, inline "Replace all" confirmation
@@ -115,7 +102,9 @@ What exists:
 - Window dimensions and position persisted and restored on reopen (debounced 500ms save on resize/move)
 - Custom app icon (icon.icns, generated from icon.png)
 - Rainbow wave color animation on project title in the title bar (12s cycle, 0.6s stagger per letter)
-- Keyboard shortcuts: Cmd+S (save), Cmd+Shift+S (save as), Cmd+K (link), Cmd+Shift+E (code block), Cmd+F (find), Cmd+O (quick open), Cmd+Shift+O (open folder), Cmd+W (close tab), Cmd+Shift+T (reopen tab), Cmd+H (hide), Cmd+, (settings), Cmd+Alt+Left/Right (prev/next tab)
+- Keyboard shortcuts: Cmd+S (save), Cmd+Shift+S (save as), Cmd+K (link), Cmd+Shift+E (code block), Cmd+F (find), Cmd+O (quick open), Cmd+Shift+O (open folder), Cmd+W (close tab), Cmd+Shift+T (reopen tab), Cmd+H (hide), Cmd+, (settings), Cmd+Alt+Left/Right (prev/next tab), Cmd+Enter (toggle todo checkbox)
+- Keyboard Shortcuts help page: opens as a read-only tab from Help menu or empty-state link. Uses `initialContent` and `readOnly` tab properties.
+- Help menu with Keyboard Shortcuts item (sends `show-keyboard-shortcuts` IPC)
 
 **Not yet done / known gaps:**
 
@@ -125,14 +114,10 @@ What exists:
 
 ## CSS conventions
 
-Utility classes are limited -- only `text-muted`, `fw-bold`, `fs-sm`,
-and a few others are defined. Do NOT assume Bootstrap utility classes
-like `d-flex`, `mt-3`, `gap-2` exist -- they are not included. Use
-inline styles or define component-specific classes when layout needs
-arise.
+Utility classes are limited -- only `text-muted`, `fw-bold`, `fs-sm`, and a few others are defined. Do NOT assume Bootstrap utility classes like `d-flex`, `mt-3`, `gap-2` exist -- they are not included. Use inline styles or define component-specific classes when layout needs arise.
 
-CSS variables for theming (defined in `:root`, `[data-theme="dark"]`,
-and `@media (prefers-color-scheme: dark)` blocks in `src/index.css`):
+CSS variables for theming (defined in `:root`, `[data-theme="dark"]`, and `@media (prefers-color-scheme: dark)` blocks in `src/index.css`):
+
 - Layout: `--bg`, `--bg-secondary`, `--bg-tertiary`, `--border`
 - Text: `--text`, `--text-muted`
 - Accent: `--accent`, `--accent-light`
@@ -142,8 +127,7 @@ and `@media (prefers-color-scheme: dark)` blocks in `src/index.css`):
 - Highlight: `--highlight-bg`
 
 When adding component styles:
-- Use CSS variables for theme compatibility. Always set `color` and
-  `background` on inputs and buttons so they work in dark mode.
-- Component-specific classes are fine for anything with multi-property
-  styling. Don't over-abstract.
+
+- Use CSS variables for theme compatibility. Always set `color` and   `background` on inputs and buttons so they work in dark mode.
+- Component-specific classes are fine for anything with multi-property   styling. Don't over-abstract.
 - Keep utility definitions in `src/index.css` if adding new ones.

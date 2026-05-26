@@ -152,6 +152,59 @@ function nextTabId(): string {
   return `tab-${++tabIdCounter}`;
 }
 
+const KEYBOARD_SHORTCUTS_CONTENT = `# Keyboard Shortcuts
+
+## General
+
+| Shortcut | Action |
+| --- | --- |
+| Cmd + O | Quick Open |
+| Cmd + Shift + O | Open Folder |
+| Cmd + S | Save |
+| Cmd + Shift + S | Save As |
+| Cmd + W | Close Tab |
+| Cmd + Shift + T | Reopen Closed Tab |
+| Cmd + Alt + Left | Previous Tab |
+| Cmd + Alt + Right | Next Tab |
+| Cmd + , | Settings |
+| Cmd + F | Find & Replace |
+
+## Text Formatting
+
+| Shortcut | Action |
+| --- | --- |
+| Cmd + B | Bold |
+| Cmd + I | Italic |
+| Cmd + Shift + X | Strikethrough |
+| Cmd + E | Inline Code |
+| Cmd + Shift + E | Code Block |
+| Cmd + K | Insert Link |
+| Cmd + Shift + 7 | Ordered List |
+| Cmd + Shift + 8 | Unordered List |
+| Cmd + Shift + B | Blockquote |
+
+## Editor
+
+| Shortcut | Action |
+| --- | --- |
+| Cmd + Z | Undo |
+| Cmd + Shift + Z | Redo |
+| Cmd + Enter | Toggle Todo Checkbox |
+| Tab | Indent List Item |
+| Shift + Tab | Outdent List Item |
+
+## File Explorer
+
+| Shortcut | Action |
+| --- | --- |
+| Arrow Up / Down | Navigate Files |
+| Arrow Right | Expand Folder |
+| Arrow Left | Collapse Folder |
+| Enter | Rename Selected |
+| Cmd + Backspace | Delete Selected |
+| Escape | Deselect |
+`;
+
 function fileNameFromPath(filePath: string): string {
   return filePath.split('/').pop() || 'Untitled';
 }
@@ -222,6 +275,27 @@ export default function App() {
     };
     dispatch({ type: 'OPEN_TAB', tab });
     window.mde.watchFile(filePath);
+  }, [state.tabs]);
+
+  const openKeyboardShortcuts = useCallback(() => {
+    const existing = state.tabs.find(t => t.id === 'keyboard-shortcuts');
+    if (existing) {
+      const idx = state.tabs.indexOf(existing);
+      dispatch({ type: 'SET_ACTIVE_TAB', index: idx });
+      return;
+    }
+    const tab: Tab = {
+      id: 'keyboard-shortcuts',
+      filePath: null,
+      fileName: 'Keyboard Shortcuts',
+      dirty: false,
+      diskMtime: null,
+      conflict: false,
+      tentative: false,
+      readOnly: true,
+      initialContent: KEYBOARD_SHORTCUTS_CONTENT,
+    };
+    dispatch({ type: 'OPEN_TAB', tab });
   }, [state.tabs]);
 
   const handleImportFile = useCallback((filePath: string) => {
@@ -322,6 +396,15 @@ export default function App() {
     }
   }, [activeTab]);
 
+  const handleDeleteFile = useCallback((filePath: string) => {
+    const tabIndex = state.tabs.findIndex(t => t.filePath === filePath);
+    if (tabIndex < 0) return;
+    const tab = state.tabs[tabIndex];
+    if (tab.filePath) window.mde.unwatchFile(tab.filePath);
+    unregisterEditor(tab.id);
+    dispatch({ type: 'CLOSE_TAB', index: tabIndex });
+  }, [state.tabs, unregisterEditor]);
+
   const handleCloseTab = useCallback((index: number) => {
     const tab = state.tabs[index];
     if (!tab) return;
@@ -378,6 +461,7 @@ export default function App() {
         const ed = editorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
         if (ed) ed.chain().focus().toggleCodeBlock().run();
       }),
+      window.mde.onShowKeyboardShortcuts(openKeyboardShortcuts),
       window.mde.onInsertLink(() => {
         const ed = editorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
         if (ed && (ed.isActive('link') || !ed.state.selection.empty)) {
@@ -410,7 +494,7 @@ export default function App() {
     ];
 
     return () => cleanups.forEach(fn => fn());
-  }, [openFile, saveActiveTab, saveActiveTabAs, handleCloseTab, state.tabs, state.activeTabIndex]);
+  }, [openFile, saveActiveTab, saveActiveTabAs, handleCloseTab, openKeyboardShortcuts, state.tabs, state.activeTabIndex]);
 
   useEffect(() => {
     window.mde.getProjectRoot().then(root => {
@@ -523,6 +607,7 @@ export default function App() {
           activeFilePath={activeTab?.filePath || null}
           refreshKey={sidebarRefreshKey}
           onToast={showToast}
+          onDeleteFile={handleDeleteFile}
         />
         <div className="main-area">
           <TabBar
@@ -570,6 +655,9 @@ export default function App() {
               <div className="empty-state">
                 <p>Open a file or drag a folder to get started</p>
                 <p className="fs-sm mt-2">or press <kbd>Cmd + O</kbd> to quick-search</p>
+                <p className="fs-sm mt-2">
+                  <a className="empty-state-link" onClick={openKeyboardShortcuts}>Keyboard Shortcuts</a>
+                </p>
               </div>
             )}
           </div>

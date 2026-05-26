@@ -182,6 +182,12 @@ const api = {
     return () => ipcRenderer.removeListener('quick-open', handler);
   },
 
+  onShowKeyboardShortcuts: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('show-keyboard-shortcuts', handler);
+    return () => ipcRenderer.removeListener('show-keyboard-shortcuts', handler);
+  },
+
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 
   renameFile: (oldPath: string, newPath: string): Promise<void> =>
