@@ -22,6 +22,10 @@ const rendererRules = [
     type: 'asset/resource',
   },
   {
+    test: /\.md$/,
+    type: 'asset/source',
+  },
+  {
     test: /\.m?js$/,
     resolve: {
       fullySpecified: false,

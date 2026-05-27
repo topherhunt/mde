@@ -632,9 +632,20 @@ test.describe('File conflict detection', () => {
       BrowserWindow.getAllWindows()[0].webContents.send('file-changed', filePath);
     }, tmpFile);
 
-    // Should silently reload -- no conflict banner
+    // Should silently reload -- no conflict banner, no dirty dot
     await expect(page.locator('.tiptap')).toContainText('Updated Content', { timeout: 5000 });
     await expect(page.locator('.conflict-banner')).toBeHidden();
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
+
+    // Second external change should also silently reload (not show conflict)
+    fs.writeFileSync(tmpFile, '# Second Update\n\nChanged again.\n');
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('file-changed', filePath);
+    }, tmpFile);
+
+    await expect(page.locator('.tiptap')).toContainText('Second Update', { timeout: 5000 });
+    await expect(page.locator('.conflict-banner')).toBeHidden();
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
 
     fs.rmSync(tmpDir, { recursive: true });
   });
@@ -884,6 +895,146 @@ test.describe('Todo lists', () => {
 
     fs.rmSync(tmpDir, { recursive: true });
   });
+
+  test('mixed bullet and task items render without spurious checkboxes', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'mixed.md');
+    fs.writeFileSync(tmpFile, '- one\n- [ ] two\n- three\n- [x] four\n- five\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('one', { timeout: 5000 });
+
+    // Only 2 checkboxes (for "two" and "four"), not 3 or 5
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
+
+    // Bullet items should be plain list items without checkboxes
+    const bulletItems = editor.locator('ul:not([data-type]) li');
+    await expect(bulletItems).toHaveCount(3);
+    await expect(bulletItems.nth(0)).toContainText('one');
+    await expect(bulletItems.nth(1)).toContainText('three');
+    await expect(bulletItems.nth(2)).toContainText('five');
+
+    // Task items should have correct checked state
+    const taskItems = editor.locator('ul[data-type="taskList"] li');
+    await expect(taskItems).toHaveCount(2);
+    await expect(taskItems.nth(0)).toContainText('two');
+    await expect(taskItems.nth(1)).toContainText('four');
+    await expect(editor.locator('input[type="checkbox"]').nth(0)).not.toBeChecked();
+    await expect(editor.locator('input[type="checkbox"]').nth(1)).toBeChecked();
+
+    // Round-trip: save and verify markdown is correct
+    await editor.click();
+    await page.keyboard.type(' ');
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+    });
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+
+    const saved = fs.readFileSync(tmpFile, 'utf-8');
+    expect(saved).toContain('- one');
+    expect(saved).toContain('- [ ] two');
+    expect(saved).toContain('- three');
+    expect(saved).toContain('- [x] four');
+    expect(saved).toContain('- five');
+    // No blank lines between adjacent list items
+    expect(saved).not.toMatch(/^- .+\n\n- /m);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('save after cycling statuses has no blank lines between list items', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'cycle-gaps.md');
+    fs.writeFileSync(tmpFile, '- alpha\n- beta\n- gamma\n- delta\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('alpha', { timeout: 5000 });
+
+    // Select beta+gamma via mouse drag and cycle a few times
+    const betaP = editor.locator('li:nth-child(2) p');
+    const gammaP = editor.locator('li:nth-child(3) p');
+    const betaBox = await betaP.boundingBox();
+    const gammaBox = await gammaP.boundingBox();
+    await page.mouse.move(betaBox!.x + 2, betaBox!.y + betaBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(gammaBox!.x + gammaBox!.width - 2, gammaBox!.y + gammaBox!.height / 2);
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+
+    // Cycle: bullet -> unchecked -> checked -> bullet
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(100);
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(100);
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    // Save and check for gaps
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+    });
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+
+    const saved = fs.readFileSync(tmpFile, 'utf-8');
+    // All items should be contiguous with no blank lines between them
+    expect(saved).not.toMatch(/^- .+\n\n+- /m);
+    expect(saved).toContain('- alpha');
+    expect(saved).toContain('- beta');
+    expect(saved).toContain('- gamma');
+    expect(saved).toContain('- delta');
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('copy single list item omits leading hyphen', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'copy.md');
+    fs.writeFileSync(tmpFile, '- alpha\n- beta\n- gamma\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('alpha', { timeout: 5000 });
+
+    // Select just "beta" text by clicking and Cmd+A within the item (use triple-click)
+    const betaLi = editor.locator('li', { hasText: 'beta' });
+    await betaLi.click({ clickCount: 3 });
+    await page.keyboard.press('Meta+c');
+
+    // Read clipboard
+    const clipSingle = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipSingle.trim()).toBe('beta');
+
+    // Now select all three items and copy
+    await editor.click();
+    await page.keyboard.press('Meta+a');
+    await page.keyboard.press('Meta+c');
+
+    const clipMulti = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipMulti).toContain('- alpha');
+    expect(clipMulti).toContain('- beta');
+    expect(clipMulti).toContain('- gamma');
+    // No blank lines between items
+    expect(clipMulti).not.toMatch(/^- .+\n\n+- /m);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -919,5 +1070,348 @@ test.describe('Keyboard Shortcuts', () => {
     const tab = page.locator('.tab');
     await expect(tab).toBeVisible({ timeout: 5000 });
     await expect(tab.locator('.tab-name')).toContainText('Keyboard Shortcuts');
+  });
+
+  test('read-only tab hides toolbar and editing controls', async () => {
+    ({ app, page } = await launchApp());
+
+    // Open a normal file first so we can verify toolbar is initially visible
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, fixturePath('sample.md'));
+    await expect(page.locator('.toolbar')).toBeVisible({ timeout: 5000 });
+
+    // Open keyboard shortcuts (read-only tab)
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('show-keyboard-shortcuts');
+    });
+    await expect(page.locator('.tab.active')).toContainText('Keyboard Shortcuts', { timeout: 5000 });
+
+    // Toolbar should be hidden for read-only tab
+    await expect(page.locator('.toolbar')).toBeHidden();
+
+    // Editor should have transparent caret (read-only CSS class applied)
+    await expect(page.locator('.editor-readonly')).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. Markdown special characters
+// ---------------------------------------------------------------------------
+
+test.describe('Markdown special characters', () => {
+  test('angle brackets and special chars survive round-trip', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'special.md');
+    fs.writeFileSync(tmpFile, '# Comparisons\n\nApples > oranges.\n\nUse <div> tags carefully.\n\n3 < 5 is true.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Apples > oranges', { timeout: 5000 });
+
+    // Make a trivial edit so we can save
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' ');
+
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+    });
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+
+    const saved = fs.readFileSync(tmpFile, 'utf-8');
+    expect(saved).toContain('Apples > oranges');
+    expect(saved).toContain('<div>');
+    expect(saved).toContain('3 < 5');
+    // Must NOT contain HTML entities
+    expect(saved).not.toContain('&gt;');
+    expect(saved).not.toContain('&lt;');
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15. List keyboard interactions
+// ---------------------------------------------------------------------------
+
+test.describe('List keyboard interactions', () => {
+  test('Tab indents list items and stays in editor at max depth', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'list.md');
+    fs.writeFileSync(tmpFile, '- Alpha\n- Beta\n- Gamma\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Beta', { timeout: 5000 });
+
+    // Focus the editor by clicking the second list item's text
+    const betaText = editor.locator('p', { hasText: 'Beta' });
+    await betaText.click();
+    // Confirm we can type here
+    await page.keyboard.press('End');
+    await page.keyboard.type('!');
+    await expect(editor).toContainText('Beta!');
+
+    // Tab should indent the list item
+    await page.keyboard.press('Tab');
+    await expect(editor.locator('ul ul')).toBeVisible({ timeout: 2000 });
+
+    // More Tabs at max nesting -- must not lose focus
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('X');
+    await expect(editor).toContainText('Beta!X');
+
+    // Shift+Tab outdents
+    await page.keyboard.press('Shift+Tab');
+    await expect(editor).toContainText('Beta!X');
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('Cmd+Enter cycles bullet, unchecked task, checked task', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'cycle.md');
+    fs.writeFileSync(tmpFile, 'A plain paragraph.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('plain paragraph', { timeout: 5000 });
+
+    // Click into the paragraph
+    await editor.locator('p', { hasText: 'plain paragraph' }).click();
+
+    // 1st Cmd+Enter: paragraph -> bullet list
+    await page.keyboard.press('Meta+Enter');
+    await expect(editor.locator('ul:not([data-type]) li')).toBeVisible();
+
+    // 2nd Cmd+Enter: bullet -> unchecked task
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+    await expect(editor.locator('ul[data-type="taskList"]')).toBeVisible();
+    const checkbox = editor.locator('input[type="checkbox"]').first();
+    await expect(checkbox).not.toBeChecked();
+
+    // 3rd Cmd+Enter: unchecked -> checked
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+    await expect(editor.locator('input[type="checkbox"]').first()).toBeChecked();
+
+    // 4th Cmd+Enter: checked -> bullet (NOT paragraph)
+    await page.keyboard.press('Meta+Enter');
+    await expect(editor.locator('ul:not([data-type]) li')).toBeVisible();
+    await expect(editor.locator('ul[data-type="taskList"]')).toBeHidden();
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('Cmd+Enter on mixed bullet+task selection converts all items uniformly', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'mixed.md');
+    fs.writeFileSync(tmpFile, '- [ ] task item\n- bullet item\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('task item', { timeout: 5000 });
+
+    // Select all content (Cmd+A reliably creates a ProseMirror AllSelection)
+    await editor.click();
+    await page.keyboard.press('Meta+a');
+
+    // First item is unchecked task -> target is checked task
+    // Both items should become checked tasks
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
+    await expect(editor.locator('input[type="checkbox"]').nth(0)).toBeChecked();
+    await expect(editor.locator('input[type="checkbox"]').nth(1)).toBeChecked();
+
+    // Cmd+Enter again WITHOUT re-selecting: selection should be preserved
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
+    await expect(editor.locator('li')).toHaveCount(2);
+
+    // And again: bullet items -> unchecked tasks (still no re-select)
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
+    await expect(editor.locator('input[type="checkbox"]').nth(0)).not.toBeChecked();
+    await expect(editor.locator('input[type="checkbox"]').nth(1)).not.toBeChecked();
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('Cmd+Enter on mixed checked+unchecked tasks converts all uniformly', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'mixed3.md');
+    fs.writeFileSync(tmpFile, '- [ ] alpha\n- [x] beta\n- [ ] gamma\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('alpha', { timeout: 5000 });
+
+    // Verify initial state: 3 tasks, first unchecked
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(3);
+    await expect(editor.locator('input[type="checkbox"]').nth(0)).not.toBeChecked();
+    await expect(editor.locator('input[type="checkbox"]').nth(1)).toBeChecked();
+    await expect(editor.locator('input[type="checkbox"]').nth(2)).not.toBeChecked();
+
+    // Select all: first item is unchecked task -> target = checked task
+    await editor.click();
+    await page.keyboard.press('Meta+a');
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    // All 3 should be checked
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(3);
+    for (let i = 0; i < 3; i++) {
+      await expect(editor.locator('input[type="checkbox"]').nth(i)).toBeChecked();
+    }
+
+    // Again without re-selecting (selection preserved): checked -> bullet
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
+    await expect(editor.locator('li')).toHaveCount(3);
+
+    // Again: bullet -> unchecked task
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(3);
+    for (let i = 0; i < 3; i++) {
+      await expect(editor.locator('input[type="checkbox"]').nth(i)).not.toBeChecked();
+    }
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('Cmd+Enter with multi-item bullet list converts all items to tasks', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'multi.md');
+    fs.writeFileSync(tmpFile, '- one\n- two\n- three\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('one', { timeout: 5000 });
+
+    // Select all and convert bullets -> tasks
+    await editor.click();
+    await page.keyboard.press('Meta+a');
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    // All 3 items should be unchecked tasks
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(3);
+    for (let i = 0; i < 3; i++) {
+      await expect(editor.locator('input[type="checkbox"]').nth(i)).not.toBeChecked();
+    }
+
+    // Check all tasks
+    await page.keyboard.press('Meta+a');
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    for (let i = 0; i < 3; i++) {
+      await expect(editor.locator('input[type="checkbox"]').nth(i)).toBeChecked();
+    }
+
+    // Back to bullets
+    await page.keyboard.press('Meta+a');
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
+    await expect(editor.locator('li')).toHaveCount(3);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('Cmd+Enter on partial selection only converts selected items, not entire list', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'partial.md');
+    fs.writeFileSync(tmpFile, '- alpha\n- beta\n- gamma\n- delta\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('alpha', { timeout: 5000 });
+
+    // Select only "beta" and "gamma" by mouse drag
+    const betaP = editor.locator('li:nth-child(2) p');
+    const gammaP = editor.locator('li:nth-child(3) p');
+    const betaBox = await betaP.boundingBox();
+    const gammaBox = await gammaP.boundingBox();
+    await page.mouse.move(betaBox!.x + 2, betaBox!.y + betaBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(gammaBox!.x + gammaBox!.width - 2, gammaBox!.y + gammaBox!.height / 2);
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+
+    // Cmd+Enter: only beta+gamma should become unchecked tasks
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    // alpha and delta should still be plain bullet items
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
+    await expect(editor.locator('ul:not([data-type]) li')).toHaveCount(2);
+
+    // The task items should be beta and gamma
+    const taskItems = editor.locator('ul[data-type="taskList"] li');
+    await expect(taskItems).toHaveCount(2);
+    await expect(taskItems.nth(0)).toContainText('beta');
+    await expect(taskItems.nth(1)).toContainText('gamma');
+
+    // Cmd+Enter again (selection preserved): unchecked -> checked
+    await page.keyboard.press('Meta+Enter');
+    await page.waitForTimeout(200);
+
+    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
+    await expect(editor.locator('input[type="checkbox"]').nth(0)).toBeChecked();
+    await expect(editor.locator('input[type="checkbox"]').nth(1)).toBeChecked();
+    // alpha and delta still bullets
+    await expect(editor.locator('ul:not([data-type]) li')).toHaveCount(2);
+
+    fs.rmSync(tmpDir, { recursive: true });
   });
 });

@@ -9,6 +9,7 @@ import FindBar from './FindBar';
 import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
 import { Editor as TipTapEditor } from '@tiptap/react';
+import KEYBOARD_SHORTCUTS_CONTENT from '../../docs/help/keyboard_shortcuts.md';
 
 interface AppState {
   tabs: Tab[];
@@ -151,59 +152,6 @@ let tabIdCounter = 0;
 function nextTabId(): string {
   return `tab-${++tabIdCounter}`;
 }
-
-const KEYBOARD_SHORTCUTS_CONTENT = `# Keyboard Shortcuts
-
-## General
-
-| Shortcut | Action |
-| --- | --- |
-| Cmd + O | Quick Open |
-| Cmd + Shift + O | Open Folder |
-| Cmd + S | Save |
-| Cmd + Shift + S | Save As |
-| Cmd + W | Close Tab |
-| Cmd + Shift + T | Reopen Closed Tab |
-| Cmd + Alt + Left | Previous Tab |
-| Cmd + Alt + Right | Next Tab |
-| Cmd + , | Settings |
-| Cmd + F | Find & Replace |
-
-## Text Formatting
-
-| Shortcut | Action |
-| --- | --- |
-| Cmd + B | Bold |
-| Cmd + I | Italic |
-| Cmd + Shift + X | Strikethrough |
-| Cmd + E | Inline Code |
-| Cmd + Shift + E | Code Block |
-| Cmd + K | Insert Link |
-| Cmd + Shift + 7 | Ordered List |
-| Cmd + Shift + 8 | Unordered List |
-| Cmd + Shift + B | Blockquote |
-
-## Editor
-
-| Shortcut | Action |
-| --- | --- |
-| Cmd + Z | Undo |
-| Cmd + Shift + Z | Redo |
-| Cmd + Enter | Toggle Todo Checkbox |
-| Tab | Indent List Item |
-| Shift + Tab | Outdent List Item |
-
-## File Explorer
-
-| Shortcut | Action |
-| --- | --- |
-| Arrow Up / Down | Navigate Files |
-| Arrow Right | Expand Folder |
-| Arrow Left | Collapse Folder |
-| Enter | Rename Selected |
-| Cmd + Backspace | Delete Selected |
-| Escape | Deselect |
-`;
 
 function fileNameFromPath(filePath: string): string {
   return filePath.split('/').pop() || 'Untitled';
@@ -534,11 +482,13 @@ export default function App() {
     };
     const handleDragEnter = (e: DragEvent) => {
       e.preventDefault();
+      if (!e.dataTransfer?.types.includes('Files')) return;
       dragCountRef.current++;
       if (dragCountRef.current === 1) setDraggingOver(true);
     };
     const handleDragLeave = (e: DragEvent) => {
       e.preventDefault();
+      if (!e.dataTransfer?.types.includes('Files')) return;
       dragCountRef.current--;
       if (dragCountRef.current === 0) setDraggingOver(false);
     };
@@ -618,7 +568,9 @@ export default function App() {
             onReorder={(from, to) => dispatch({ type: 'REORDER_TABS', fromIndex: from, toIndex: to })}
             onPinTab={(tabId) => dispatch({ type: 'PIN_TAB', tabId })}
           />
-          <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} />
+          {!activeTab?.readOnly && (
+            <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} />
+          )}
           {state.findBarOpen && activeEditor && (
             <FindBar
               editor={activeEditor}
@@ -654,8 +606,8 @@ export default function App() {
             {state.tabs.length === 0 && (
               <div className="empty-state">
                 <p>Open a file or drag a folder to get started</p>
-                <p className="fs-sm mt-2">or press <kbd>Cmd + O</kbd> to quick-search</p>
-                <p className="fs-sm mt-2">
+                <p className="fs-sm">or press <kbd>Cmd + O</kbd> to quick-search</p>
+                <p className="fs-sm">
                   <a className="empty-state-link" onClick={openKeyboardShortcuts}>Keyboard Shortcuts</a>
                 </p>
               </div>

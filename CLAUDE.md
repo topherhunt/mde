@@ -6,7 +6,8 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 
 ## Architecture
 
-- **Main process** (`src/index.ts`): Window management, file I/O, 22 IPC handlers, file watching, menu bar, drag-drop at the OS level, DOCX/PDF import conversion. No rendering.
+**Main process** (`src/index.ts`): Window management, file I/O, 22 IPC handlers, file watching, menu bar, drag-drop at the OS level, DOCX/PDF import conversion. No rendering.
+
 - **Preload** (`src/preload.ts`): Exposes `window.mde` API via contextBridge. All file system access goes through this bridge.
 - **Renderer** (`src/renderer.tsx`): React entry point. Imports Bootstrap Icons CSS and app styles.
 - **Components** (`src/components/`): App, Sidebar, TabBar, Toolbar, Editor, FindBar, LinkBar, QuickOpen, ConflictBanner, TableMenu.
@@ -39,9 +40,14 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - PDF conversion escapes lines matching `^\d+\.` to prevent Markdown OL interpretation of numbers like "994164972.".
 - tiptap-markdown is configured with `html: false` so raw HTML tags in Markdown (e.g. `<ol>` in body text) are treated as literal text, not parsed as HTML elements. The text node serializer is overridden to skip tiptap-markdown's `escapeHTML` (which converts `<` `>` to `&lt;` `&gt;`), preserving prose like "Apples > oranges." verbatim on save. Standard Markdown character escaping (via prosemirror-markdown's `esc()`) is still applied.
 - Sidebar folder expand/collapse state is lifted to the `Sidebar` component (not `DirectoryNode`) via a `Set<string>` of expanded paths, so it persists across explorer/outline view switches.
-- Todo lists use `@tiptap/extension-task-list` and `@tiptap/extension-task-item` with `nested: true`. Checkboxes can be clicked or toggled with Cmd+Enter. Checked items show strikethrough. tiptap-markdown serializes as `- [ ]` / `- [x]`.
+- Todo lists use `@tiptap/extension-task-list` and `@tiptap/extension-task-item` with `nested: true`. Checkboxes can be clicked. Checked items show strikethrough. tiptap-markdown serializes as `- [ ]` / `- [x]`. Adjacent bullet/task lists have reduced margin via CSS (ul + ul[data-type="taskList"] etc.).
+- Cmd+Enter cycles the current line (or all selected lines) between 3 states: bullet list, unchecked task, checked task. Implemented as a custom TipTap extension (`CmdEnterCycle`). Must never insert a line break.
+- Tab/Shift+Tab: in lists, indent/outdent; elsewhere, insert a tab character. Always captured by the editor -- never escapes to browser focus behavior. Implemented as a custom TipTap extension (`TabHandler`).
 - Deleting a file via the sidebar also closes any tab open to that file, without adding it to the reopenable closed-tabs queue.
+- Keyboard Shortcuts help page opens as a read-only tab. Content loaded from `docs/help/keyboard_shortcuts.md` via webpack `asset/source`. Read-only tabs hide the toolbar, TableMenu, and LinkPreview; the editor caret is transparent.
+- `deserializeInto` (used for file-reload on disk change) uses `createNodeFromContent` + manual transaction, not `setContent()`, to avoid the file appearing as raw HTML.
 - File explorer context menu (rename, delete, copy path) and create file/folder use dedicated IPC handlers (`rename-file`, `trash-file`, `create-file`, `create-directory`). Delete moves to Trash via `shell.trashItem()`, never permanent delete.
+- Sidebar drag-drop: files and folders can be dragged within the sidebar to move them into different folders (or to root). Dragging onto a file targets its parent folder. Drop targets (folder rows, root header) show a pulsating blue outline. Uses `renameFile` IPC (fs.rename) for the move. Prevents dropping into own descendants or current parent.
 
 ## Commands
 
@@ -68,7 +74,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-36 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+46 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 What exists:
 
@@ -128,6 +134,6 @@ CSS variables for theming (defined in `:root`, `[data-theme="dark"]`, and `@medi
 
 When adding component styles:
 
-- Use CSS variables for theme compatibility. Always set `color` and   `background` on inputs and buttons so they work in dark mode.
-- Component-specific classes are fine for anything with multi-property   styling. Don't over-abstract.
+- Use CSS variables for theme compatibility. Always set `color` and `background` on inputs and buttons so they work in dark mode.
+- Component-specific classes are fine for anything with multi-property styling. Don't over-abstract.
 - Keep utility definitions in `src/index.css` if adding new ones.

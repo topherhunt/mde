@@ -11,8 +11,9 @@ Inspired by [Thomas Ptacek's MDV app](https://sockpuppet.org/blog/2026/05/12/ema
 MDE fills the gap between Obsidian and VS Code for Markdown editing:
 
 - **True WYSIWYG** -- like Obsidian, you see formatted text as you type, not raw Markdown syntax
-- **Folder-based, no vault lock-in** -- open any folder from the terminal (`mde .`) or drag it onto the window or dock icon, like VS Code
+- **Folder-based, no vault lock-in** -- open any folder from the terminal (`mde .`) or drag it onto the window or dock icon, like VS Code. No project files, no config, no setup.
 - **Auto-convert PDF & DOCX** -- click a PDF or DOCX in the sidebar and it's converted to editable Markdown on the spot, with the original kept as a backup (Warning: conversion is not perfect)
+- **File conflict detection** -- smart auto-reload or warning is displayed if file conflicts are detected. I've been burned by Obsidian and VS Code's wonky file-conflict handling.
 
 ## Features
 
@@ -26,8 +27,6 @@ MDE fills the gap between Obsidian and VS Code for Markdown editing:
 - **File conflict detection** -- detects external changes; silent reload or warning banner
 - **Dark mode** -- light, dark, or follow system preference
 - **Terminal launcher** -- `mde .` to open a folder from the command line
-
-![Preview](docs/preview1.png)
 
 ## How to install
 
@@ -57,7 +56,7 @@ npm install
 npm start
 ```
 
-Drag a folder onto the window to open it as a project, or use File &gt; Open.
+Drag a folder onto the window to open it as a project, or use File > Open.
 
 ### Terminal launcher
 
@@ -93,7 +92,6 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ### For me
 
-
 - Support right-click to convert to .docx or .pdf, w standard nice-looking formatting & colors (customizable)
   - PDF export -- does this require chrome/puppeteer? can it just use the built-in engine?
 - **Add Claude agent support.**
@@ -102,11 +100,11 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ### For Claude
 
-- Thanks, the readme "what's different from Obsidian/VS Code" list is a good start, but what other unique or special advantages / features does this app have? I didn't mean for you to treat that as an exhaustive list.
-- Toolbar buttons' text/icon color should be light gray, maybe #d6d6d6, not white please. It's too distractey currently. The selected-button style/colors can stay same.
-- The new keyboard shortcuts non-editable buffer works fantastic, but let's hide the toolbar and hide any conceivable controls for editing. For example, you should not be able to place your cursor within a table cell, and if you do, then the controls to-like the drop-down button of options to add or delete rows should not show.
-- Please also write the Keyboard Shortcuts help file to docs/help/keyboard_shortcuts.md so it doesn't need to be hard-coded as a constant in KEYBOARD_SHORTCUTS_CONTENT, that seems wasteful, right?
-- Empty buffer when there's no page open: add 0.5rem margin between lines. (use standard bootstrap5-style utils like my-2)
-- When the text cursor is in the editor, the hotkey Cmd + Enter cycles that line between 3 states: bullet, unchecked task, and checked task. This applies to all lines selected if you selected a range of lines. Under NO circumstances does Cmd + Enter insert a line break.
-- Pressing `tab` when cursor is in a li (ol, ul, or task) attempts to indent it. The 1st line cannot be indented. This previously worked but it seems to have switched to selecting DOM inputs like in a browser page (not desireable).
-- BUG: Something in our cleaning-html logic caused file-reload to break. So if you open a file, then it gets altered on-disk by VS Code or something else, it will reload in the buffer as ugly raw html.
+- (Fix the mess w bullet vs task list items)
+  - Items getting needlessly separated out into different lists when they can
+- When you're flipping back and forth between tabs, the app should remember your scroll position. Currently if you scroll down then switch to another tab and then switch back, it jumps to where your *text cursor* is -- better than top of document, but still jarring and disruptive to focus.
+- New hotkey (And please don't forget to add this to the shortcuts document): Cmd + Opt + down/up moves the line the cursor is in, above/below the neighboring element. So it seamlessly swaps positions of li's, paragraphs, and headings without getting confused or mangling / merging their syntax. You can let me know what you think here as far as the best app approach and best practices, but I think the only challenge will be that LI items are technically sub-children inside a UL or OL, whereas paragraphs sit on their own and headings sit on their own. I'm guessing that w won't be a huge challenge for you.u
+- Files sidebar: If you right-click on a folder, the menu should include items to create a new file or a new folder inside it.
+- Files sidebar: The right-click menu should be dismissable by pressing `esc`.
+- Bug: If in the files sidebar you press the command delete keyboard shortcut to delete one file or folder, and then you press enter to confirm that, it appears to enter the UI into a stuck state where you can no longer press that same hotkey again, that that hotkey seems to be permanently made invalid Until you totally re-render the file's sidebar by clicking on the outline and then clicking back.
+- In the settings menu you should be able to set a checkbox to enable autosave mode, which is disabled by default. In autosave mode, as you make changes, there's a debounce and after a second, like yeah, one second of inactivity, it auto-saves or writes your file changes as if you'd pressed Cmd + S.

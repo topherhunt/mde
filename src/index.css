@@ -22,6 +22,7 @@
   --code-text: #d4d4d4;
   --danger-text: #b91c1c;
   --info-text: #1d4ed8;
+  --toolbar-icon: #888888;
 }
 
 [data-theme="dark"] {
@@ -41,6 +42,7 @@
   --code-text: #d4d4d4;
   --danger-text: #fca5a5;
   --info-text: #93c5fd;
+  --toolbar-icon: #d6d6d6;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -61,6 +63,7 @@
     --code-text: #d4d4d4;
     --danger-text: #fca5a5;
     --info-text: #93c5fd;
+    --toolbar-icon: #d6d6d6;
   }
 }
 
@@ -97,7 +100,7 @@ body {
 .app-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-muted);
+  color: var(--text);
   pointer-events: none;
 }
 
@@ -253,6 +256,22 @@ body {
   border-radius: 3px;
 }
 
+.tree-drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 3px;
+  animation: drop-pulse 1s ease-in-out infinite;
+}
+
+@keyframes drop-pulse {
+  0%, 100% { background: rgba(37, 99, 235, 0.08); }
+  50% { background: rgba(37, 99, 235, 0.2); }
+}
+
+.tree-item-dragging {
+  opacity: 0.4;
+}
+
 .tree-file-disabled {
   cursor: default;
 }
@@ -348,7 +367,7 @@ body {
   padding: 3px 4px;
   cursor: pointer;
   font-size: 13px;
-  color: var(--text);
+  color: var(--toolbar-icon);
   line-height: 1;
   min-width: 24px;
   text-align: center;
@@ -380,7 +399,7 @@ body {
   border-radius: 4px;
   padding: 4px 8px;
   font-size: 13px;
-  color: var(--text);
+  color: var(--toolbar-icon);
   cursor: pointer;
 }
 
@@ -518,6 +537,15 @@ body {
   min-height: 100%;
 }
 
+.editor-readonly .tiptap {
+  caret-color: transparent;
+  cursor: default;
+}
+
+.editor-readonly .tiptap .selectedCell {
+  background: transparent;
+}
+
 .editor-content .tiptap > * + * {
   margin-top: 0.75em;
 }
@@ -641,6 +669,7 @@ body {
 .editor-content .tiptap ul,
 .editor-content .tiptap ol {
   padding-left: 24px;
+  margin: 0;
 }
 
 .editor-content .tiptap li {
@@ -653,21 +682,31 @@ body {
   margin: 0;
 }
 
+/* Adjacent lists (from split mixed bullet/task) should look like one list */
+.editor-content .tiptap > ul + ul,
+.editor-content .tiptap > ol + ol,
+.editor-content .tiptap > ul + ol,
+.editor-content .tiptap > ol + ul {
+  margin-top: 0;
+}
+
 /* --- Task lists --- */
 .editor-content .tiptap ul[data-type="taskList"] {
   list-style: none;
-  padding-left: 4px;
+  padding-left: 24px;
 }
 
 .editor-content .tiptap ul[data-type="taskList"] li {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: 4px;
+  margin-left: -18px;
 }
 
 .editor-content .tiptap ul[data-type="taskList"] li > label {
   flex-shrink: 0;
   margin-top: 3px;
+  user-select: none;
 }
 
 .editor-content .tiptap ul[data-type="taskList"] li > label input[type="checkbox"] {
@@ -961,6 +1000,7 @@ body {
   justify-content: center;
   color: var(--text-muted);
   font-size: 15px;
+  gap: 0.5rem;
 }
 
 .empty-state-link {
@@ -1447,7 +1487,7 @@ body {
 }
 
 @keyframes rainbow-wave {
-  0%, 100% { color: #ffffff; }
+  0%, 100% { color: var(--text); }
   10% { color: #fda4af; }
   20% { color: #fb923c; }
   30% { color: #fbbf24; }

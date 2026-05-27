@@ -264,6 +264,8 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
   const [creating, setCreating] = useState<'file' | 'folder' | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [deletingEntry, setDeletingEntry] = useState<FileEntry | null>(null);
+  const [dragSourcePath, setDragSourcePath] = useState<string | null>(null);
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   // Cache of loaded directory entries for arrow key navigation
   const entriesCacheRef = useRef<Map<string, FileEntry[]>>(new Map());
 
@@ -327,6 +329,31 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
     }
     setCreating(null);
   }, [projectRoot, selectedPath, triggerRefresh, onOpenFile]);
+
+  const handleDragStart = useCallback((entryPath: string) => {
+    setDragSourcePath(entryPath);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    setDragSourcePath(null);
+    setDropTargetPath(null);
+  }, []);
+
+  const handleDropOnFolder = useCallback(async (targetDir: string) => {
+    if (!dragSourcePath || dragSourcePath === targetDir) return;
+    const fileName = dragSourcePath.split('/').pop() || '';
+    const parentDir = dragSourcePath.substring(0, dragSourcePath.lastIndexOf('/'));
+    if (parentDir === targetDir) return;
+    const newPath = targetDir + '/' + fileName;
+    try {
+      await window.mde.renameFile(dragSourcePath, newPath);
+      triggerRefresh();
+    } catch (err: any) {
+      onToast(err.message || 'Failed to move file', 'danger');
+    }
+    setDragSourcePath(null);
+    setDropTargetPath(null);
+  }, [dragSourcePath, triggerRefresh, onToast]);
 
   const registerEntries = useCallback((path: string, entries: FileEntry[]) => {
     entriesCacheRef.current.set(path, entries);
@@ -451,6 +478,12 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
         onToggleExpanded={onToggleExpanded}
         onCollapseAll={onCollapseAll}
         onRegisterEntries={registerEntries}
+        dragSourcePath={dragSourcePath}
+        dropTargetPath={dropTargetPath}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDropOnFolder={handleDropOnFolder}
+        onSetDropTarget={setDropTargetPath}
       />
       {deletingEntry && (
         <DeleteConfirmDialog
@@ -493,9 +526,15 @@ interface DirectoryNodeProps {
   onToggleExpanded: (path: string) => void;
   onCollapseAll?: () => void;
   onRegisterEntries?: (path: string, entries: FileEntry[]) => void;
+  dragSourcePath: string | null;
+  dropTargetPath: string | null;
+  onDragStart: (path: string) => void;
+  onDragEnd: () => void;
+  onDropOnFolder: (targetDir: string) => void;
+  onSetDropTarget: (path: string | null) => void;
 }
 
-function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, refreshKey, isRoot, onContextMenu, renamingEntry, onRenameComplete, creating, onSetCreating, onCreate, selectedPath, onSelect, expandedPaths, onToggleExpanded, onCollapseAll, onRegisterEntries }: DirectoryNodeProps) {
+function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, refreshKey, isRoot, onContextMenu, renamingEntry, onRenameComplete, creating, onSetCreating, onCreate, selectedPath, onSelect, expandedPaths, onToggleExpanded, onCollapseAll, onRegisterEntries, dragSourcePath, dropTargetPath, onDragStart, onDragEnd, onDropOnFolder, onSetDropTarget }: DirectoryNodeProps) {
   const expanded = expandedPaths.has(path);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -538,6 +577,12 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
           expandedPaths={expandedPaths}
           onToggleExpanded={onToggleExpanded}
           onRegisterEntries={onRegisterEntries}
+          dragSourcePath={dragSourcePath}
+          dropTargetPath={dropTargetPath}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          onDropOnFolder={onDropOnFolder}
+          onSetDropTarget={onSetDropTarget}
         />
       );
     }
@@ -557,6 +602,13 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
           isRenaming={renamingEntry?.path === entry.path}
           onRenameComplete={onRenameComplete}
           onSelect={onSelect}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          parentPath={path}
+          dragSourcePath={dragSourcePath}
+          dropTargetPath={dropTargetPath}
+          onSetDropTarget={onSetDropTarget}
+          onDropOnFolder={onDropOnFolder}
         />
         {showCreateAfter && (
           <InlineCreateInput
@@ -569,10 +621,43 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
     );
   };
 
+  const isDropTarget = dropTargetPath === path;
+  const isDragSource = dragSourcePath === path;
+
+  const handleFolderDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragSourcePath || dragSourcePath === path) return;
+    // Can't drop into own descendant
+    if (dragSourcePath.startsWith(path + '/')) return;
+    // Already in this folder -- no-op
+    const parentDir = dragSourcePath.substring(0, dragSourcePath.lastIndexOf('/'));
+    if (parentDir === path) return;
+    onSetDropTarget(path);
+  };
+
+  const handleFolderDragLeave = (e: React.DragEvent) => {
+    e.stopPropagation();
+    if (dropTargetPath === path) onSetDropTarget(null);
+  };
+
+  const handleFolderDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onDropOnFolder(path);
+  };
+
   if (isRoot) {
     return (
-      <div className="tree-node">
-        <div className="tree-root-header">
+      <div
+        className="tree-node"
+        onDragOver={handleFolderDragOver}
+        onDragLeave={handleFolderDragLeave}
+        onDrop={handleFolderDrop}
+      >
+        <div
+          className={`tree-root-header ${isDropTarget ? 'tree-drop-target' : ''}`}
+        >
           <span>{name}</span>
           <span className="tree-root-actions">
             <button className="tree-root-btn" title="New File" onClick={() => onSetCreating?.('file')}>
@@ -604,9 +689,15 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
   return (
     <div className="tree-node">
       <div
-        className={`tree-item tree-folder ${expanded ? 'expanded' : ''} ${isSelected ? 'tree-item-selected' : ''}`}
+        className={`tree-item tree-folder ${expanded ? 'expanded' : ''} ${isSelected ? 'tree-item-selected' : ''} ${isDropTarget ? 'tree-drop-target' : ''} ${isDragSource ? 'tree-item-dragging' : ''}`}
         onClick={() => { onToggleExpanded(path); onSelect(dirEntry); }}
         onContextMenu={(e) => onContextMenu(e, dirEntry)}
+        draggable
+        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(path); }}
+        onDragEnd={onDragEnd}
+        onDragOver={handleFolderDragOver}
+        onDragLeave={handleFolderDragLeave}
+        onDrop={handleFolderDrop}
       >
         <span className="tree-arrow">{expanded ? '▼' : '▶'}</span>
         {isRenaming ? (
@@ -620,7 +711,12 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
         )}
       </div>
       {expanded && (
-        <div className="tree-children">
+        <div
+          className="tree-children"
+          onDragOver={handleFolderDragOver}
+          onDragLeave={handleFolderDragLeave}
+          onDrop={handleFolderDrop}
+        >
           {showCreateHere && (
             <InlineCreateInput
               type={creating!}
@@ -699,7 +795,7 @@ function InlineCreateInput({ type, onSubmit, onCancel }: { type: 'file' | 'folde
   );
 }
 
-function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContextMenu, isRenaming, onRenameComplete, onSelect }: {
+function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContextMenu, isRenaming, onRenameComplete, onSelect, onDragStart, onDragEnd, parentPath, dragSourcePath, dropTargetPath, onSetDropTarget, onDropOnFolder }: {
   entry: FileEntry;
   onOpenFile: (path: string, tentative?: boolean) => void;
   onImportFile: (path: string) => void;
@@ -709,6 +805,13 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
   isRenaming?: boolean;
   onRenameComplete: (entry: FileEntry, newName: string) => void;
   onSelect: (entry: FileEntry) => void;
+  onDragStart: (path: string) => void;
+  onDragEnd: () => void;
+  parentPath: string;
+  dragSourcePath: string | null;
+  dropTargetPath: string | null;
+  onSetDropTarget: (path: string | null) => void;
+  onDropOnFolder: (targetDir: string) => void;
 }) {
   const editable = isEditable(entry.name);
   const importable = isImportable(entry.name);
@@ -720,12 +823,38 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
     else if (importable) onImportFile(entry.path);
   };
 
+  const handleFileDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragSourcePath || dragSourcePath === entry.path) return;
+    const srcParent = dragSourcePath.substring(0, dragSourcePath.lastIndexOf('/'));
+    if (srcParent === parentPath) return;
+    onSetDropTarget(parentPath);
+  };
+
+  const handleFileDragLeave = (e: React.DragEvent) => {
+    e.stopPropagation();
+    if (dropTargetPath === parentPath) onSetDropTarget(null);
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onDropOnFolder(parentPath);
+  };
+
   return (
     <div
       className={`tree-item tree-file ${clickable ? '' : 'tree-file-disabled'} ${importable ? 'tree-file-importable' : ''} ${active ? 'tree-file-active' : ''} ${selected ? 'tree-item-selected' : ''}`}
       onClick={handleClick}
       onDoubleClick={editable ? () => onOpenFile(entry.path, false) : undefined}
       onContextMenu={(e) => onContextMenu(e, entry)}
+      draggable
+      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(entry.path); }}
+      onDragEnd={onDragEnd}
+      onDragOver={handleFileDragOver}
+      onDragLeave={handleFileDragLeave}
+      onDrop={handleFileDrop}
     >
       {isRenaming ? (
         <InlineRenameInput
