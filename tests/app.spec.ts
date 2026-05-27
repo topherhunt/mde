@@ -853,9 +853,8 @@ test.describe('Todo lists', () => {
     // Click todo list toolbar button
     await page.locator('.toolbar-btn[title="Todo List"]').click();
 
-    // Verify task list is rendered
-    await expect(editor.locator('ul[data-type="taskList"]')).toBeVisible();
-    await expect(editor.locator('input[type="checkbox"]').first()).toBeVisible();
+    // Verify task item is rendered with data-checked attribute
+    await expect(editor.locator('li[data-checked]')).toBeVisible();
 
     fs.rmSync(tmpDir, { recursive: true });
   });
@@ -874,9 +873,8 @@ test.describe('Todo lists', () => {
     const editor = page.locator('.tiptap');
     await expect(editor).toBeVisible({ timeout: 5000 });
 
-    // Verify both items render
-    const checkboxes = editor.locator('input[type="checkbox"]');
-    await expect(checkboxes).toHaveCount(2);
+    // Verify both task items render
+    await expect(editor.locator('li[data-checked]')).toHaveCount(2);
 
     // Add a change to trigger save
     await editor.click();
@@ -910,23 +908,26 @@ test.describe('Todo lists', () => {
     const editor = page.locator('.tiptap');
     await expect(editor).toContainText('one', { timeout: 5000 });
 
-    // Only 2 checkboxes (for "two" and "four"), not 3 or 5
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
+    // Only 2 task items (for "two" and "four"), not 3 or 5
+    await expect(editor.locator('li[data-checked]')).toHaveCount(2);
 
-    // Bullet items should be plain list items without checkboxes
-    const bulletItems = editor.locator('ul:not([data-type]) li');
+    // Bullet items should be plain list items without data-checked
+    const bulletItems = editor.locator('li:not([data-checked])');
     await expect(bulletItems).toHaveCount(3);
     await expect(bulletItems.nth(0)).toContainText('one');
     await expect(bulletItems.nth(1)).toContainText('three');
     await expect(bulletItems.nth(2)).toContainText('five');
 
     // Task items should have correct checked state
-    const taskItems = editor.locator('ul[data-type="taskList"] li');
+    const taskItems = editor.locator('li[data-checked]');
     await expect(taskItems).toHaveCount(2);
     await expect(taskItems.nth(0)).toContainText('two');
     await expect(taskItems.nth(1)).toContainText('four');
-    await expect(editor.locator('input[type="checkbox"]').nth(0)).not.toBeChecked();
-    await expect(editor.locator('input[type="checkbox"]').nth(1)).toBeChecked();
+    await expect(taskItems.nth(0)).toHaveAttribute('data-checked', 'false');
+    await expect(taskItems.nth(1)).toHaveAttribute('data-checked', 'true');
+
+    // All items should be in a single <ul> (no list splitting)
+    await expect(editor.locator('ul')).toHaveCount(1);
 
     // Round-trip: save and verify markdown is correct
     await editor.click();
@@ -1032,6 +1033,50 @@ test.describe('Todo lists', () => {
     expect(clipMulti).toContain('- gamma');
     // No blank lines between items
     expect(clipMulti).not.toMatch(/^- .+\n\n+- /m);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('nested mixed bullet and task items render correctly', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'nested.md');
+    fs.writeFileSync(tmpFile, '- foo\n- [ ] bar\n  - baz\n  - [x] done\n- plain\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('foo', { timeout: 5000 });
+
+    // All items should render
+    await expect(editor).toContainText('baz');
+    await expect(editor).toContainText('done');
+
+    // Correct task item count: "bar" (unchecked) and "done" (checked)
+    await expect(editor.locator('li[data-checked]')).toHaveCount(2);
+    await expect(editor.locator('li[data-checked="false"]')).toHaveCount(1);
+    await expect(editor.locator('li[data-checked="true"]')).toHaveCount(1);
+
+    // Nested list exists
+    await expect(editor.locator('ul ul')).toHaveCount(1);
+
+    // Round-trip save
+    await editor.click();
+    await page.keyboard.type(' ');
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+    });
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+
+    const saved = fs.readFileSync(tmpFile, 'utf-8');
+    expect(saved).toContain('- foo');
+    expect(saved).toContain('- [ ] bar');
+    expect(saved).toContain('  - baz');
+    expect(saved).toContain('  - [x] done');
+    expect(saved).toContain('- plain');
 
     fs.rmSync(tmpDir, { recursive: true });
   });
@@ -1199,24 +1244,22 @@ test.describe('List keyboard interactions', () => {
 
     // 1st Cmd+Enter: paragraph -> bullet list
     await page.keyboard.press('Meta+Enter');
-    await expect(editor.locator('ul:not([data-type]) li')).toBeVisible();
+    await expect(editor.locator('li:not([data-checked])')).toBeVisible();
 
     // 2nd Cmd+Enter: bullet -> unchecked task
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
-    await expect(editor.locator('ul[data-type="taskList"]')).toBeVisible();
-    const checkbox = editor.locator('input[type="checkbox"]').first();
-    await expect(checkbox).not.toBeChecked();
+    await expect(editor.locator('li[data-checked="false"]')).toBeVisible();
 
     // 3rd Cmd+Enter: unchecked -> checked
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
-    await expect(editor.locator('input[type="checkbox"]').first()).toBeChecked();
+    await expect(editor.locator('li[data-checked="true"]')).toBeVisible();
 
     // 4th Cmd+Enter: checked -> bullet (NOT paragraph)
     await page.keyboard.press('Meta+Enter');
-    await expect(editor.locator('ul:not([data-type]) li')).toBeVisible();
-    await expect(editor.locator('ul[data-type="taskList"]')).toBeHidden();
+    await expect(editor.locator('li:not([data-checked])')).toBeVisible();
+    await expect(editor.locator('li[data-checked]')).toHaveCount(0);
 
     fs.rmSync(tmpDir, { recursive: true });
   });
@@ -1244,24 +1287,20 @@ test.describe('List keyboard interactions', () => {
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
 
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
-    await expect(editor.locator('input[type="checkbox"]').nth(0)).toBeChecked();
-    await expect(editor.locator('input[type="checkbox"]').nth(1)).toBeChecked();
+    await expect(editor.locator('li[data-checked="true"]')).toHaveCount(2);
 
     // Cmd+Enter again WITHOUT re-selecting: selection should be preserved
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
 
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
+    await expect(editor.locator('li[data-checked]')).toHaveCount(0);
     await expect(editor.locator('li')).toHaveCount(2);
 
     // And again: bullet items -> unchecked tasks (still no re-select)
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
 
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
-    await expect(editor.locator('input[type="checkbox"]').nth(0)).not.toBeChecked();
-    await expect(editor.locator('input[type="checkbox"]').nth(1)).not.toBeChecked();
+    await expect(editor.locator('li[data-checked="false"]')).toHaveCount(2);
 
     fs.rmSync(tmpDir, { recursive: true });
   });
@@ -1281,10 +1320,10 @@ test.describe('List keyboard interactions', () => {
     await expect(editor).toContainText('alpha', { timeout: 5000 });
 
     // Verify initial state: 3 tasks, first unchecked
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(3);
-    await expect(editor.locator('input[type="checkbox"]').nth(0)).not.toBeChecked();
-    await expect(editor.locator('input[type="checkbox"]').nth(1)).toBeChecked();
-    await expect(editor.locator('input[type="checkbox"]').nth(2)).not.toBeChecked();
+    await expect(editor.locator('li[data-checked]')).toHaveCount(3);
+    await expect(editor.locator('li[data-checked]').nth(0)).toHaveAttribute('data-checked', 'false');
+    await expect(editor.locator('li[data-checked]').nth(1)).toHaveAttribute('data-checked', 'true');
+    await expect(editor.locator('li[data-checked]').nth(2)).toHaveAttribute('data-checked', 'false');
 
     // Select all: first item is unchecked task -> target = checked task
     await editor.click();
@@ -1293,26 +1332,20 @@ test.describe('List keyboard interactions', () => {
     await page.waitForTimeout(200);
 
     // All 3 should be checked
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(3);
-    for (let i = 0; i < 3; i++) {
-      await expect(editor.locator('input[type="checkbox"]').nth(i)).toBeChecked();
-    }
+    await expect(editor.locator('li[data-checked="true"]')).toHaveCount(3);
 
     // Again without re-selecting (selection preserved): checked -> bullet
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
 
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
+    await expect(editor.locator('li[data-checked]')).toHaveCount(0);
     await expect(editor.locator('li')).toHaveCount(3);
 
     // Again: bullet -> unchecked task
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
 
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(3);
-    for (let i = 0; i < 3; i++) {
-      await expect(editor.locator('input[type="checkbox"]').nth(i)).not.toBeChecked();
-    }
+    await expect(editor.locator('li[data-checked="false"]')).toHaveCount(3);
 
     fs.rmSync(tmpDir, { recursive: true });
   });
@@ -1338,26 +1371,21 @@ test.describe('List keyboard interactions', () => {
     await page.waitForTimeout(200);
 
     // All 3 items should be unchecked tasks
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(3);
-    for (let i = 0; i < 3; i++) {
-      await expect(editor.locator('input[type="checkbox"]').nth(i)).not.toBeChecked();
-    }
+    await expect(editor.locator('li[data-checked="false"]')).toHaveCount(3);
 
     // Check all tasks
     await page.keyboard.press('Meta+a');
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
 
-    for (let i = 0; i < 3; i++) {
-      await expect(editor.locator('input[type="checkbox"]').nth(i)).toBeChecked();
-    }
+    await expect(editor.locator('li[data-checked="true"]')).toHaveCount(3);
 
     // Back to bullets
     await page.keyboard.press('Meta+a');
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
 
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
+    await expect(editor.locator('li[data-checked]')).toHaveCount(0);
     await expect(editor.locator('li')).toHaveCount(3);
 
     fs.rmSync(tmpDir, { recursive: true });
@@ -1393,24 +1421,24 @@ test.describe('List keyboard interactions', () => {
     await page.waitForTimeout(200);
 
     // alpha and delta should still be plain bullet items
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
-    await expect(editor.locator('ul:not([data-type]) li')).toHaveCount(2);
+    await expect(editor.locator('li[data-checked]')).toHaveCount(2);
+    await expect(editor.locator('li:not([data-checked])')).toHaveCount(2);
 
     // The task items should be beta and gamma
-    const taskItems = editor.locator('ul[data-type="taskList"] li');
-    await expect(taskItems).toHaveCount(2);
+    const taskItems = editor.locator('li[data-checked]');
     await expect(taskItems.nth(0)).toContainText('beta');
     await expect(taskItems.nth(1)).toContainText('gamma');
+
+    // All items stay in one <ul> (no list splitting)
+    await expect(editor.locator('ul')).toHaveCount(1);
 
     // Cmd+Enter again (selection preserved): unchecked -> checked
     await page.keyboard.press('Meta+Enter');
     await page.waitForTimeout(200);
 
-    await expect(editor.locator('input[type="checkbox"]')).toHaveCount(2);
-    await expect(editor.locator('input[type="checkbox"]').nth(0)).toBeChecked();
-    await expect(editor.locator('input[type="checkbox"]').nth(1)).toBeChecked();
+    await expect(editor.locator('li[data-checked="true"]')).toHaveCount(2);
     // alpha and delta still bullets
-    await expect(editor.locator('ul:not([data-type]) li')).toHaveCount(2);
+    await expect(editor.locator('li:not([data-checked])')).toHaveCount(2);
 
     fs.rmSync(tmpDir, { recursive: true });
   });

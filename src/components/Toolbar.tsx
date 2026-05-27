@@ -136,14 +136,40 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
         <ToolbarButton
           icon="list-ul"
           title="Unordered List (Cmd+Shift+8)"
-          active={editor.isActive('bulletList')}
+          active={editor.isActive('bulletList') && !editor.isActive('listItem', { checked: true }) && !editor.isActive('listItem', { checked: false })}
           onClick={() => editor.chain().focus().toggleBulletList().run()}
         />
         <ToolbarButton
           icon="ui-checks"
           title="Todo List"
-          active={editor.isActive('taskList')}
-          onClick={() => editor.chain().focus().toggleTaskList().run()}
+          active={editor.isActive('listItem', { checked: true }) || editor.isActive('listItem', { checked: false })}
+          onClick={() => {
+            const { state } = editor;
+            const { $from } = state.selection;
+            let liDepth = -1;
+            for (let d = $from.depth; d > 0; d--) {
+              if ($from.node(d).type.name === 'listItem') { liDepth = d; break; }
+            }
+            if (liDepth === -1) {
+              editor.chain().focus().toggleBulletList().run();
+              const { $from: $new } = editor.state.selection;
+              for (let d = $new.depth; d > 0; d--) {
+                if ($new.node(d).type.name === 'listItem') {
+                  editor.view.dispatch(
+                    editor.state.tr.setNodeMarkup($new.before(d), undefined, { ...$new.node(d).attrs, checked: false })
+                  );
+                  break;
+                }
+              }
+            } else {
+              const node = $from.node(liDepth);
+              const pos = $from.before(liDepth);
+              editor.view.dispatch(
+                state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: node.attrs.checked !== null ? null : false })
+              );
+            }
+            editor.commands.focus();
+          }}
         />
         <ToolbarButton
           icon="quote"

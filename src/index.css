@@ -574,6 +574,7 @@ body {
 
 .editor-content .tiptap p {
   line-height: 1.5;
+  margin-top: 0.4em;
   margin-bottom: 0.4em;
 }
 
@@ -683,45 +684,34 @@ body {
   margin: 0;
 }
 
-/* Adjacent lists (from split mixed bullet/task) should look like one list */
-.editor-content .tiptap > ul + ul,
-.editor-content .tiptap > ol + ol,
-.editor-content .tiptap > ul + ol,
-.editor-content .tiptap > ol + ul {
-  margin-top: 0;
-}
-
-/* --- Task lists --- */
-.editor-content .tiptap ul[data-type="taskList"] {
+/* --- Task list items (checkbox overlay on bullet) --- */
+.editor-content .tiptap li[data-checked] {
   list-style: none;
-  padding-left: 24px;
+  position: relative;
 }
 
-.editor-content .tiptap ul[data-type="taskList"] li {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  margin-left: -18px;
-}
-
-.editor-content .tiptap ul[data-type="taskList"] li > label {
-  flex-shrink: 0;
-  margin-top: 3px;
-  user-select: none;
-}
-
-.editor-content .tiptap ul[data-type="taskList"] li > label input[type="checkbox"] {
-  cursor: pointer;
+.editor-content .tiptap li[data-checked]::before {
+  content: '';
+  position: absolute;
+  left: -18px;
+  top: 5px;
   width: 14px;
   height: 14px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 3px;
+  cursor: pointer;
+  box-sizing: border-box;
 }
 
-.editor-content .tiptap ul[data-type="taskList"] li > div {
-  flex: 1;
-  min-width: 0;
+.editor-content .tiptap li[data-checked="true"]::before {
+  background: var(--accent);
+  border-color: var(--accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.5 7.5L6 10l4.5-5' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 14px 14px;
+  background-position: center;
 }
 
-.editor-content .tiptap ul[data-type="taskList"] li[data-checked="true"] > div {
+.editor-content .tiptap li[data-checked="true"] > p {
   text-decoration: line-through;
   color: var(--text-muted);
 }

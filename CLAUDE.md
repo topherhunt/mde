@@ -40,8 +40,8 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - PDF conversion escapes lines matching `^\d+\.` to prevent Markdown OL interpretation of numbers like "994164972.".
 - tiptap-markdown is configured with `html: false` so raw HTML tags in Markdown (e.g. `<ol>` in body text) are treated as literal text, not parsed as HTML elements. The text node serializer is overridden to skip tiptap-markdown's `escapeHTML` (which converts `<` `>` to `&lt;` `&gt;`), preserving prose like "Apples > oranges." verbatim on save. Standard Markdown character escaping (via prosemirror-markdown's `esc()`) is still applied.
 - Sidebar folder expand/collapse state is lifted to the `Sidebar` component (not `DirectoryNode`) via a `Set<string>` of expanded paths, so it persists across explorer/outline view switches.
-- Todo lists use `@tiptap/extension-task-list` and `@tiptap/extension-task-item` with `nested: true`. Checkboxes can be clicked. Checked items show strikethrough. tiptap-markdown serializes as `- [ ]` / `- [x]`. Adjacent bullet/task lists have reduced margin via CSS (ul + ul\[data-type="taskList"\] etc.).
-- Cmd+Enter cycles the current line (or all selected lines) between 3 states: bullet list, unchecked task, checked task. Implemented as a custom TipTap extension (`CmdEnterCycle`). Must never insert a line break.
+- Todo lists are unified with regular bullet list items via an extended `ListItem` with a `checked` attribute (`null` = bullet, `false` = unchecked task, `true` = checked task). All items live in a single `<ul>` -- no separate TaskList/TaskItem node types. Checkboxes are rendered via CSS `::before` pseudo-elements on `li[data-checked]`, with click handling via a ProseMirror plugin. Checked items show strikethrough. The `- [ ]` / `- [x]` input rule detects task syntax typed inside a list item. Markdown serialization prepends `[ ] ` / `[x] ` based on the `checked` attr. Enter in a task item creates a new unchecked task (not a bullet). Nesting mixed bullet/task items works naturally since they share one list type.
+- Cmd+Enter cycles the current line (or all selected lines) between 3 states: bullet list (`checked: null`), unchecked task (`checked: false`), checked task (`checked: true`). Implemented as a custom TipTap extension (`CmdEnterCycle`) that toggles the `checked` attr via `setNodeMarkup`. Must never insert a line break.
 - Tab/Shift+Tab: in lists, indent/outdent; elsewhere, insert a tab character. Always captured by the editor -- never escapes to browser focus behavior. Implemented as a custom TipTap extension (`TabHandler`).
 - Cmd+Alt+Up/Down moves the block containing the cursor (paragraph, heading, or list item) above/below its sibling. For list items, operates within the list; for top-level blocks, swaps with the neighboring block. Implemented as the `MoveBlock` TipTap extension.
 - Deleting a file via the sidebar also closes any tab open to that file, without adding it to the reopenable closed-tabs queue.
@@ -75,7 +75,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-57 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+58 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 What exists:
 

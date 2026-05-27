@@ -4,9 +4,6 @@ export const Markdown = {
   serialize(editor: Editor): string {
     // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
     let md = editor.storage.markdown.getMarkdown() as string;
-    // Collapse blank lines between adjacent list items from split mixed bullet/task
-    // lists. Uses lookahead so each line can participate in multiple matches.
-    md = md.replace(/^([ \t]*- (?:\[[ x]\] )?[^\n]+)\n{2,}(?=[ \t]*- )/gm, '$1\n');
     return md.endsWith('\n') ? md : md + '\n';
   },
 

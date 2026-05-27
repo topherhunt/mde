@@ -17,9 +17,10 @@ MDE fills the gap between Obsidian and VS Code for Markdown editing:
 
 ## Features
 
-- **WYSIWYG editing** -- formatting toolbar with headings, bold, italic, strikethrough, highlight, lists, todo lists, blockquotes, code, links, tables, and horizontal rules
-- **File Explorer & Document Outline sidebar** -- keyboard-navigable, resizable, with context menu (rename, delete, copy path)
-- **Tabbed editing** -- open multiple files, reorder by drag, tentative (preview) tabs on single-click
+- **WYSIWYG editing** -- formatting toolbar with headings, bold, italic, strikethrough, highlight, lists, todo lists, blockquotes, code, links, tables, and horizontal rules.
+- **Structured lists** -- Obsidian and VS Code both make it easy to produce invalid bullet/number/task lists. MDE gives you opinionated constraints.
+- [ ] **File Explorer & Document Outline sidebar** -- keyboard-navigable, resizable, with context menu (rename, delete, copy path)
+- [ ] **Tabbed editing** -- open multiple files, reorder by drag, tentative (preview) tabs on single-click
 - **Find and replace** -- match highlighting, case-sensitive and whole-word filters, inline replace-all confirmation
 - **Quick Open** -- Cmd+O fuzzy file search across the project
 - **Standard editing tools** -- links, code blocks, tables
@@ -92,6 +93,7 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ### For me
 
+- Build a new release to fix the crashing bugs etc. Write a changelog.
 - Support right-click to convert to .docx or .pdf, w standard nice-looking formatting & colors (customizable)
   - PDF export -- does this require chrome/puppeteer? can it just use the built-in engine?
 - **Add Claude agent support.**
@@ -100,13 +102,22 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ### For Claude
 
-- Please add more margin below headings and paragraphs, since ul elements don't have any default padding (to get around the task-list-combined-with-bullet-list problem).
-- Previous Claude instances really struggled to add any meaningful support for task/checkbox list items. See commit messages 6cf2ac1 and 0140c6c. Now as flat lists they work fine BUT they get broken fast if you try to render nested lists. For example:
+- So you did fix the bug where when you place your cursor in a list sub item and you press Command Enter, then that sub item's state gets cycled instead of the parent state getting cycled. But if I click and drag to select a range of text, the parent/root item is still what gets cycled. Instead of the *selected lines* all getting cycled. This happens if the even if the selected range is just one character within a single list item. The root item is cycled state instead of the current item that you're selecting in.
+
+---
+
+- Fix on pressing Cmd + Enter with multiple bullets of different nestings selected: You partly fixed it. What I'm finding now is that if li elements that are NOT PARENTS of each other are selected, Cmd + Enter behaves properly. But if a selection contains BOTH A PARENT AND ITS CHILD, Cmd + Enter only partly applies the state-change (eg. just to the child) and re-pressing it has no further effect, it gets "trapped" rather than cycling status with each hotkey press. In the following example, selecting and cycling items 3-5 works great; selecting and cycling elements 2-3 does not.
 
 ```
-- foo
-- [ ] bar
-  - baz
+- number 1
+  - number 2
+    - number 3
+  - number 4
+- number 5
 ```
 
-the 3rd baz bullet doesn't render, it's just bare indented text. Bullets under tasks should work fine. Tasks under bullets should work fine. I'm starting to wonder if the earlier architectural decision to make checkbox-list-items be wholly separate <ul> elements from the standard bullet-list <ul>, was perhaps a mistake, because now it's a pain in the neck to indent and interleave them. What would it look like if task items were just a special case of <li>, within the same <ul>, with that particular li's bullet replaced with a clickable checkbox, but other neighboring and child <li>'s aren't affected?
+- Fix on Cmd + Alt + up/down:
+  - If your cursor is in an indented list item and it has no siblings, Cmd + Alt + up/down does move / reparent it successfully, but it also creates an empty li item where there previously was none. It should not do that.
+  - If a range of lines is selected, this should move all selected lines together as a unit, if possible, rather than just moving the line the cursor is on.
+
+- About page, text: can you make it centered, and can you make the url a clickable link?

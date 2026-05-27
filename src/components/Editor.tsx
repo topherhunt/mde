@@ -6,13 +6,12 @@ import Link from '@tiptap/extension-link';
 import { TableKit } from '@tiptap/extension-table';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import Placeholder from '@tiptap/extension-placeholder';
-import TaskList from '@tiptap/extension-task-list';
-import TaskItem from '@tiptap/extension-task-item';
+import { ListItem } from '@tiptap/extension-list';
 import taskListPlugin from 'markdown-it-task-lists';
 import { common, createLowlight } from 'lowlight';
 import { Markdown as MarkdownExt } from 'tiptap-markdown';
 import Text from '@tiptap/extension-text';
-import { Extension } from '@tiptap/core';
+import { Extension, InputRule, mergeAttributes } from '@tiptap/core';
 import { TextSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Fragment } from '@tiptap/pm/model';
 import { Tab } from '../types';
@@ -51,12 +50,12 @@ const SmartClipboard = Extension.create({
             const { content } = slice;
             if (content.childCount === 1) {
               const child = content.firstChild!;
-              if ((child.type.name === 'bulletList' || child.type.name === 'taskList' || child.type.name === 'orderedList')
+              if ((child.type.name === 'bulletList' || child.type.name === 'orderedList')
                   && child.childCount === 1) {
                 return serializer.serialize(child.firstChild!.content).trim();
               }
             }
-            return compactListGaps(serializer.serialize(content));
+            return serializer.serialize(content);
           },
         },
       }),
@@ -64,60 +63,139 @@ const SmartClipboard = Extension.create({
   },
 });
 
-function compactListGaps(md: string): string {
-  return md.replace(/^([ \t]*- (?:\[[ x]\] )?[^\n]+)\n{2,}(?=[ \t]*- )/gm, '$1\n');
-}
+const UnifiedListItem = ListItem.extend({
+  addAttributes() {
+    return {
+      checked: {
+        default: null,
+        parseHTML: (el: HTMLElement) => {
+          const v = el.getAttribute('data-checked');
+          return v === null ? null : v === 'true';
+        },
+        renderHTML: (attrs: Record<string, any>) => {
+          if (attrs.checked === null) return {};
+          return { 'data-checked': String(attrs.checked) };
+        },
+      },
+    };
+  },
 
-// Override tiptap-markdown's taskList parse to split mixed bullet/task lists into
-// separate <ul> elements, so non-task items don't get spurious checkboxes.
-const SplitMixedTaskList = TaskList.extend({
   addStorage() {
     return {
       markdown: {
         serialize(state: any, node: any) {
-          return state.renderList(node, '  ', () =>
-            ((this as any).editor.storage.markdown.options.bulletListMarker || '-') + ' '
-          );
+          if (node.attrs.checked !== null) {
+            state.write(node.attrs.checked ? '[x] ' : '[ ] ');
+          }
+          state.renderContent(node);
         },
         parse: {
           setup(markdownit: any) {
             markdownit.use(taskListPlugin);
           },
           updateDOM(element: HTMLElement) {
-            [...element.querySelectorAll('.contains-task-list')].forEach((list) => {
-              const items = [...list.children] as HTMLElement[];
-              const runs: { isTask: boolean; items: HTMLElement[] }[] = [];
-              let cur: { isTask: boolean; items: HTMLElement[] } | null = null;
-              for (const item of items) {
-                const isTask = item.classList.contains('task-list-item');
-                if (!cur || cur.isTask !== isTask) {
-                  cur = { isTask, items: [] };
-                  runs.push(cur);
-                }
-                cur.items.push(item);
-              }
-              const parent = list.parentNode!;
-              for (const run of runs) {
-                const ul = list.cloneNode(false) as HTMLElement;
-                ul.classList.remove('contains-task-list');
-                if (run.isTask) {
-                  ul.setAttribute('data-type', 'taskList');
-                }
-                for (const item of run.items) ul.appendChild(item);
-                parent.insertBefore(ul, list);
-              }
-              parent.removeChild(list);
-            });
-            [...element.querySelectorAll('.task-list-item')].forEach((item) => {
+            element.querySelectorAll('.task-list-item').forEach((item) => {
               const input = item.querySelector('input');
-              item.setAttribute('data-type', 'taskItem');
               if (input) {
                 item.setAttribute('data-checked', String(input.checked));
                 input.remove();
               }
+              item.classList.remove('task-list-item');
+            });
+            element.querySelectorAll('.contains-task-list').forEach((list) => {
+              list.classList.remove('contains-task-list');
+              list.removeAttribute('data-type');
             });
           },
         },
+      },
+    };
+  },
+
+  addInputRules() {
+    return [
+      new InputRule({
+        find: /^\[([xX ]?)\]\s$/,
+        handler: ({ state, range, match }: { state: any; range: { from: number; to: number }; match: RegExpMatchArray }) => {
+          const tr = state.tr;
+          const $from = state.doc.resolve(range.from);
+          if ($from.parent.type.name !== 'paragraph') return;
+          if (range.from !== $from.start()) return;
+          for (let d = $from.depth - 1; d > 0; d--) {
+            if ($from.node(d).type.name === 'listItem') {
+              const liPos = $from.before(d);
+              const checked = match[1]?.toLowerCase() === 'x';
+              tr.delete(range.from, range.to);
+              tr.setNodeMarkup(tr.mapping.map(liPos), undefined, {
+                ...$from.node(d).attrs, checked,
+              });
+              return;
+            }
+          }
+        },
+      }),
+    ];
+  },
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('checkboxClick'),
+        props: {
+          handleClick: (view, pos, event) => {
+            const target = event.target as HTMLElement;
+            const li = target.closest('li[data-checked]');
+            if (!li) return false;
+            const liRect = li.getBoundingClientRect();
+            if (event.clientX > liRect.left + 4) return false;
+            let liPos: number;
+            try {
+              liPos = view.posAtDOM(li, 0) - 1;
+            } catch {
+              return false;
+            }
+            const node = view.state.doc.nodeAt(liPos);
+            if (!node || node.type.name !== 'listItem' || node.attrs.checked === null) return false;
+            view.dispatch(
+              view.state.tr.setNodeMarkup(liPos, undefined, {
+                ...node.attrs, checked: !node.attrs.checked,
+              })
+            );
+            return true;
+          },
+        },
+      }),
+    ];
+  },
+
+  addKeyboardShortcuts() {
+    return {
+      Enter: ({ editor }: { editor: any }) => {
+        const { state } = editor;
+        const { $from } = state.selection;
+        let isTask = false;
+        for (let d = $from.depth; d > 0; d--) {
+          if ($from.node(d).type.name === 'listItem') {
+            isTask = $from.node(d).attrs.checked !== null;
+            break;
+          }
+        }
+        if (!editor.commands.splitListItem('listItem')) return false;
+        if (isTask) {
+          const { $from: $new } = editor.state.selection;
+          for (let d = $new.depth; d > 0; d--) {
+            if ($new.node(d).type.name === 'listItem') {
+              const pos = $new.before(d);
+              editor.view.dispatch(
+                editor.state.tr.setNodeMarkup(pos, undefined, {
+                  ...$new.node(d).attrs, checked: false,
+                })
+              );
+              break;
+            }
+          }
+        }
+        return true;
       },
     };
   },
@@ -128,18 +206,28 @@ const TabHandler = Extension.create({
   addKeyboardShortcuts() {
     return {
       'Tab': ({ editor }) => {
-        if (editor.isActive('listItem') || editor.isActive('taskItem')) {
-          editor.commands.sinkListItem(editor.isActive('taskItem') ? 'taskItem' : 'listItem');
-        } else if (editor.isActive('codeBlock')) {
-          editor.commands.insertContent('\t');
+        if (editor.isActive('listItem')) {
+          editor.commands.sinkListItem('listItem');
         } else {
           editor.commands.insertContent('\t');
         }
         return true;
       },
       'Shift-Tab': ({ editor }) => {
-        if (editor.isActive('listItem') || editor.isActive('taskItem')) {
-          editor.commands.liftListItem(editor.isActive('taskItem') ? 'taskItem' : 'listItem');
+        if (editor.isActive('listItem')) {
+          const { $from } = editor.state.selection;
+          for (let d = $from.depth; d > 0; d--) {
+            if ($from.node(d).type.name === 'listItem') {
+              const parentList = $from.node(d - 1);
+              if (parentList.type.name === 'bulletList' || parentList.type.name === 'orderedList') {
+                const grandparent = d - 2 >= 0 ? $from.node(d - 2) : null;
+                if (grandparent && grandparent.type.name === 'listItem') {
+                  editor.commands.liftListItem('listItem');
+                }
+              }
+              break;
+            }
+          }
         }
         return true;
       },
@@ -154,165 +242,83 @@ const CmdEnterCycle = Extension.create({
       'Mod-Enter': ({ editor }) => {
         const { state } = editor.view;
         const { from, to } = state.selection;
-        const { bulletList, taskList, listItem, taskItem } = state.schema.nodes;
+        const { $from } = state.selection;
+        const collapsed = from === to;
 
-        // Find the first list item to determine cycle target
-        let foundType: string | null = null;
-        let foundChecked = false;
-        state.doc.nodesBetween(from, to, (node) => {
-          if (foundType) return false;
-          if (node.type.name === 'taskItem') {
-            foundType = 'taskItem';
-            foundChecked = node.attrs.checked;
-            return false;
+        // Find the reference listItem to determine cycle target.
+        // Collapsed: innermost listItem at cursor. Extended: first listItem in range.
+        let foundChecked: null | boolean = undefined as any;
+        if (collapsed) {
+          for (let d = $from.depth; d > 0; d--) {
+            if ($from.node(d).type.name === 'listItem') {
+              foundChecked = $from.node(d).attrs.checked;
+              break;
+            }
           }
-          if (node.type.name === 'listItem') {
-            foundType = 'listItem';
-            return false;
+        } else {
+          // Use $from ancestry first (innermost at selection start)
+          for (let d = $from.depth; d > 0; d--) {
+            if ($from.node(d).type.name === 'listItem') {
+              foundChecked = $from.node(d).attrs.checked;
+              break;
+            }
           }
-        });
+          // Fallback: scan range for the first leaf listItem
+          if (foundChecked === undefined as any) {
+            const allItems: any[] = [];
+            state.doc.nodesBetween(from, to, (node, pos) => {
+              if (node.type.name === 'listItem') allItems.push({ pos, node });
+            });
+            const leaves = allItems.filter(({ pos, node }) => {
+              const end = pos + node.nodeSize;
+              return !allItems.some(o => o.pos > pos && o.pos < end);
+            });
+            if (leaves.length > 0) foundChecked = leaves[0].node.attrs.checked;
+          }
+        }
 
         // No list context: create a bullet list
-        if (!foundType) {
+        if (foundChecked === undefined as any) {
           editor.chain().focus().toggleBulletList().run();
           return true;
         }
 
-        // Cycle: bullet -> unchecked task -> checked task -> bullet
-        let target: 'uncheckedTask' | 'checkedTask' | 'bullet';
-        if (foundType === 'listItem') target = 'uncheckedTask';
-        else if (!foundChecked) target = 'checkedTask';
-        else target = 'bullet';
+        // Cycle: null (bullet) -> false (unchecked) -> true (checked) -> null
+        let targetChecked: null | boolean;
+        if (foundChecked === null) targetChecked = false;
+        else if (foundChecked === false) targetChecked = true;
+        else targetChecked = null;
 
-        if (from === to) {
-          // Collapsed cursor
-          if (target === 'checkedTask') {
-            let tr = state.tr;
-            state.doc.nodesBetween(from, to, (node, pos) => {
-              if (node.type.name === 'taskItem') {
-                tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: true });
-              }
-            });
-            editor.view.dispatch(tr);
-          } else if (target === 'uncheckedTask') {
-            editor.chain().focus().toggleBulletList().toggleTaskList().run();
-          } else {
-            editor.chain().focus().toggleTaskList().toggleBulletList().run();
+        if (collapsed) {
+          // Collapsed cursor: only toggle the innermost listItem
+          for (let d = $from.depth; d > 0; d--) {
+            if ($from.node(d).type.name === 'listItem') {
+              const pos = $from.before(d);
+              editor.view.dispatch(
+                state.tr.setNodeMarkup(pos, undefined, { ...$from.node(d).attrs, checked: targetChecked })
+              );
+              break;
+            }
           }
           return true;
         }
 
-        // Extended selection: convert only the selected items within each list
-        let tr = state.tr;
-        const targetListType = target === 'bullet' ? bulletList : taskList;
-
-        // Find lists and which of their items overlap the selection
-        const listData: { pos: number; node: any; selectedIndices: Set<number> }[] = [];
+        // Extended selection: find deepest (leaf) listItems overlapping selection
+        const tr = state.tr;
+        const items: { pos: number; node: any }[] = [];
         state.doc.nodesBetween(from, to, (node, pos) => {
-          if (node.type.name === 'bulletList' || node.type.name === 'taskList') {
-            const selected = new Set<number>();
-            node.forEach((child: any, childOffset: number, index: number) => {
-              const itemPos = pos + 1 + childOffset;
-              const itemEnd = itemPos + child.nodeSize;
-              if (itemEnd > from && itemPos < to) {
-                selected.add(index);
-              }
-            });
-            if (selected.size > 0) {
-              listData.push({ pos, node, selectedIndices: selected });
-            }
-            return false;
+          if (node.type.name === 'listItem') {
+            items.push({ pos, node });
           }
         });
-
-        // Process in reverse document order so positions stay valid
-        listData.sort((a, b) => b.pos - a.pos);
-
-        // Track the bounds of all converted items for selection restoration
-        let selStart = Infinity;
-        let selEnd = -1;
-
-        for (const { pos, node: listNode, selectedIndices } of listData) {
-          if (listNode.type === targetListType) {
-            // Already the right list type -- just update checked attrs on selected items
-            if (target !== 'bullet') {
-              const wantChecked = target === 'checkedTask';
-              listNode.forEach((child: any, childOffset: number, index: number) => {
-                if (selectedIndices.has(index)) {
-                  const mappedPos = tr.mapping.map(pos + 1 + childOffset);
-                  if (child.attrs.checked !== wantChecked) {
-                    tr = tr.setNodeMarkup(mappedPos, undefined, { ...child.attrs, checked: wantChecked });
-                  }
-                  selStart = Math.min(selStart, mappedPos);
-                  selEnd = Math.max(selEnd, mappedPos + child.nodeSize);
-                }
-              });
-            } else {
-              listNode.forEach((child: any, childOffset: number, index: number) => {
-                if (selectedIndices.has(index)) {
-                  const mappedPos = tr.mapping.map(pos + 1 + childOffset);
-                  selStart = Math.min(selStart, mappedPos);
-                  selEnd = Math.max(selEnd, mappedPos + child.nodeSize);
-                }
-              });
-            }
-            continue;
-          }
-
-          // Build replacement: split list into original + converted segments
-          const segments: { selected: boolean; children: any[] }[] = [];
-          let current: { selected: boolean; children: any[] } | null = null;
-
-          listNode.forEach((child: any, _offset: number, index: number) => {
-            const isSelected = selectedIndices.has(index);
-            if (!current || current.selected !== isSelected) {
-              current = { selected: isSelected, children: [] };
-              segments.push(current);
-            }
-            current.children.push(child);
-          });
-
-          const replacementNodes: any[] = [];
-          let convertedOffset = 0;
-          let convertedSize = 0;
-          let offsetAccum = 0;
-          for (const seg of segments) {
-            if (!seg.selected) {
-              const children = seg.children.map((c: any) => c.copy(c.content));
-              const node = listNode.type.create(listNode.attrs, Fragment.from(children));
-              replacementNodes.push(node);
-              offsetAccum += node.nodeSize;
-            } else {
-              convertedOffset = offsetAccum;
-              const children = seg.children.map((c: any) => {
-                if (target === 'bullet') return listItem.create(null, c.content, c.marks);
-                return taskItem.create({ checked: target === 'checkedTask' }, c.content, c.marks);
-              });
-              const node = targetListType.create(null, Fragment.from(children));
-              replacementNodes.push(node);
-              convertedSize = node.nodeSize;
-              offsetAccum += node.nodeSize;
-            }
-          }
-
+        // Filter to only leaf listItems (those that don't contain other listItems in the set)
+        const leafItems = items.filter(({ pos, node }) => {
+          const end = pos + node.nodeSize;
+          return !items.some(other => other.pos > pos && other.pos < end);
+        });
+        for (const { pos, node } of leafItems) {
           const mapped = tr.mapping.map(pos);
-          tr = tr.replaceWith(mapped, mapped + listNode.nodeSize, Fragment.from(replacementNodes));
-
-          // Track the converted list's bounds in the new document
-          const convertedListPos = mapped + convertedOffset;
-          selStart = Math.min(selStart, convertedListPos);
-          selEnd = Math.max(selEnd, convertedListPos + convertedSize);
-        }
-
-        // Set selection to span the converted items
-        if (selStart < selEnd) {
-          try {
-            const $start = tr.doc.resolve(selStart);
-            const $end = tr.doc.resolve(selEnd);
-            tr.setSelection(TextSelection.between($start, $end));
-          } catch {
-            // Fallback: leave selection as-is
-          }
+          tr.setNodeMarkup(mapped, undefined, { ...node.attrs, checked: targetChecked });
         }
         editor.view.dispatch(tr);
         return true;
@@ -328,7 +334,7 @@ function moveBlock(editor: any, direction: 'up' | 'down'): boolean {
   let targetDepth = 1;
   for (let d = $from.depth; d > 0; d--) {
     const name = $from.node(d).type.name;
-    if (name === 'listItem' || name === 'taskItem') {
+    if (name === 'listItem') {
       targetDepth = d;
       break;
     }
@@ -338,26 +344,117 @@ function moveBlock(editor: any, direction: 'up' | 'down'): boolean {
   const indexInParent = $from.index(targetDepth - 1);
   const siblingIndex = direction === 'up' ? indexInParent - 1 : indexInParent + 1;
 
-  if (siblingIndex < 0 || siblingIndex >= parentNode.childCount) return false;
+  if (siblingIndex >= 0 && siblingIndex < parentNode.childCount) {
+    // Simple case: swap with sibling within the same parent
+    const movingNode = parentNode.child(indexInParent);
+    const siblingNode = parentNode.child(siblingIndex);
+    const movingStart = $from.before(targetDepth);
+    const movingEnd = $from.after(targetDepth);
+    const cursorOffset = $from.pos - movingStart;
+    const tr = state.tr;
+    if (direction === 'up') {
+      const siblingStart = movingStart - siblingNode.nodeSize;
+      tr.replaceWith(siblingStart, movingEnd, Fragment.from([movingNode, siblingNode]));
+      tr.setSelection(TextSelection.create(tr.doc, siblingStart + cursorOffset));
+    } else {
+      const siblingEnd = movingEnd + siblingNode.nodeSize;
+      tr.replaceWith(movingStart, siblingEnd, Fragment.from([siblingNode, movingNode]));
+      tr.setSelection(TextSelection.create(tr.doc, movingStart + siblingNode.nodeSize + cursorOffset));
+    }
+    editor.view.dispatch(tr);
+    return true;
+  }
+
+  // Cross-parent case: move a nested list item to an adjacent parent's sublist.
+  // Only applies when inside a nested list (parent is a list inside a listItem).
+  if (targetDepth < 3) return false;
+  const grandparent = $from.node(targetDepth - 2);
+  if (grandparent.type.name !== 'listItem') return false;
+
+  const uncleListDepth = targetDepth - 2;
+  const uncleList = $from.node(uncleListDepth - 1);
+  const uncleIndex = $from.index(uncleListDepth - 1);
+  const targetUncleIndex = direction === 'up' ? uncleIndex - 1 : uncleIndex + 1;
+  if (targetUncleIndex < 0 || targetUncleIndex >= uncleList.childCount) return false;
+
+  const targetUncle = uncleList.child(targetUncleIndex);
+  if (targetUncle.type.name !== 'listItem') return false;
 
   const movingNode = parentNode.child(indexInParent);
-  const siblingNode = parentNode.child(siblingIndex);
   const movingStart = $from.before(targetDepth);
   const movingEnd = $from.after(targetDepth);
   const cursorOffset = $from.pos - movingStart;
-
   const tr = state.tr;
 
-  if (direction === 'up') {
-    const siblingStart = movingStart - siblingNode.nodeSize;
-    tr.replaceWith(siblingStart, movingEnd, Fragment.from([movingNode, siblingNode]));
-    tr.setSelection(TextSelection.create(tr.doc, siblingStart + cursorOffset));
+  // Find the target uncle's sublist of the same type as our parent list
+  const parentListType = parentNode.type;
+  let targetSublistOffset = -1;
+  let targetSublistNode: any = null;
+  targetUncle.forEach((child: any, offset: number) => {
+    if (child.type === parentListType) {
+      targetSublistOffset = offset;
+      targetSublistNode = child;
+    }
+  });
+
+  // Remove the item from its current location
+  tr.delete(movingStart, movingEnd);
+
+  // Find the uncle's position in the document
+  const unclePos = tr.mapping.map($from.before(uncleListDepth));
+  const targetUnclePos = direction === 'up'
+    ? unclePos - 1  // position before current uncle -> previous uncle
+    : unclePos;     // we need to recalculate after delete
+
+  // Recalculate: resolve into the target uncle to find/create the sublist
+  const $uncle = tr.doc.resolve(tr.mapping.map(
+    direction === 'up'
+      ? $from.before(uncleListDepth) - targetUncle.nodeSize
+      : $from.after(uncleListDepth)
+  ) + 1);
+
+  // Walk up from $uncle to find the listItem
+  let uncleItemDepth = -1;
+  for (let d = $uncle.depth; d > 0; d--) {
+    if ($uncle.node(d).type.name === 'listItem') {
+      uncleItemDepth = d;
+      break;
+    }
+  }
+  if (uncleItemDepth === -1) return false;
+
+  const uncleItemNode = $uncle.node(uncleItemDepth);
+  const uncleItemPos = $uncle.before(uncleItemDepth);
+
+  // Check if the uncle already has a sublist of the right type
+  let existingSublist: any = null;
+  let existingSublistPos = -1;
+  uncleItemNode.forEach((child: any, offset: number) => {
+    if (child.type === parentListType) {
+      existingSublist = child;
+      existingSublistPos = uncleItemPos + 1 + offset;
+    }
+  });
+
+  let insertPos: number;
+  if (existingSublist) {
+    if (direction === 'up') {
+      // Insert at the end of the existing sublist
+      insertPos = existingSublistPos + existingSublist.nodeSize - 1;
+    } else {
+      // Insert at the start of the existing sublist
+      insertPos = existingSublistPos + 1;
+    }
+    tr.insert(insertPos, movingNode);
   } else {
-    const siblingEnd = movingEnd + siblingNode.nodeSize;
-    tr.replaceWith(movingStart, siblingEnd, Fragment.from([siblingNode, movingNode]));
-    tr.setSelection(TextSelection.create(tr.doc, movingStart + siblingNode.nodeSize + cursorOffset));
+    // Create a new sublist wrapping our item, append to the uncle listItem
+    const newList = parentListType.create(null, Fragment.from(movingNode));
+    insertPos = uncleItemPos + 1 + uncleItemNode.content.size;
+    tr.insert(insertPos, newList);
+    insertPos += 1; // account for the list open tag
   }
 
+  tr.setSelection(TextSelection.create(tr.doc, insertPos + cursorOffset));
   editor.view.dispatch(tr);
   return true;
 }
@@ -422,6 +519,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       StarterKit.configure({
         codeBlock: false,
         text: false,
+        listItem: false,
       }),
       TextNode,
       Highlight,
@@ -434,10 +532,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       CodeBlockWithCopy.configure({
         lowlight,
       }),
-      SplitMixedTaskList,
-      TaskItem.configure({
-        nested: true,
-      }),
+      UnifiedListItem,
       CmdEnterCycle,
       TabHandler,
       MoveBlock,

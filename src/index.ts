@@ -932,6 +932,11 @@ app.on('open-file', (event, filePath) => {
 // --- App lifecycle ---
 
 app.on('ready', () => {
+  app.setAboutPanelOptions({
+    applicationName: 'MDE',
+    applicationVersion: app.getVersion(),
+    credits: 'Made with 💙\nby Topher Hunt\n\nhttps://github.com/topherhunt/mde',
+  });
   buildMenu();
   if (launchFileHandled) return;
   const cliPath = process.argv.find((arg, i) =>
