@@ -321,6 +321,57 @@ const CmdEnterCycle = Extension.create({
   },
 });
 
+function moveBlock(editor: any, direction: 'up' | 'down'): boolean {
+  const { state } = editor;
+  const { $from } = state.selection;
+
+  let targetDepth = 1;
+  for (let d = $from.depth; d > 0; d--) {
+    const name = $from.node(d).type.name;
+    if (name === 'listItem' || name === 'taskItem') {
+      targetDepth = d;
+      break;
+    }
+  }
+
+  const parentNode = $from.node(targetDepth - 1);
+  const indexInParent = $from.index(targetDepth - 1);
+  const siblingIndex = direction === 'up' ? indexInParent - 1 : indexInParent + 1;
+
+  if (siblingIndex < 0 || siblingIndex >= parentNode.childCount) return false;
+
+  const movingNode = parentNode.child(indexInParent);
+  const siblingNode = parentNode.child(siblingIndex);
+  const movingStart = $from.before(targetDepth);
+  const movingEnd = $from.after(targetDepth);
+  const cursorOffset = $from.pos - movingStart;
+
+  const tr = state.tr;
+
+  if (direction === 'up') {
+    const siblingStart = movingStart - siblingNode.nodeSize;
+    tr.replaceWith(siblingStart, movingEnd, Fragment.from([movingNode, siblingNode]));
+    tr.setSelection(TextSelection.create(tr.doc, siblingStart + cursorOffset));
+  } else {
+    const siblingEnd = movingEnd + siblingNode.nodeSize;
+    tr.replaceWith(movingStart, siblingEnd, Fragment.from([siblingNode, movingNode]));
+    tr.setSelection(TextSelection.create(tr.doc, movingStart + siblingNode.nodeSize + cursorOffset));
+  }
+
+  editor.view.dispatch(tr);
+  return true;
+}
+
+const MoveBlock = Extension.create({
+  name: 'moveBlock',
+  addKeyboardShortcuts() {
+    return {
+      'Mod-Alt-ArrowUp': ({ editor }) => moveBlock(editor, 'up'),
+      'Mod-Alt-ArrowDown': ({ editor }) => moveBlock(editor, 'down'),
+    };
+  },
+});
+
 const lowlight = createLowlight(common);
 
 const CodeBlockWithCopy = CodeBlockLowlight.extend({
@@ -389,6 +440,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       }),
       CmdEnterCycle,
       TabHandler,
+      MoveBlock,
       Placeholder.configure({
         placeholder: 'Start writing...',
       }),

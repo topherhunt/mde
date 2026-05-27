@@ -161,6 +161,7 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const editorsRef = useRef<Map<string, TipTapEditor>>(new Map());
   const closedTabsRef = useRef<string[]>([]);
+  const scrollPositionsRef = useRef<Map<string, number>>(new Map());
   const [activeEditor, setActiveEditor] = useState<TipTapEditor | null>(null);
   const [theme, setTheme] = useState<string>('system');
   const [toast, setToast] = useState<{ msg: string; variant?: string; hiding?: boolean } | null>(null);
@@ -171,6 +172,8 @@ export default function App() {
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [linkTrigger, setLinkTrigger] = useState(0);
   const [spellcheck, setSpellcheck] = useState(true);
+  const [autosave, setAutosave] = useState(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [importConfirm, setImportConfirm] = useState<string | null>(null);
   const [linkBarVisible, setLinkBarVisible] = useState(false);
@@ -189,7 +192,18 @@ export default function App() {
   useEffect(() => {
     const editor = activeTab ? editorsRef.current.get(activeTab.id) || null : null;
     setActiveEditor(editor);
-    if (editor) editor.commands.focus();
+    if (editor) {
+      editor.commands.focus();
+      const tabId = activeTab?.id;
+      requestAnimationFrame(() => {
+        if (!tabId) return;
+        const saved = scrollPositionsRef.current.get(tabId);
+        if (saved !== undefined) {
+          const el = editor.view.dom.closest('.editor-content');
+          if (el) el.scrollTop = saved;
+        }
+      });
+    }
   }, [activeTab?.id]);
 
   const openFile = useCallback(async (filePath: string, tentative = false) => {
@@ -295,6 +309,15 @@ export default function App() {
     window.mde.watchFile(filePath);
   }, [activeTab, activeEditor]);
 
+  const triggerAutosave = useCallback(() => {
+    if (!autosave) return;
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null;
+      saveActiveTab();
+    }, 1000);
+  }, [autosave, saveActiveTab]);
+
   const saveActiveTabAs = useCallback(async () => {
     if (!activeTab || !activeEditor) return;
 
@@ -330,15 +353,30 @@ export default function App() {
     dispatch({ type: 'MARK_CONFLICT', tabId: activeTab.id, conflict: false });
   }, [activeTab, activeEditor]);
 
+  const scrollListenersRef = useRef<Map<string, () => void>>(new Map());
+
   const registerEditor = useCallback((tabId: string, editor: TipTapEditor) => {
     editorsRef.current.set(tabId, editor);
     if (activeTab && tabId === activeTab.id) {
       setActiveEditor(editor);
     }
+    requestAnimationFrame(() => {
+      const el = editor.view.dom.closest('.editor-content');
+      if (el) {
+        // Fires on every scroll pixel, but only writes to a Map ref -- no state
+        // update, no re-render, just a number assignment. Safe without debounce.
+        const handler = () => { scrollPositionsRef.current.set(tabId, el.scrollTop); };
+        el.addEventListener('scroll', handler);
+        scrollListenersRef.current.set(tabId, () => el.removeEventListener('scroll', handler));
+      }
+    });
   }, [activeTab]);
 
   const unregisterEditor = useCallback((tabId: string) => {
     editorsRef.current.delete(tabId);
+    scrollPositionsRef.current.delete(tabId);
+    const cleanup = scrollListenersRef.current.get(tabId);
+    if (cleanup) { cleanup(); scrollListenersRef.current.delete(tabId); }
     if (activeTab && tabId === activeTab.id) {
       setActiveEditor(null);
     }
@@ -450,10 +488,12 @@ export default function App() {
     });
     window.mde.getTheme().then(applyTheme);
     window.mde.getSpellcheck().then(setSpellcheck);
+    window.mde.getAutosave().then(setAutosave);
     const cleanupTheme = window.mde.onThemeChanged(applyTheme);
     const cleanupSpell = window.mde.onSpellcheckChanged(setSpellcheck);
+    const cleanupAutosave = window.mde.onAutosaveChanged(setAutosave);
     const cleanupProjectFiles = window.mde.onProjectFilesChanged(() => setSidebarRefreshKey(n => n + 1));
-    return () => { cleanupTheme(); cleanupSpell(); cleanupProjectFiles(); };
+    return () => { cleanupTheme(); cleanupSpell(); cleanupAutosave(); cleanupProjectFiles(); };
   }, []);
 
   function applyTheme(t: string) {
@@ -597,9 +637,10 @@ export default function App() {
                   tab={tab}
                   onReady={(editor) => registerEditor(tab.id, editor)}
                   onDestroy={() => unregisterEditor(tab.id)}
-                  onDirtyChange={(dirty) =>
-                    dispatch({ type: 'MARK_DIRTY', tabId: tab.id, dirty })
-                  }
+                  onDirtyChange={(dirty) => {
+                    dispatch({ type: 'MARK_DIRTY', tabId: tab.id, dirty });
+                    if (dirty) triggerAutosave();
+                  }}
                 />
               </div>
             ))}
@@ -630,7 +671,7 @@ export default function App() {
           onCancel={() => setImportConfirm(null)}
         />
       )}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} spellcheck={spellcheck} />}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} spellcheck={spellcheck} autosave={autosave} />}
       {toast && (
         <div className={`toast ${toast.variant ? `toast-${toast.variant}` : ''} ${toast.hiding ? 'toast-out' : ''}`}>{toast.msg}</div>
       )}
@@ -638,7 +679,7 @@ export default function App() {
   );
 }
 
-function SettingsDialog({ onClose, theme, spellcheck }: { onClose: () => void; theme: string; spellcheck: boolean }) {
+function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () => void; theme: string; spellcheck: boolean; autosave: boolean }) {
   const [status, setStatus] = useState<'checking' | 'idle' | 'installed' | 'installing' | 'done' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -696,6 +737,21 @@ function SettingsDialog({ onClose, theme, spellcheck }: { onClose: () => void; t
                 type="checkbox"
                 checked={spellcheck}
                 onChange={(e) => window.mde.setSpellcheck(e.target.checked)}
+              />
+              <span className="settings-toggle-slider" />
+            </label>
+          </div>
+          <div className="settings-separator" />
+          <div className="settings-row">
+            <div>
+              <div className="fw-bold">Auto-save</div>
+              <div className="text-muted fs-sm">Automatically save files after 1 second of inactivity.</div>
+            </div>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={autosave}
+                onChange={(e) => window.mde.setAutosave(e.target.checked)}
               />
               <span className="settings-toggle-slider" />
             </label>

@@ -36,6 +36,8 @@
 | Cmd + Z | Undo |
 | Cmd + Shift + Z | Redo |
 | Cmd + Enter | Cycle: Bullet / Unchecked Task / Checked Task |
+| Cmd + Alt + Up | Move Block Up |
+| Cmd + Alt + Down | Move Block Down |
 | Tab | Indent List Item |
 | Shift + Tab | Outdent List Item |
 

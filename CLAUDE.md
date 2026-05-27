@@ -16,9 +16,9 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 
 ## Key decisions
 
-- TipTap (ProseMirror) for the editor, not raw contenteditable.
 - `tiptap-markdown` handles MD parse/serialize. The TipTap document model is the source of truth while editing.
-- No auto-save. Explicit Cmd+S only.
+- TipTap (ProseMirror) for the editor, not raw contenteditable.
+- Auto-save is opt-in (disabled by default). When enabled via Settings, saves after 1s of inactivity. Stored as `autosave` in `mde-state.json`. IPC: `get-autosave`, `set-autosave`, `autosave-changed`.
 - File conflict detection: poll mtime, show red banner, disable Save (but not editing).
 - State management: React context + useReducer, no external state lib.
 - User preferences (theme, spellcheck, sidebar width, window bounds, last project root) stored in `mde-state.json` in Electron's userData dir via `loadState`/`saveState` helpers in index.ts.
@@ -40,9 +40,10 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - PDF conversion escapes lines matching `^\d+\.` to prevent Markdown OL interpretation of numbers like "994164972.".
 - tiptap-markdown is configured with `html: false` so raw HTML tags in Markdown (e.g. `<ol>` in body text) are treated as literal text, not parsed as HTML elements. The text node serializer is overridden to skip tiptap-markdown's `escapeHTML` (which converts `<` `>` to `&lt;` `&gt;`), preserving prose like "Apples > oranges." verbatim on save. Standard Markdown character escaping (via prosemirror-markdown's `esc()`) is still applied.
 - Sidebar folder expand/collapse state is lifted to the `Sidebar` component (not `DirectoryNode`) via a `Set<string>` of expanded paths, so it persists across explorer/outline view switches.
-- Todo lists use `@tiptap/extension-task-list` and `@tiptap/extension-task-item` with `nested: true`. Checkboxes can be clicked. Checked items show strikethrough. tiptap-markdown serializes as `- [ ]` / `- [x]`. Adjacent bullet/task lists have reduced margin via CSS (ul + ul[data-type="taskList"] etc.).
+- Todo lists use `@tiptap/extension-task-list` and `@tiptap/extension-task-item` with `nested: true`. Checkboxes can be clicked. Checked items show strikethrough. tiptap-markdown serializes as `- [ ]` / `- [x]`. Adjacent bullet/task lists have reduced margin via CSS (ul + ul\[data-type="taskList"\] etc.).
 - Cmd+Enter cycles the current line (or all selected lines) between 3 states: bullet list, unchecked task, checked task. Implemented as a custom TipTap extension (`CmdEnterCycle`). Must never insert a line break.
 - Tab/Shift+Tab: in lists, indent/outdent; elsewhere, insert a tab character. Always captured by the editor -- never escapes to browser focus behavior. Implemented as a custom TipTap extension (`TabHandler`).
+- Cmd+Alt+Up/Down moves the block containing the cursor (paragraph, heading, or list item) above/below its sibling. For list items, operates within the list; for top-level blocks, swaps with the neighboring block. Implemented as the `MoveBlock` TipTap extension.
 - Deleting a file via the sidebar also closes any tab open to that file, without adding it to the reopenable closed-tabs queue.
 - Keyboard Shortcuts help page opens as a read-only tab. Content loaded from `docs/help/keyboard_shortcuts.md` via webpack `asset/source`. Read-only tabs hide the toolbar, TableMenu, and LinkPreview; the editor caret is transparent.
 - `deserializeInto` (used for file-reload on disk change) uses `createNodeFromContent` + manual transaction, not `setContent()`, to avoid the file appearing as raw HTML.
@@ -74,7 +75,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-46 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+57 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 What exists:
 
@@ -85,12 +86,12 @@ What exists:
   - Root header with New File (`bi-file-earmark-plus`), New Folder (`bi-folder-plus`), Collapse All (`bi-arrows-collapse`) buttons
   - Selection state with teal highlight; Enter to rename selected item
   - Creates files/folders in selected folder or as sibling to selected file
-  - Right-click context menu: Rename, Delete (confirmation dialog, moves to Trash), Copy Relative Path (shows info toast)
+  - Right-click context menu: Rename, Delete (confirmation dialog, moves to Trash), Copy Relative Path (shows info toast). Folders also show New File / New Folder. Dismissable with Escape.
   - Keyboard: Arrow Up/Down (navigate), Arrow Right/Left (expand/collapse folders), Enter (rename), Escape (deselect), Cmd+Backspace (delete with confirmation dialog)
   - Clicking outside sidebar deselects
   - Folder expand/collapse state persists across explorer/outline view switches
 - Document outline sidebar (icon tabs with rounded bg, not text+underline)
-- Tabbed editor with smart dirty tracking (undo back to original clears dirty)
+- Tabbed editor with smart dirty tracking (undo back to original clears dirty), scroll position preserved across tab switches (saved via scroll event listeners, restored on tab activation)
 - Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, lists, todo list, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable
 - Link editing via floating LinkBar (top-right of editor, like FindBar) -- preserves text selection highlight via ProseMirror decorations while editing URL
 - Link preview popup (top-right of editor area when cursor is in a link)
@@ -102,13 +103,13 @@ What exists:
 - DOCX/PDF import: converts to `.{ext}.md` on click (e.g. `report.pdf.md` -- preserves original extension), renames original to `.bak.{ext}`, backup files hidden from sidebar/quick-open. PDF extraction: position-based line grouping, multi-column layout detection, paragraph break detection, table detection. DOCX: mammoth + turndown with HTML table preprocessing for clean Markdown table output (zero HTML in output).
 - PDF export (via Electron printToPDF)
 - Dark mode support (light / dark / system default, stored in user state file)
-- Settings dialog (Cmd+,) with theme selector, spellcheck toggle, terminal launcher installer
+- Settings dialog (Cmd+,) with theme selector, spellcheck toggle, auto-save toggle (1s debounce), terminal launcher installer
 - Terminal launcher: `mde .` opens a folder from the terminal (installed via Settings)
 - Toast notifications with semantic colors (danger, info variants -- separate text/border color variables for contrast in dark mode) and scale animations
 - Window dimensions and position persisted and restored on reopen (debounced 500ms save on resize/move)
 - Custom app icon (icon.icns, generated from icon.png)
 - Rainbow wave color animation on project title in the title bar (12s cycle, 0.6s stagger per letter)
-- Keyboard shortcuts: Cmd+S (save), Cmd+Shift+S (save as), Cmd+K (link), Cmd+Shift+E (code block), Cmd+F (find), Cmd+O (quick open), Cmd+Shift+O (open folder), Cmd+W (close tab), Cmd+Shift+T (reopen tab), Cmd+H (hide), Cmd+, (settings), Cmd+Alt+Left/Right (prev/next tab), Cmd+Enter (toggle todo checkbox)
+- Keyboard shortcuts: Cmd+S (save), Cmd+Shift+S (save as), Cmd+K (link), Cmd+Shift+E (code block), Cmd+F (find), Cmd+O (quick open), Cmd+Shift+O (open folder), Cmd+W (close tab), Cmd+Shift+T (reopen tab), Cmd+H (hide), Cmd+, (settings), Cmd+Alt+Left/Right (prev/next tab), Cmd+Enter (toggle todo checkbox), Cmd+Alt+Up/Down (move block/list item up/down)
 - Keyboard Shortcuts help page: opens as a read-only tab from Help menu or empty-state link. Uses `initialContent` and `readOnly` tab properties.
 - Help menu with Keyboard Shortcuts item (sends `show-keyboard-shortcuts` IPC)
 

@@ -842,6 +842,19 @@ ipcMain.handle('set-spellcheck', (_event, enabled: boolean) => {
   }
 });
 
+ipcMain.handle('get-autosave', () => {
+  return loadState().autosave === true;
+});
+
+ipcMain.handle('set-autosave', (_event, enabled: boolean) => {
+  saveState({ autosave: enabled });
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('autosave-changed', enabled);
+    }
+  }
+});
+
 ipcMain.handle('get-sidebar-width', () => {
   return loadState().sidebarWidth || null;
 });

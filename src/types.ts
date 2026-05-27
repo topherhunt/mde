@@ -59,6 +59,9 @@ export interface MdeAPI {
   getSpellcheck: () => Promise<boolean>;
   setSpellcheck: (enabled: boolean) => Promise<void>;
   onSpellcheckChanged: (callback: (enabled: boolean) => void) => () => void;
+  getAutosave: () => Promise<boolean>;
+  setAutosave: (enabled: boolean) => Promise<void>;
+  onAutosaveChanged: (callback: (enabled: boolean) => void) => () => void;
   convertImport: (filePath: string) => Promise<{ mdPath: string } | { error: string }>;
   watchProject: (root: string) => void;
   unwatchProject: (root: string) => void;

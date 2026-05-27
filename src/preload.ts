@@ -162,6 +162,14 @@ const api = {
     return () => ipcRenderer.removeListener('spellcheck-changed', handler);
   },
 
+  getAutosave: (): Promise<boolean> => ipcRenderer.invoke('get-autosave'),
+  setAutosave: (enabled: boolean): Promise<void> => ipcRenderer.invoke('set-autosave', enabled),
+  onAutosaveChanged: (callback: (enabled: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, enabled: boolean) => callback(enabled);
+    ipcRenderer.on('autosave-changed', handler);
+    return () => ipcRenderer.removeListener('autosave-changed', handler);
+  },
+
   convertImport: (filePath: string): Promise<{ mdPath: string } | { error: string }> =>
     ipcRenderer.invoke('convert-import', filePath),
 

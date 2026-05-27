@@ -155,17 +155,22 @@ interface ContextMenuProps {
   onStartRename: (entry: FileEntry) => void;
   onRequestDelete: (entry: FileEntry) => void;
   onToast: (msg: string, variant?: string) => void;
+  onCreateInFolder: (folderPath: string, type: 'file' | 'folder') => void;
 }
 
-function ContextMenu({ menu, projectRoot, onClose, onStartRename, onRequestDelete, onToast }: ContextMenuProps) {
+function ContextMenu({ menu, projectRoot, onClose, onStartRename, onRequestDelete, onToast, onCreateInFolder }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+    };
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onClick); document.removeEventListener('keydown', onKey); };
   }, [onClose]);
 
   const style: React.CSSProperties = {
@@ -195,8 +200,29 @@ function ContextMenu({ menu, projectRoot, onClose, onStartRename, onRequestDelet
     onClose();
   };
 
+  const handleNewFile = () => {
+    onCreateInFolder(menu.entry.path, 'file');
+    onClose();
+  };
+
+  const handleNewFolder = () => {
+    onCreateInFolder(menu.entry.path, 'folder');
+    onClose();
+  };
+
   return (
     <div ref={ref} className="ctx-menu" style={style}>
+      {menu.entry.isDirectory && (
+        <>
+          <button className="ctx-menu-item" onClick={handleNewFile}>
+            <i className="bi bi-file-earmark-plus" /> New File
+          </button>
+          <button className="ctx-menu-item" onClick={handleNewFolder}>
+            <i className="bi bi-folder-plus" /> New Folder
+          </button>
+          <div className="ctx-menu-divider" />
+        </>
+      )}
       <button className="ctx-menu-item" onClick={handleRename}>
         <i className="bi bi-pencil" /> Rename
       </button>
@@ -300,14 +326,17 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
     setSelectedPath(entry.path);
   }, []);
 
+  const createTargetRef = useRef<string | null>(null);
+
   const handleCreate = useCallback(async (name: string, type: 'file' | 'folder') => {
     if (!projectRoot || !name) {
       setCreating(null);
+      createTargetRef.current = null;
       return;
     }
-    // Determine target directory based on selection
-    let targetDir = projectRoot;
-    if (selectedPath) {
+    // Use explicit target if set (from context menu), otherwise determine from selection
+    let targetDir = createTargetRef.current || projectRoot;
+    if (!createTargetRef.current && selectedPath) {
       const stats = await window.mde.getFileStats(selectedPath);
       if (stats?.isDirectory) {
         targetDir = selectedPath;
@@ -328,7 +357,15 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
       triggerRefresh();
     }
     setCreating(null);
+    createTargetRef.current = null;
   }, [projectRoot, selectedPath, triggerRefresh, onOpenFile]);
+
+  const handleCreateInFolder = useCallback((folderPath: string, type: 'file' | 'folder') => {
+    createTargetRef.current = folderPath;
+    setSelectedPath(folderPath);
+    if (!expandedPaths.has(folderPath)) onToggleExpanded(folderPath);
+    setCreating(type);
+  }, [expandedPaths, onToggleExpanded]);
 
   const handleDragStart = useCallback((entryPath: string) => {
     setDragSourcePath(entryPath);
@@ -377,8 +414,8 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
       const editable = (e.target as HTMLElement)?.isContentEditable;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || editable) return;
 
-      // Enter -> rename
-      if (e.key === 'Enter' && selectedPath && !renamingEntry && !creating) {
+      // Enter -> rename (but not while delete dialog or context menu is open)
+      if (e.key === 'Enter' && selectedPath && !renamingEntry && !creating && !deletingEntry && !contextMenu) {
         e.preventDefault();
         window.mde.getFileStats(selectedPath).then(stats => {
           if (stats) {
@@ -390,7 +427,7 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
       }
 
       // Cmd+Backspace -> delete with confirmation dialog
-      if (e.key === 'Backspace' && e.metaKey && selectedPath && !renamingEntry && !creating) {
+      if (e.key === 'Backspace' && e.metaKey && selectedPath && !renamingEntry && !creating && !deletingEntry) {
         e.preventDefault();
         window.mde.getFileStats(selectedPath).then(stats => {
           if (stats) {
@@ -450,7 +487,7 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [selectedPath, renamingEntry, creating, projectRoot, expandedPaths, onToggleExpanded, triggerRefresh, onOpenFile]);
+  }, [selectedPath, renamingEntry, creating, deletingEntry, contextMenu, projectRoot, expandedPaths, onToggleExpanded, triggerRefresh, onOpenFile]);
 
   if (!projectRoot) {
     return <div className="sidebar-empty">Open a folder to browse files</div>;
@@ -500,6 +537,7 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
           onStartRename={setRenamingEntry}
           onRequestDelete={setDeletingEntry}
           onToast={onToast}
+          onCreateInFolder={handleCreateInFolder}
         />
       )}
     </>

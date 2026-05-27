@@ -100,11 +100,13 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ### For Claude
 
-- (Fix the mess w bullet vs task list items)
-  - Items getting needlessly separated out into different lists when they can
-- When you're flipping back and forth between tabs, the app should remember your scroll position. Currently if you scroll down then switch to another tab and then switch back, it jumps to where your *text cursor* is -- better than top of document, but still jarring and disruptive to focus.
-- New hotkey (And please don't forget to add this to the shortcuts document): Cmd + Opt + down/up moves the line the cursor is in, above/below the neighboring element. So it seamlessly swaps positions of li's, paragraphs, and headings without getting confused or mangling / merging their syntax. You can let me know what you think here as far as the best app approach and best practices, but I think the only challenge will be that LI items are technically sub-children inside a UL or OL, whereas paragraphs sit on their own and headings sit on their own. I'm guessing that w won't be a huge challenge for you.u
-- Files sidebar: If you right-click on a folder, the menu should include items to create a new file or a new folder inside it.
-- Files sidebar: The right-click menu should be dismissable by pressing `esc`.
-- Bug: If in the files sidebar you press the command delete keyboard shortcut to delete one file or folder, and then you press enter to confirm that, it appears to enter the UI into a stuck state where you can no longer press that same hotkey again, that that hotkey seems to be permanently made invalid Until you totally re-render the file's sidebar by clicking on the outline and then clicking back.
-- In the settings menu you should be able to set a checkbox to enable autosave mode, which is disabled by default. In autosave mode, as you make changes, there's a debounce and after a second, like yeah, one second of inactivity, it auto-saves or writes your file changes as if you'd pressed Cmd + S.
+- Please add more margin below headings and paragraphs, since ul elements don't have any default padding (to get around the task-list-combined-with-bullet-list problem).
+- Previous Claude instances really struggled to add any meaningful support for task/checkbox list items. See commit messages 6cf2ac1 and 0140c6c. Now as flat lists they work fine BUT they get broken fast if you try to render nested lists. For example:
+
+```
+- foo
+- [ ] bar
+  - baz
+```
+
+the 3rd baz bullet doesn't render, it's just bare indented text. Bullets under tasks should work fine. Tasks under bullets should work fine. I'm starting to wonder if the earlier architectural decision to make checkbox-list-items be wholly separate <ul> elements from the standard bullet-list <ul>, was perhaps a mistake, because now it's a pain in the neck to indent and interleave them. What would it look like if task items were just a special case of <li>, within the same <ul>, with that particular li's bullet replaced with a clickable checkbox, but other neighboring and child <li>'s aren't affected?

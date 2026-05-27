@@ -1415,3 +1415,214 @@ test.describe('List keyboard interactions', () => {
     fs.rmSync(tmpDir, { recursive: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Move block (Cmd+Alt+Up/Down)
+// ---------------------------------------------------------------------------
+
+test.describe('Move block', () => {
+  test('Cmd+Alt+Down moves a paragraph below the next paragraph', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'move.md');
+    fs.writeFileSync(tmpFile, 'First paragraph\n\nSecond paragraph\n\nThird paragraph\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('First paragraph', { timeout: 5000 });
+
+    // Click at start of "First paragraph"
+    await editor.locator('p').first().click();
+    await page.waitForTimeout(100);
+
+    // Move it down
+    await page.keyboard.press('Meta+Alt+ArrowDown');
+    await page.waitForTimeout(200);
+
+    // Now order should be: Second, First, Third
+    const paragraphs = editor.locator('p');
+    await expect(paragraphs.nth(0)).toContainText('Second paragraph');
+    await expect(paragraphs.nth(1)).toContainText('First paragraph');
+    await expect(paragraphs.nth(2)).toContainText('Third paragraph');
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('Cmd+Alt+Up moves a list item above its sibling', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'moveli.md');
+    fs.writeFileSync(tmpFile, '- Apple\n- Banana\n- Cherry\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Banana', { timeout: 5000 });
+
+    // Click on "Banana" (second list item)
+    await editor.locator('li:nth-child(2) p').click();
+    await page.waitForTimeout(100);
+
+    // Move it up
+    await page.keyboard.press('Meta+Alt+ArrowUp');
+    await page.waitForTimeout(200);
+
+    // Now order should be: Banana, Apple, Cherry
+    const items = editor.locator('li');
+    await expect(items.nth(0)).toContainText('Banana');
+    await expect(items.nth(1)).toContainText('Apple');
+    await expect(items.nth(2)).toContainText('Cherry');
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scroll position preservation
+// ---------------------------------------------------------------------------
+
+test.describe('Scroll position', () => {
+  test('switching tabs preserves scroll position', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    // Create a long file
+    const longContent = Array.from({ length: 100 }, (_, i) => `## Heading ${i}\n\nParagraph ${i} content.\n`).join('\n');
+    const file1 = path.join(tmpDir, 'long.md');
+    const file2 = path.join(tmpDir, 'short.md');
+    fs.writeFileSync(file1, longContent);
+    fs.writeFileSync(file2, '# Short file\n\nJust some text.\n');
+
+    // Open first file
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, file1);
+    await expect(page.locator('.tiptap')).toContainText('Heading 0', { timeout: 5000 });
+
+    // Scroll down substantially via the active pane's editor-content
+    await page.evaluate(() => {
+      const pane = document.querySelector('.editor-tab-pane[style*="flex"]');
+      const el = pane?.querySelector('.editor-content');
+      if (el) el.scrollTop = 500;
+    });
+    await page.waitForTimeout(100);
+
+    const scrollBefore = await page.evaluate(() => {
+      const pane = document.querySelector('.editor-tab-pane[style*="flex"]');
+      const el = pane?.querySelector('.editor-content');
+      return el ? el.scrollTop : 0;
+    });
+    expect(scrollBefore).toBeGreaterThanOrEqual(400);
+
+    // Open second file
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, file2);
+    await expect(page.locator('.tab.active')).toContainText('short.md', { timeout: 5000 });
+
+    // Switch back to first file
+    await page.locator('.tab').first().click();
+    await page.waitForTimeout(500);
+
+    // Check scroll position is restored
+    const scrollAfter = await page.evaluate(() => {
+      const pane = document.querySelector('.editor-tab-pane[style*="flex"]');
+      const el = pane?.querySelector('.editor-content');
+      return el ? el.scrollTop : 0;
+    });
+    expect(scrollAfter).toBeGreaterThanOrEqual(400);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Context menu features
+// ---------------------------------------------------------------------------
+
+test.describe('Context menu', () => {
+  test('right-click on folder shows New File and New Folder options', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const subDir = path.join(tmpDir, 'subfolder');
+    fs.mkdirSync(subDir);
+    fs.writeFileSync(path.join(tmpDir, 'test.md'), '# Test\n');
+
+    await app.evaluate(({ BrowserWindow }, root) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
+    }, tmpDir);
+
+    await expect(page.locator('.tree-folder')).toContainText('subfolder', { timeout: 5000 });
+
+    // Right-click on the folder
+    await page.locator('.tree-folder').filter({ hasText: 'subfolder' }).click({ button: 'right' });
+    await page.waitForTimeout(200);
+
+    // Should see New File and New Folder in context menu
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New File' })).toBeVisible();
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New Folder' })).toBeVisible();
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('Esc dismisses context menu', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    fs.writeFileSync(path.join(tmpDir, 'test.md'), '# Test\n');
+
+    await app.evaluate(({ BrowserWindow }, root) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
+    }, tmpDir);
+
+    await expect(page.locator('.tree-file')).toContainText('test.md', { timeout: 5000 });
+
+    // Right-click on the file
+    await page.locator('.tree-file').filter({ hasText: 'test.md' }).click({ button: 'right' });
+    await page.waitForTimeout(200);
+    await expect(page.locator('.ctx-menu')).toBeVisible();
+
+    // Press Escape
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    await expect(page.locator('.ctx-menu')).not.toBeVisible();
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('right-click on file does not show New File/New Folder', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    fs.writeFileSync(path.join(tmpDir, 'test.md'), '# Test\n');
+
+    await app.evaluate(({ BrowserWindow }, root) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
+    }, tmpDir);
+
+    await expect(page.locator('.tree-file')).toContainText('test.md', { timeout: 5000 });
+
+    // Right-click on the file
+    await page.locator('.tree-file').filter({ hasText: 'test.md' }).click({ button: 'right' });
+    await page.waitForTimeout(200);
+    await expect(page.locator('.ctx-menu')).toBeVisible();
+
+    // Should NOT have New File or New Folder
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New File' })).not.toBeVisible();
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New Folder' })).not.toBeVisible();
+
+    // But should still have Rename, Delete, Copy Path
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Rename' })).toBeVisible();
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Delete' })).toBeVisible();
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});

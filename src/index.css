@@ -559,12 +559,12 @@ body {
 }
 
 /* --- TipTap content styles --- */
-.editor-content .tiptap h1 { font-size: 2em; font-weight: 700; line-height: 1.2; margin-top: 1.5em; }
-.editor-content .tiptap h2 { font-size: 1.5em; font-weight: 600; line-height: 1.3; margin-top: 1.4em; }
-.editor-content .tiptap h3 { font-size: 1.25em; font-weight: 600; line-height: 1.4; margin-top: 1.3em; }
-.editor-content .tiptap h4 { font-size: 1.1em; font-weight: 600; line-height: 1.4; margin-top: 1.2em; }
-.editor-content .tiptap h5 { font-size: 1em; font-weight: 600; line-height: 1.4; margin-top: 1.1em; }
-.editor-content .tiptap h6 { font-size: 0.9em; font-weight: 600; line-height: 1.4; margin-top: 1em; }
+.editor-content .tiptap h1 { font-size: 2em; font-weight: 700; line-height: 1.2; margin-top: 1.5em; margin-bottom: 0.5em; }
+.editor-content .tiptap h2 { font-size: 1.5em; font-weight: 600; line-height: 1.3; margin-top: 1.4em; margin-bottom: 0.4em; }
+.editor-content .tiptap h3 { font-size: 1.25em; font-weight: 600; line-height: 1.4; margin-top: 1.3em; margin-bottom: 0.3em; }
+.editor-content .tiptap h4 { font-size: 1.1em; font-weight: 600; line-height: 1.4; margin-top: 1.2em; margin-bottom: 0.3em; }
+.editor-content .tiptap h5 { font-size: 1em; font-weight: 600; line-height: 1.4; margin-top: 1.1em; margin-bottom: 0.3em; }
+.editor-content .tiptap h6 { font-size: 0.9em; font-weight: 600; line-height: 1.4; margin-top: 1em; margin-bottom: 0.3em; }
 
 .editor-content .tiptap h1:first-child,
 .editor-content .tiptap h2:first-child,
@@ -574,6 +574,7 @@ body {
 
 .editor-content .tiptap p {
   line-height: 1.5;
+  margin-bottom: 0.4em;
 }
 
 .editor-content .tiptap a {
