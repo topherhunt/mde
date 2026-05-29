@@ -38,6 +38,7 @@
 | Cmd + Enter | Cycle: Bullet / Unchecked Task / Checked Task |
 | Cmd + Alt + Up | Move Block Up |
 | Cmd + Alt + Down | Move Block Down |
+| Cmd + . | Toggle Fold (list items with children) |
 | Tab | Indent List Item |
 | Shift + Tab | Outdent List Item |
 

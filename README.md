@@ -93,7 +93,6 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 
 ### For me
 
-- Build a new release to fix the crashing bugs etc. Write a changelog.
 - Support right-click to convert to .docx or .pdf, w standard nice-looking formatting & colors (customizable)
   - PDF export -- does this require chrome/puppeteer? can it just use the built-in engine?
 - **Add Claude agent support.**
@@ -101,3 +100,18 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 - Support .csv files too. Plan this out.
 
 ### For Claude
+
+1. Title bar: what's the easiest way to do this? How does titleBarOverlay work?
+2. launchFileHandled: Straightforward? Tricky? Please proceed
+3. Please do add windows terminal launcher support, yes
+4. File associations: Great, please proceed.
+5. Can you help me convert the existing icon to a windows .ico?
+6. PLease do fix to CmdOrCtrl
+
+- I will NOT do code signing. Our readme should instruct users in how to bypass any unsigned-app warnings.
+- I'll do testing manually, thanks
+
+---
+
+- If a file is opened in mde and no project folder is set, default to the outline tab please. It's a more useful default in that case.
+- Bug: If I close the mde window (but don't quit the app, so it's still in the dock) and then drag a .md file onto the dock icon, or double-click the .md file to open it with MDE, *sometimes* (not always) the MDE window opens but to just an empty screen, with no file loaded. Other times it does open that first file correctly. If any file IS already open, this bug doesn't happen and opening a 2nd file via double-click etc always seems to work correctly.
