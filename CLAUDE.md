@@ -6,7 +6,7 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 
 ## Architecture
 
-**Main process** (`src/index.ts`): Window management, file I/O, 22 IPC handlers, file watching, menu bar, drag-drop at the OS level, DOCX/PDF import conversion. No rendering.
+**Main process** (`src/index.ts`): Window management, file I/O, IPC handlers, file watching, menu bar, drag-drop at the OS level, DOCX/PDF import conversion. No rendering.
 
 - **Preload** (`src/preload.ts`): Exposes `window.mde` API via contextBridge. All file system access goes through this bridge.
 - **Renderer** (`src/renderer.tsx`): React entry point. Imports Bootstrap Icons CSS and app styles.
@@ -21,7 +21,7 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - Auto-save is opt-in (disabled by default). When enabled via Settings, saves after 1s of inactivity. Stored as `autosave` in `mde-state.json`. IPC: `get-autosave`, `set-autosave`, `autosave-changed`.
 - File conflict detection: poll mtime, show red banner, disable Save (but not editing).
 - State management: React context + useReducer, no external state lib.
-- User preferences (theme, spellcheck, sidebar width, window bounds, last project root) stored in `mde-state.json` in Electron's userData dir via `loadState`/`saveState` helpers in index.ts.
+- User preferences (theme, spellcheck, sidebar width, window bounds, last project root, fold state) stored in `mde-state.json` in Electron's userData dir via `loadState`/`saveState` helpers in index.ts.
 - Initial file load uses a manual ProseMirror transaction with `addToHistory: false` so undo doesn't clear the buffer. Do not use `editor.commands.setContent()` for initial load -- TipTap's `beforeTransaction` event fires after history has already recorded the transaction.
 - The `open-file` macOS event fires before `app.on('ready')` when launched via `mde .`. A `launchFileHandled` flag prevents the ready handler from creating a duplicate default window.
 - Renderer webpack config does NOT use the `@vercel/webpack-asset-relocator-loader`. That loader breaks ESM imports from TipTap packages. It's only needed for native node modules in the main process.
@@ -49,6 +49,11 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - `deserializeInto` (used for file-reload on disk change) uses `createNodeFromContent` + manual transaction, not `setContent()`, to avoid the file appearing as raw HTML.
 - File explorer context menu (rename, delete, copy path) and create file/folder use dedicated IPC handlers (`rename-file`, `trash-file`, `create-file`, `create-directory`). Delete moves to Trash via `shell.trashItem()`, never permanent delete.
 - Sidebar drag-drop: files and folders can be dragged within the sidebar to move them into different folders (or to root). Dragging onto a file targets its parent folder. Drop targets (folder rows, root header) show a pulsating blue outline. Uses `renameFile` IPC (fs.rename) for the move. Prevents dropping into own descendants or current parent.
+- Loose list handling: blank lines (`\n\n`) between list items at the same or parent indent level split them into separate lists on load. A `{LIST_SEPARATOR}` placeholder (plain ASCII) is inserted before parsing to trick markdown-it into splitting, then `cleanParsedListHtml()` replaces the placeholder `<p>` with an empty paragraph in the editor. On save, adjacent lists with an empty paragraph between them produce the `\n\n`. All lists are forced "tight" on load (`data-tight="true"`, `<p>` wrappers inside `<li>` removed) so tiptap-markdown never adds blank lines between items within the same list. The `JoinAdjacentLists` ProseMirror plugin auto-merges adjacent lists of the same type, so deleting the separator paragraph joins them.
+- Horizontal rules show a blue outline (`var(--accent)`) when selected via `ProseMirror-selectednode` class.
+- Enter at end of a parent list item (one that has a sublist) creates a new first child in the sublist rather than splitting the parent as a sibling. Only triggers when cursor depth is `liDepth + 1` (in the item's own paragraph). Enter on empty nested list items creates siblings (not bare `<p>` elements) -- the list-splitting behavior only applies at root level.
+- Code folding: Cmd+. toggles collapse on list items with children. Fold state is stored in a ProseMirror plugin (`foldKey`) as a `Set<number>` of positions. Decorations add `folded` class to the `<li>` and a `fold-badge` widget (`<span>`) at the end of the paragraph. The fold caret is a CSS `::after` pseudo-element (SVG chevron) to the left of the bullet/checkbox. Clicking the caret (left padding area) or badge unfolds via `handleDOMEvents.mousedown`. Cmd+. only folds the item the cursor is directly in (paragraph at depth `liDepth + 1`); cursor in a childless nested item does nothing -- the keystroke is consumed (`return true`) to prevent propagation.
+- Fold state persistence: stored in `mde-state.json` as `foldState: { [filePath]: number[] }` -- arrays of 1-based markdown line numbers. On fold/unfold, `foldPosToLineNumbers()` serializes the markdown and matches folded items' text to line numbers. On file load, `lineNumbersToFoldPositions()` matches persisted line numbers back to doc positions by text content. Both functions use `stripInlineMarkdown()` to strip bold/italic/code/link/escape formatting before comparing. File rename (`rename-file` IPC) migrates fold state keys. External file reloads (silent and conflict-banner) save/restore fold state around `deserializeInto`. Currently line-number-only; if folds are frequently lost from external edits, a djb2 hash of each line's text prefix can be added as a secondary matching fallback.
 
 ## Commands
 
@@ -75,7 +80,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-58 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+68 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 What exists:
 
@@ -109,9 +114,10 @@ What exists:
 - Window dimensions and position persisted and restored on reopen (debounced 500ms save on resize/move)
 - Custom app icon (icon.icns, generated from icon.png)
 - Rainbow wave color animation on project title in the title bar (12s cycle, 0.6s stagger per letter)
-- Keyboard shortcuts: Cmd+S (save), Cmd+Shift+S (save as), Cmd+K (link), Cmd+Shift+E (code block), Cmd+F (find), Cmd+O (quick open), Cmd+Shift+O (open folder), Cmd+W (close tab), Cmd+Shift+T (reopen tab), Cmd+H (hide), Cmd+, (settings), Cmd+Alt+Left/Right (prev/next tab), Cmd+Enter (toggle todo checkbox), Cmd+Alt+Up/Down (move block/list item up/down)
+- Keyboard shortcuts: Cmd+S (save), Cmd+Shift+S (save as), Cmd+K (link), Cmd+Shift+E (code block), Cmd+F (find), Cmd+O (quick open), Cmd+Shift+O (open folder), Cmd+W (close tab), Cmd+Shift+T (reopen tab), Cmd+H (hide), Cmd+, (settings), Cmd+Alt+Left/Right (prev/next tab), Cmd+Enter (toggle todo checkbox), Cmd+Alt+Up/Down (move block/list item up/down), Cmd+. (toggle fold on list item with children)
 - Keyboard Shortcuts help page: opens as a read-only tab from Help menu or empty-state link. Uses `initialContent` and `readOnly` tab properties.
 - Help menu with Keyboard Shortcuts item (sends `show-keyboard-shortcuts` IPC)
+- Code folding: Cmd+. on a list item with children toggles fold. When folded, children are hidden, a blue "..." badge appears after the text, and a blue chevron caret appears to the left of the bullet/checkbox. Fold state persists across file close/reopen and external file changes. Clicking the caret or badge unfolds.
 
 **Not yet done / known gaps:**
 

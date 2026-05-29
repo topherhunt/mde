@@ -110,12 +110,66 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
   return win;
 }
 
+let aboutWindow: BrowserWindow | null = null;
+
+function showAboutWindow(): void {
+  if (aboutWindow && !aboutWindow.isDestroyed()) {
+    aboutWindow.focus();
+    return;
+  }
+  aboutWindow = new BrowserWindow({
+    width: 320,
+    height: 240,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    title: 'About MDE',
+    show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true },
+  });
+  const version = app.getVersion();
+  const html = `<!DOCTYPE html>
+<html><head><style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; text-align: center;
+    padding: 30px 20px; margin: 0; background: #f5f5f7; color: #333; user-select: none; }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+  .version { font-size: 13px; color: #888; margin-bottom: 16px; }
+  .credit { font-size: 14px; margin-bottom: 8px; }
+  a { color: #0066cc; text-decoration: none; font-size: 13px; }
+  a:hover { text-decoration: underline; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #2a2a2c; color: #e0e0e0; }
+    .version { color: #999; }
+    a { color: #4da3ff; }
+  }
+</style></head><body>
+  <h1>MDE</h1>
+  <div class="version">Version ${version}</div>
+  <div class="credit">Made with \u{1F499} by Topher Hunt</div>
+  <a href="https://github.com/topherhunt/mde">github.com/topherhunt/mde</a>
+</body></html>`;
+  aboutWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  aboutWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  aboutWindow.webContents.on('will-navigate', (e, url) => {
+    e.preventDefault();
+    shell.openExternal(url);
+  });
+  aboutWindow.once('ready-to-show', () => aboutWindow!.show());
+  aboutWindow.on('closed', () => { aboutWindow = null; });
+}
+
 function buildMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: app.name,
       submenu: [
-        { role: 'about' },
+        {
+          label: 'About MDE',
+          click: () => showAboutWindow(),
+        },
         { type: 'separator' },
         {
           label: 'Settings...',
@@ -315,6 +369,13 @@ ipcMain.handle('get-file-stats', async (_event, filePath: string) => {
 
 ipcMain.handle('rename-file', async (_event, oldPath: string, newPath: string) => {
   await fs.promises.rename(oldPath, newPath);
+  // Migrate fold state to the new path
+  const foldState = { ...(loadState().foldState || {}) };
+  if (foldState[oldPath]) {
+    foldState[newPath] = foldState[oldPath];
+    delete foldState[oldPath];
+    saveState({ foldState });
+  }
 });
 
 ipcMain.handle('trash-file', async (_event, filePath: string) => {
@@ -855,6 +916,25 @@ ipcMain.handle('set-autosave', (_event, enabled: boolean) => {
   }
 });
 
+// Fold state persistence: stores folded list item line numbers per file.
+// Currently uses markdown line numbers only. If folds are frequently lost
+// due to external edits shifting line numbers, we can add a djb2 hash of
+// each folded line's text prefix as a secondary matching criterion.
+ipcMain.handle('get-fold-state', (_event, filePath: string) => {
+  const foldState = loadState().foldState || {};
+  return foldState[filePath] || [];
+});
+
+ipcMain.handle('set-fold-state', (_event, filePath: string, lineNumbers: number[]) => {
+  const foldState = { ...(loadState().foldState || {}) };
+  if (lineNumbers.length === 0) {
+    delete foldState[filePath];
+  } else {
+    foldState[filePath] = lineNumbers;
+  }
+  saveState({ foldState });
+});
+
 ipcMain.handle('get-sidebar-width', () => {
   return loadState().sidebarWidth || null;
 });
@@ -932,11 +1012,6 @@ app.on('open-file', (event, filePath) => {
 // --- App lifecycle ---
 
 app.on('ready', () => {
-  app.setAboutPanelOptions({
-    applicationName: 'MDE',
-    applicationVersion: app.getVersion(),
-    credits: 'Made with 💙\nby Topher Hunt\n\nhttps://github.com/topherhunt/mde',
-  });
   buildMenu();
   if (launchFileHandled) return;
   const cliPath = process.argv.find((arg, i) =>

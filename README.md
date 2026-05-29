@@ -8,16 +8,16 @@ Inspired by [Thomas Ptacek's MDV app](https://sockpuppet.org/blog/2026/05/12/ema
 
 ## Why MDE?
 
-MDE fills the gap between Obsidian and VS Code for Markdown editing:
+MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 
 - **True WYSIWYG** -- like Obsidian, you see formatted text as you type, not raw Markdown syntax
-- **Folder-based, no vault lock-in** -- open any folder from the terminal (`mde .`) or drag it onto the window or dock icon, like VS Code. No project files, no config, no setup.
+- **Folder-based, no vault lock-in** -- open any folder from the terminal (`mde .`) or drag it onto the window or dock icon, like VS Code. No special vault folder to set up. Every folder gets the same treatment.
 - **Auto-convert PDF & DOCX** -- click a PDF or DOCX in the sidebar and it's converted to editable Markdown on the spot, with the original kept as a backup (Warning: conversion is not perfect)
 - **File conflict detection** -- smart auto-reload or warning is displayed if file conflicts are detected. I've been burned by Obsidian and VS Code's wonky file-conflict handling.
 
 ## Features
 
-- **WYSIWYG editing** -- formatting toolbar with headings, bold, italic, strikethrough, highlight, lists, todo lists, blockquotes, code, links, tables, and horizontal rules.
+- **WYSIWYG editing** -- formatting toolbar with headings, bold, italic, strikethrough, highlight, lists, todo lists, blockquotes, code, links, tables, and horizontal rules..
 - **Structured lists** -- Obsidian and VS Code both make it easy to produce invalid bullet/number/task lists. MDE gives you opinionated constraints.
 - [ ] **File Explorer & Document Outline sidebar** -- keyboard-navigable, resizable, with context menu (rename, delete, copy path)
 - [ ] **Tabbed editing** -- open multiple files, reorder by drag, tentative (preview) tabs on single-click
@@ -101,23 +101,3 @@ Produces a distributable `.app` (macOS) in the `out/make/` directory.
 - Support .csv files too. Plan this out.
 
 ### For Claude
-
-- So you did fix the bug where when you place your cursor in a list sub item and you press Command Enter, then that sub item's state gets cycled instead of the parent state getting cycled. But if I click and drag to select a range of text, the parent/root item is still what gets cycled. Instead of the *selected lines* all getting cycled. This happens if the even if the selected range is just one character within a single list item. The root item is cycled state instead of the current item that you're selecting in.
-
----
-
-- Fix on pressing Cmd + Enter with multiple bullets of different nestings selected: You partly fixed it. What I'm finding now is that if li elements that are NOT PARENTS of each other are selected, Cmd + Enter behaves properly. But if a selection contains BOTH A PARENT AND ITS CHILD, Cmd + Enter only partly applies the state-change (eg. just to the child) and re-pressing it has no further effect, it gets "trapped" rather than cycling status with each hotkey press. In the following example, selecting and cycling items 3-5 works great; selecting and cycling elements 2-3 does not.
-
-```
-- number 1
-  - number 2
-    - number 3
-  - number 4
-- number 5
-```
-
-- Fix on Cmd + Alt + up/down:
-  - If your cursor is in an indented list item and it has no siblings, Cmd + Alt + up/down does move / reparent it successfully, but it also creates an empty li item where there previously was none. It should not do that.
-  - If a range of lines is selected, this should move all selected lines together as a unit, if possible, rather than just moving the line the cursor is on.
-
-- About page, text: can you make it centered, and can you make the url a clickable link?

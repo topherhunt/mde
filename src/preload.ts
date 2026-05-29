@@ -215,6 +215,12 @@ const api = {
 
   setSidebarWidth: (width: number): Promise<void> =>
     ipcRenderer.invoke('set-sidebar-width', width),
+
+  getFoldState: (filePath: string): Promise<number[]> =>
+    ipcRenderer.invoke('get-fold-state', filePath),
+
+  setFoldState: (filePath: string, lineNumbers: number[]): Promise<void> =>
+    ipcRenderer.invoke('set-fold-state', filePath, lineNumbers),
 };
 
 contextBridge.exposeInMainWorld('mde', api);

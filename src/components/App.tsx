@@ -3,7 +3,7 @@ import { Tab } from '../types';
 import Sidebar from './Sidebar';
 import TabBar from './TabBar';
 import Toolbar from './Toolbar';
-import Editor from './Editor';
+import Editor, { foldKey, RESTORE_FOLDS, foldPosToLineNumbers, lineNumbersToFoldPositions } from './Editor';
 import ConflictBanner from './ConflictBanner';
 import FindBar from './FindBar';
 import LinkBar from './LinkBar';
@@ -343,10 +343,25 @@ export default function App() {
   const reloadActiveTab = useCallback(async () => {
     if (!activeTab || !activeEditor || !activeTab.filePath) return;
 
+    // Save fold state before reload (line numbers, not positions)
+    const { collapsed } = foldKey.getState(activeEditor.state);
+    const savedFoldLines = foldPosToLineNumbers(activeEditor, collapsed);
+
     const content = await window.mde.readFile(activeTab.filePath);
     const stats = await window.mde.getFileStats(activeTab.filePath);
     const { Markdown } = await import('../utils/markdown');
     Markdown.deserializeInto(activeEditor, content);
+
+    // Restore fold state after reload
+    if (savedFoldLines.length) {
+      const positions = lineNumbersToFoldPositions(activeEditor.state.doc, content, savedFoldLines);
+      if (positions.length) {
+        const tr = activeEditor.state.tr;
+        tr.setMeta(RESTORE_FOLDS, positions);
+        tr.setMeta('addToHistory', false);
+        activeEditor.view.dispatch(tr);
+      }
+    }
 
     dispatch({ type: 'UPDATE_TAB_MTIME', tabId: activeTab.id, mtime: stats?.mtimeMs ?? null });
     dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
@@ -469,9 +484,24 @@ export default function App() {
           } else {
             const editor = editorsRef.current.get(tab.id);
             if (editor) {
+              // Save fold state before silent reload
+              const { collapsed } = foldKey.getState(editor.state);
+              const savedFoldLines = foldPosToLineNumbers(editor, collapsed);
+
               const content = await window.mde.readFile(filePath);
               const { Markdown } = await import('../utils/markdown');
               Markdown.deserializeInto(editor, content);
+
+              // Restore fold state after silent reload
+              if (savedFoldLines.length) {
+                const positions = lineNumbersToFoldPositions(editor.state.doc, content, savedFoldLines);
+                if (positions.length) {
+                  const tr = editor.state.tr;
+                  tr.setMeta(RESTORE_FOLDS, positions);
+                  tr.setMeta('addToHistory', false);
+                  editor.view.dispatch(tr);
+                }
+              }
             }
             dispatch({ type: 'UPDATE_TAB_MTIME', tabId: tab.id, mtime: stats.mtimeMs });
           }

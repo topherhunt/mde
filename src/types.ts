@@ -76,6 +76,8 @@ export interface MdeAPI {
   createDirectory: (dirPath: string) => Promise<void>;
   getSidebarWidth: () => Promise<number | null>;
   setSidebarWidth: (width: number) => Promise<void>;
+  getFoldState: (filePath: string) => Promise<number[]>;
+  setFoldState: (filePath: string, lineNumbers: number[]) => Promise<void>;
 }
 
 declare global {
