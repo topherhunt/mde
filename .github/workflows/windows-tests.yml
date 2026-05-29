@@ -10,9 +10,9 @@ jobs:
   test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -26,7 +26,7 @@ jobs:
       # downloaded and inspected, since these failures can't be reproduced on macOS.
       - run: npx playwright test --trace=retain-on-failure
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: playwright-traces
