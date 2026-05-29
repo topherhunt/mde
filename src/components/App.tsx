@@ -9,6 +9,7 @@ import FindBar from './FindBar';
 import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
 import { Editor as TipTapEditor } from '@tiptap/react';
+import { basename } from '../utils/paths';
 import KEYBOARD_SHORTCUTS_CONTENT from '../../docs/help/keyboard_shortcuts.md';
 
 interface AppState {
@@ -154,7 +155,7 @@ function nextTabId(): string {
 }
 
 function fileNameFromPath(filePath: string): string {
-  return filePath.split('/').pop() || 'Untitled';
+  return basename(filePath) || 'Untitled';
 }
 
 export default function App() {
@@ -255,7 +256,10 @@ export default function App() {
       conflict: false,
       tentative: false,
       readOnly: true,
-      initialContent: KEYBOARD_SHORTCUTS_CONTENT,
+      // The shortcuts doc is written with macOS key names; map Cmd -> Ctrl for Windows/Linux.
+      initialContent: window.mde.platform === 'darwin'
+        ? KEYBOARD_SHORTCUTS_CONTENT
+        : KEYBOARD_SHORTCUTS_CONTENT.replace(/\bCmd\b/g, 'Ctrl'),
     };
     dispatch({ type: 'OPEN_TAB', tab });
   }, [state.tabs]);
@@ -586,7 +590,7 @@ export default function App() {
         } else if (/\.(docx|pdf)$/i.test(filePath)) {
           handleImportFile(filePath);
         } else {
-          const ext = filePath.split('/').pop() || filePath;
+          const ext = basename(filePath) || filePath;
           showToast(`Unsupported file type: ${ext}`, 'danger');
         }
       }
@@ -608,7 +612,7 @@ export default function App() {
       <div className="app-drag-region">
         {state.projectRoot && (
           <span className="app-title">
-            {(state.projectRoot.split('/').pop() || '').split('').map((ch, i) => (
+            {(basename(state.projectRoot) || '').split('').map((ch, i) => (
               <span key={i} className="app-title-letter" style={{ animationDelay: `${i * 6}s` }}>
                 {ch}
               </span>
@@ -712,6 +716,7 @@ export default function App() {
 function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () => void; theme: string; spellcheck: boolean; autosave: boolean }) {
   const [status, setStatus] = useState<'checking' | 'idle' | 'installed' | 'installing' | 'done' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
+  const [installNote, setInstallNote] = useState('');
 
   useEffect(() => {
     window.mde.checkTerminalLauncher().then(exists => {
@@ -727,6 +732,7 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
     const result = await window.mde.installTerminalLauncher();
     if (result.success) {
       setStatus('done');
+      if (result.note) setInstallNote(result.note);
     } else {
       setStatus('error');
       setErrorMsg(result.error || 'Unknown error');
@@ -810,6 +816,7 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
           {(status === 'installed' || status === 'done') && (
             <div className="settings-success">
               {status === 'done' ? 'Installed.' : 'Already installed.'} Run <code>mde .</code> from any directory to open it.
+              {installNote && <> {installNote}</>}
             </div>
           )}
           {status === 'error' && (
@@ -822,7 +829,7 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
 }
 
 function ImportConfirmDialog({ filePath, onConfirm, onCancel }: { filePath: string; onConfirm: () => void; onCancel: () => void }) {
-  const fileName = filePath.split('/').pop() || filePath;
+  const fileName = basename(filePath) || filePath;
   const ext = fileName.split('.').pop()?.toUpperCase() || '';
 
   useEffect(() => {

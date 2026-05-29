@@ -40,7 +40,10 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel({}),
+    new MakerSquirrel({
+      setupIcon: './icon.ico',
+      setupExe: `MDE-${pkg.version} Setup.exe`,
+    }),
     new MakerZIP({}, ['darwin']),
     new MakerDMG({
       name: `MDE v${pkg.version} Apple Silicon`,

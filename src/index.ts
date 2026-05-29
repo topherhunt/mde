@@ -1,11 +1,68 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 
-if (require('electron-squirrel-startup')) {
+// On Windows, Squirrel runs the app with special args during install/update/uninstall.
+// We handle these to create/remove Start Menu shortcuts and register the .md "Open with"
+// file association, then quit. Returns true if such an event was handled.
+function handleSquirrelEvent(): boolean {
+  if (process.platform !== 'win32' || process.argv.length < 2) return false;
+
+  const squirrelEvent = process.argv[1];
+  const appFolder = path.resolve(process.execPath, '..');
+  const rootFolder = path.resolve(appFolder, '..');
+  const updateExe = path.resolve(path.join(rootFolder, 'Update.exe'));
+  const exeName = path.basename(process.execPath);
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { execSync, spawnSync } = require('child_process');
+
+  const runUpdate = (args: string[]) => {
+    try { spawnSync(updateExe, args, { detached: true }); } catch {}
+  };
+
+  // ProgId-based association: adds MDE to the "Open with" list for .md/.markdown
+  // without hijacking the user's existing default handler.
+  const progId = 'MDE.Markdown';
+  const reg = (cmd: string) => { try { execSync(cmd); } catch {} };
+  const registerAssoc = () => {
+    const open = `"${process.execPath}" "%1"`;
+    reg(`reg add "HKCU\\Software\\Classes\\${progId}" /ve /d "Markdown Document" /f`);
+    reg(`reg add "HKCU\\Software\\Classes\\${progId}\\DefaultIcon" /ve /d "${process.execPath},0" /f`);
+    reg(`reg add "HKCU\\Software\\Classes\\${progId}\\shell\\open\\command" /ve /d "${open}" /f`);
+    reg(`reg add "HKCU\\Software\\Classes\\.md\\OpenWithProgids" /v "${progId}" /t REG_NONE /f`);
+    reg(`reg add "HKCU\\Software\\Classes\\.markdown\\OpenWithProgids" /v "${progId}" /t REG_NONE /f`);
+  };
+  const unregisterAssoc = () => {
+    reg(`reg delete "HKCU\\Software\\Classes\\${progId}" /f`);
+    reg(`reg delete "HKCU\\Software\\Classes\\.md\\OpenWithProgids" /v "${progId}" /f`);
+    reg(`reg delete "HKCU\\Software\\Classes\\.markdown\\OpenWithProgids" /v "${progId}" /f`);
+  };
+
+  switch (squirrelEvent) {
+    case '--squirrel-install':
+    case '--squirrel-updated':
+      runUpdate([`--createShortcut=${exeName}`]);
+      registerAssoc();
+      app.quit();
+      return true;
+    case '--squirrel-uninstall':
+      runUpdate([`--removeShortcut=${exeName}`]);
+      unregisterAssoc();
+      app.quit();
+      return true;
+    case '--squirrel-obsolete':
+      app.quit();
+      return true;
+  }
+  return false;
+}
+
+if (handleSquirrelEvent()) {
+  // A Squirrel lifecycle event was handled; the app is quitting.
+} else if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
@@ -46,6 +103,42 @@ function saveLastProjectRoot(root: string): void {
   saveState({ lastProjectRoot: root });
 }
 
+// Whether the UI is effectively dark, honoring the explicit theme override or the OS setting.
+function effectiveDark(): boolean {
+  const theme = loadState().theme || 'system';
+  if (theme === 'dark') return true;
+  if (theme === 'light') return false;
+  return nativeTheme.shouldUseDarkColors;
+}
+
+// Colors for the native window-control overlay on Windows. Matches --bg-secondary / --text.
+function titleBarOverlayColors() {
+  return effectiveDark()
+    ? { color: '#252526', symbolColor: '#ffffff', height: 38 }
+    : { color: '#f5f5f5', symbolColor: '#1a1a1a', height: 38 };
+}
+
+// On Windows/Linux there's no `open-file` event; a second launch (double-click a file,
+// `mde .`) starts a new process. Route its path into the running instance instead.
+if (process.platform !== 'darwin' && !isTest) {
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+  } else {
+    app.on('second-instance', (_event, argv, workingDir) => {
+      const target = findCliPath(argv, workingDir);
+      if (target) {
+        openResolvedPath(target);
+      } else {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (win) {
+          if (win.isMinimized()) win.restore();
+          win.focus();
+        }
+      }
+    });
+  }
+}
+
 function createWindow(projectRoot: string | null = null): BrowserWindow {
   const focused = BrowserWindow.getFocusedWindow();
   const savedBounds = isTest ? null : loadState().windowBounds;
@@ -61,8 +154,11 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
     minWidth: 600,
     minHeight: 400,
     show: !isTest,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 12, y: 12 },
+    // macOS keeps the inset traffic lights; other platforms hide the frame and let the OS
+    // draw min/max/close as an overlay sized to match the custom 38px drag region.
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 12, y: 12 } }
+      : { titleBarStyle: 'hidden' as const, titleBarOverlay: titleBarOverlayColors() }),
     webPreferences: {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       contextIsolation: true,
@@ -884,6 +980,9 @@ ipcMain.handle('set-theme', (_event, theme: string) => {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send('theme-changed', theme);
+      if (process.platform === 'win32') {
+        try { win.setTitleBarOverlay(titleBarOverlayColors()); } catch {}
+      }
     }
   }
 });
@@ -943,11 +1042,47 @@ ipcMain.handle('set-sidebar-width', (_event, width: number) => {
   saveState({ sidebarWidth: width });
 });
 
+// On Windows the launcher is an mde.cmd in a per-user bin dir added to the user PATH.
+function winLauncherPath(): string {
+  const base = process.env.LOCALAPPDATA || app.getPath('appData');
+  return path.join(base, 'MDE', 'bin', 'mde.cmd');
+}
+
 ipcMain.handle('check-terminal-launcher', () => {
+  if (process.platform === 'win32') return fs.existsSync(winLauncherPath());
   return fs.existsSync('/usr/local/bin/mde');
 });
 
 ipcMain.handle('install-terminal-launcher', async () => {
+  if (process.platform === 'win32') {
+    const dest = winLauncherPath();
+    const binDir = path.dirname(dest);
+    const exe = process.execPath;
+    // With no arg, open the current directory; otherwise open the resolved path of the arg.
+    const script = `@echo off\r\nif "%~1"=="" ( start "" "${exe}" "%CD%" ) else ( start "" "${exe}" "%~f1" )\r\n`;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { execSync } = require('child_process');
+    try {
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.writeFileSync(dest, script);
+      // Append binDir to the user PATH (read existing first to avoid setx truncation/duplication).
+      let userPath = '';
+      try {
+        const out = execSync('reg query "HKCU\\Environment" /v Path', { encoding: 'utf-8' });
+        const m = out.match(/Path\s+REG(?:_EXPAND)?_SZ\s+(.*)/i);
+        if (m) userPath = m[1].trim();
+      } catch {}
+      const onPath = userPath.split(';').some(p => p.trim().toLowerCase() === binDir.toLowerCase());
+      if (!onPath) {
+        const newPath = userPath ? `${userPath};${binDir}` : binDir;
+        execSync(`reg add "HKCU\\Environment" /v Path /t REG_EXPAND_SZ /d "${newPath}" /f`);
+      }
+      return { success: true, note: 'Open a new terminal window for the `mde` command to take effect.' };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
   const dest = '/usr/local/bin/mde';
   const appBundle = app.getPath('exe').replace(/\/Contents\/MacOS\/.*$/, '');
   const script = `#!/bin/bash\nopen -a "${appBundle}" "$(cd "\${1:-.}" && pwd)"\n`;
@@ -972,6 +1107,43 @@ ipcMain.handle('install-terminal-launcher', async () => {
 // --- Drag and drop at app level ---
 
 let launchFileHandled = false;
+
+// Find a file/folder path argument among process args (CLI launch or `second-instance`),
+// resolving it against the launching shell's working directory. Returns null if none exists.
+function findCliPath(argv: string[], cwd?: string): string | null {
+  const arg = argv.find((a, i) =>
+    i > 0 && !a.startsWith('-') &&
+    !a.includes('electron') && !a.includes('.webpack') && !a.endsWith('.js')
+  );
+  if (!arg) return null;
+  try {
+    const resolved = path.isAbsolute(arg) ? arg : path.resolve(cwd || process.cwd(), arg);
+    fs.statSync(resolved);
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
+// Open an already-resolved path: a directory as a project window, a file in a window.
+function openResolvedPath(target: string): void {
+  let stat: fs.Stats;
+  try { stat = fs.statSync(target); } catch { return; }
+  if (stat.isDirectory()) {
+    const existing = BrowserWindow.getAllWindows().find(w => windowStates.get(w)?.projectRoot === target);
+    if (existing) existing.focus();
+    else createWindow(target);
+  } else {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (win) {
+      win.focus();
+      win.webContents.send('open-file', target);
+    } else {
+      const newWin = createWindow();
+      newWin.webContents.once('did-finish-load', () => newWin.webContents.send('open-file', target));
+    }
+  }
+}
 
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
@@ -1013,18 +1185,32 @@ app.on('open-file', (event, filePath) => {
 
 app.on('ready', () => {
   buildMenu();
-  if (launchFileHandled) return;
-  const cliPath = process.argv.find((arg, i) =>
-    i > 0 && !arg.startsWith('-') && !arg.includes('electron') && !arg.includes('.webpack')
-  );
-  let projectRoot: string | null = null;
-  if (cliPath) {
-    try {
-      const resolved = path.resolve(cliPath);
-      if (fs.statSync(resolved).isDirectory()) projectRoot = resolved;
-    } catch {}
+  // Keep the Windows window-control overlay colors in sync when the OS theme changes
+  // (only matters when the app is following the system theme).
+  if (process.platform === 'win32') {
+    nativeTheme.on('updated', () => {
+      if ((loadState().theme || 'system') !== 'system') return;
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          try { win.setTitleBarOverlay(titleBarOverlayColors()); } catch {}
+        }
+      }
+    });
   }
-  createWindow(projectRoot || loadLastProjectRoot());
+  if (launchFileHandled) return;
+  // A directory arg opens as a project; a file arg opens in a fresh window.
+  const target = findCliPath(process.argv);
+  if (target) {
+    const stat = fs.statSync(target);
+    if (stat.isDirectory()) {
+      createWindow(target);
+      return;
+    }
+    const win = createWindow();
+    win.webContents.once('did-finish-load', () => win.webContents.send('open-file', target));
+    return;
+  }
+  createWindow(loadLastProjectRoot());
 });
 
 let isQuitting = false;

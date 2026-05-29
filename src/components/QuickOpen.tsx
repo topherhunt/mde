@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { basename, joinPath } from '../utils/paths';
 
 interface QuickOpenProps {
   projectRoot: string;
@@ -30,7 +31,7 @@ function fuzzyMatchStr(query: string, target: string, baseIndex: number): { scor
 function fuzzyMatch(query: string, target: string): { score: number; indices: number[] } | null {
   const q = query.toLowerCase();
   const t = target.toLowerCase();
-  const fileName = t.split('/').pop() || t;
+  const fileName = basename(t) || t;
   const fileStart = t.length - fileName.length;
 
   const fileMatch = fuzzyMatchStr(q, fileName, fileStart);
@@ -106,7 +107,7 @@ export default function QuickOpen({ projectRoot, onSelect, onClose }: QuickOpenP
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (results[selectedIndex]) {
-        onSelect(projectRoot + '/' + results[selectedIndex].path);
+        onSelect(joinPath(projectRoot, results[selectedIndex].path));
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
@@ -135,10 +136,10 @@ export default function QuickOpen({ projectRoot, onSelect, onClose }: QuickOpenP
               key={r.path}
               className={`quick-open-item ${i === selectedIndex ? 'selected' : ''}`}
               onMouseEnter={() => setSelectedIndex(i)}
-              onMouseDown={(e) => { e.preventDefault(); onSelect(projectRoot + '/' + r.path); }}
+              onMouseDown={(e) => { e.preventDefault(); onSelect(joinPath(projectRoot, r.path)); }}
             >
               <span className="quick-open-filename">
-                <HighlightedText text={r.path.split('/').pop()!} indices={r.indices.map(idx => idx - (r.path.lastIndexOf('/') + 1)).filter(idx => idx >= 0)} />
+                <HighlightedText text={basename(r.path)} indices={r.indices.map(idx => idx - (r.path.length - basename(r.path).length)).filter(idx => idx >= 0)} />
               </span>
               <span className="quick-open-path">
                 <HighlightedText text={r.path} indices={r.indices} />

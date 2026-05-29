@@ -23,6 +23,7 @@ export interface Tab {
 }
 
 export interface MdeAPI {
+  platform: NodeJS.Platform;
   readFile: (filePath: string) => Promise<string>;
   writeFile: (filePath: string, content: string) => Promise<number>;
   getFileStats: (filePath: string) => Promise<FileStats | null>;
@@ -52,7 +53,7 @@ export interface MdeAPI {
   setTheme: (theme: string) => Promise<void>;
   onThemeChanged: (callback: (theme: string) => void) => () => void;
   checkTerminalLauncher: () => Promise<boolean>;
-  installTerminalLauncher: () => Promise<{ success: boolean; error?: string }>;
+  installTerminalLauncher: () => Promise<{ success: boolean; error?: string; note?: string }>;
   onOpenSettings: (callback: () => void) => () => void;
   onToggleCodeBlock: (callback: () => void) => () => void;
   onInsertLink: (callback: () => void) => () => void;

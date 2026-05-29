@@ -1,0 +1,57 @@
+name: Build and Release
+
+# Push a version tag (e.g. `git tag v0.2.0 && git push origin v0.2.0`) to build the
+# macOS .dmg and Windows installer and attach them to a GitHub Release for that tag.
+# Can also be run manually (workflow_dispatch) to verify the builds without releasing.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write # required for the release job to create/update the Release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false # a failure on one OS shouldn't cancel the other
+      matrix:
+        include:
+          - os: macos-latest
+            assets: out/make/**/*.dmg
+          - os: windows-latest
+            assets: out/make/**/*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run make
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: ${{ matrix.assets }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') # only release on a tag, not manual runs
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: true # review + smoke-test the Windows build, then click Publish
+          generate_release_notes: true

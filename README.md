@@ -1,6 +1,6 @@
 # MDE (Markdown Editor)
 
-A simple but sturdy WYSIWYG Markdown browser/editor for macOS. Written in Electron, inspired by Obsidian and VS Code. Drag in a folder or file to view/edit.
+A simple but sturdy WYSIWYG Markdown browser/editor for macOS and Windows. Written in Electron, inspired by Obsidian and VS Code. Drag in a folder or file to view/edit.
 
 Inspired by [Thomas Ptacek's MDV app](https://sockpuppet.org/blog/2026/05/12/emacsification/).
 
@@ -19,8 +19,8 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 
 - **WYSIWYG editing** -- formatting toolbar with headings, bold, italic, strikethrough, highlight, lists, todo lists, blockquotes, code, links, tables, and horizontal rules..
 - **Structured lists** -- Obsidian and VS Code both make it easy to produce invalid bullet/number/task lists. MDE gives you opinionated constraints.
-- [ ] **File Explorer & Document Outline sidebar** -- keyboard-navigable, resizable, with context menu (rename, delete, copy path)
-- [ ] **Tabbed editing** -- open multiple files, reorder by drag, tentative (preview) tabs on single-click
+- **File Explorer & Document Outline sidebar** -- keyboard-navigable, resizable, with context menu (rename, delete, copy path)
+- **Tabbed editing** -- open multiple files, reorder by drag, tentative (preview) tabs on single-click
 - **Find and replace** -- match highlighting, case-sensitive and whole-word filters, inline replace-all confirmation
 - **Quick Open** -- Cmd+O fuzzy file search across the project
 - **Standard editing tools** -- links, code blocks, tables
@@ -44,7 +44,14 @@ You only need to do this once. After that, macOS will remember your choice and l
 
 ### Windows
 
-The app isn't code-signed, so Windows SmartScreen will show a warning the first time you launch it. Click **More info** → **Run anyway** to proceed.
+Run `MDE-<version> Setup.exe`. Because the app isn't code-signed, Windows SmartScreen ("Windows protected your PC") will appear the first time you run the installer **and** the first time you launch the app:
+
+1. Click **More info**
+2. Click **Run anyway**
+
+You only need to do this once per machine. (Your browser may also warn that the download is "not commonly downloaded" -- choose **Keep** / **Keep anyway**.)
+
+Once installed, double-clicking a `.md` file or choosing MDE from **Open with** will open it in MDE.
 
 ## Note on HTML in Markdown
 
@@ -68,6 +75,8 @@ mde .              # Open current directory
 mde ~/my-notes     # Open a specific folder
 ```
 
+On Windows the launcher adds itself to your user `PATH`, so open a **new** terminal window after installing it before running `mde`.
+
 ## Tests
 
 ```
@@ -87,7 +96,7 @@ Runs headless Playwright E2E tests against a packaged build.
 npm run make
 ```
 
-Produces a distributable `.app` (macOS) in the `out/make/` directory.
+Produces distributables in the `out/make/` directory: a `.dmg`/`.zip` on macOS, a Squirrel `Setup.exe` on Windows. Run `npm run make` on each target OS to build that platform's artifacts.
 
 ## Tasks
 

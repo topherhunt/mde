@@ -13,6 +13,8 @@ export interface FileStats {
 }
 
 const api = {
+  platform: process.platform,
+
   readFile: (filePath: string): Promise<string> =>
     ipcRenderer.invoke('read-file', filePath),
 
@@ -133,7 +135,7 @@ const api = {
   checkTerminalLauncher: (): Promise<boolean> =>
     ipcRenderer.invoke('check-terminal-launcher'),
 
-  installTerminalLauncher: (): Promise<{ success: boolean; error?: string }> =>
+  installTerminalLauncher: (): Promise<{ success: boolean; error?: string; note?: string }> =>
     ipcRenderer.invoke('install-terminal-launcher'),
 
   onOpenSettings: (callback: () => void) => {

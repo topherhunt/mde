@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { FileEntry } from '../types';
 import { Editor as TipTapEditor } from '@tiptap/react';
+import { basename, dirname, joinPath } from '../utils/paths';
 
 interface SidebarProps {
   projectRoot: string | null;
@@ -314,8 +315,7 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
 
   const handleRenameComplete = useCallback(async (entry: FileEntry, newName: string) => {
     if (newName && newName !== entry.name) {
-      const parentDir = entry.path.substring(0, entry.path.lastIndexOf('/'));
-      const newPath = parentDir + '/' + newName;
+      const newPath = joinPath(dirname(entry.path), newName);
       await window.mde.renameFile(entry.path, newPath);
       triggerRefresh();
     }
@@ -341,18 +341,18 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
       if (stats?.isDirectory) {
         targetDir = selectedPath;
       } else if (stats) {
-        targetDir = selectedPath.substring(0, selectedPath.lastIndexOf('/'));
+        targetDir = dirname(selectedPath);
       }
     }
 
     if (type === 'file') {
       const finalName = name.includes('.') ? name : name + '.md';
-      const finalPath = targetDir + '/' + finalName;
+      const finalPath = joinPath(targetDir, finalName);
       await window.mde.createFile(finalPath);
       triggerRefresh();
       onOpenFile(finalPath, false);
     } else {
-      const newPath = targetDir + '/' + name;
+      const newPath = joinPath(targetDir, name);
       await window.mde.createDirectory(newPath);
       triggerRefresh();
     }
@@ -378,10 +378,10 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
 
   const handleDropOnFolder = useCallback(async (targetDir: string) => {
     if (!dragSourcePath || dragSourcePath === targetDir) return;
-    const fileName = dragSourcePath.split('/').pop() || '';
-    const parentDir = dragSourcePath.substring(0, dragSourcePath.lastIndexOf('/'));
+    const fileName = basename(dragSourcePath) || '';
+    const parentDir = dirname(dragSourcePath);
     if (parentDir === targetDir) return;
-    const newPath = targetDir + '/' + fileName;
+    const newPath = joinPath(targetDir, fileName);
     try {
       await window.mde.renameFile(dragSourcePath, newPath);
       triggerRefresh();
@@ -419,19 +419,19 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
         e.preventDefault();
         window.mde.getFileStats(selectedPath).then(stats => {
           if (stats) {
-            const name = selectedPath.split('/').pop() || '';
+            const name = basename(selectedPath) || '';
             setRenamingEntry({ path: selectedPath, name, isDirectory: stats.isDirectory });
           }
         });
         return;
       }
 
-      // Cmd+Backspace -> delete with confirmation dialog
-      if (e.key === 'Backspace' && e.metaKey && selectedPath && !renamingEntry && !creating && !deletingEntry) {
+      // Cmd/Ctrl+Backspace -> delete with confirmation dialog
+      if (e.key === 'Backspace' && (e.metaKey || e.ctrlKey) && selectedPath && !renamingEntry && !creating && !deletingEntry) {
         e.preventDefault();
         window.mde.getFileStats(selectedPath).then(stats => {
           if (stats) {
-            const name = selectedPath.split('/').pop() || '';
+            const name = basename(selectedPath) || '';
             setDeletingEntry({ path: selectedPath, name, isDirectory: stats.isDirectory });
           }
         });
@@ -497,7 +497,7 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
     <>
       <DirectoryNode
         path={projectRoot}
-        name={projectRoot.split('/').pop() || ''}
+        name={basename(projectRoot) || ''}
         onOpenFile={onOpenFile}
         onImportFile={onImportFile}
         activeFilePath={activeFilePath}
@@ -667,10 +667,9 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
     e.stopPropagation();
     if (!dragSourcePath || dragSourcePath === path) return;
     // Can't drop into own descendant
-    if (dragSourcePath.startsWith(path + '/')) return;
+    if (dragSourcePath.startsWith(path + '/') || dragSourcePath.startsWith(path + '\\')) return;
     // Already in this folder -- no-op
-    const parentDir = dragSourcePath.substring(0, dragSourcePath.lastIndexOf('/'));
-    if (parentDir === path) return;
+    if (dirname(dragSourcePath) === path) return;
     onSetDropTarget(path);
   };
 
@@ -865,7 +864,7 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
     e.preventDefault();
     e.stopPropagation();
     if (!dragSourcePath || dragSourcePath === entry.path) return;
-    const srcParent = dragSourcePath.substring(0, dragSourcePath.lastIndexOf('/'));
+    const srcParent = dirname(dragSourcePath);
     if (srcParent === parentPath) return;
     onSetDropTarget(parentPath);
   };
