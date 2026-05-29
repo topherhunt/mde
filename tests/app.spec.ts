@@ -992,10 +992,15 @@ test.describe('Todo lists', () => {
     });
     await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
 
+    // Wait for the save to actually hit disk. The dirty-dot already cleared
+    // because the 3x cycle reverted items to their original bullet state, so
+    // it can't gate the write -- poll the file to avoid racing writeFile's
+    // truncate-then-write window (which would read an empty string).
+    await expect.poll(() => fs.readFileSync(tmpFile, 'utf-8')).toContain('- alpha');
+
     const saved = fs.readFileSync(tmpFile, 'utf-8');
     // All items should be contiguous with no blank lines between them
     expect(saved).not.toMatch(/^- .+\n\n+- /m);
-    expect(saved).toContain('- alpha');
     expect(saved).toContain('- beta');
     expect(saved).toContain('- gamma');
     expect(saved).toContain('- delta');
