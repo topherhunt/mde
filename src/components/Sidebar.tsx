@@ -918,6 +918,7 @@ interface HeadingItem {
 
 function DocumentOutline({ editor }: DocumentOutlineProps) {
   const [headings, setHeadings] = useState<HeadingItem[]>([]);
+  const [activeIndex, setActiveIndex] = useState<number>(-1);
 
   const extractHeadings = useCallback(() => {
     if (!editor) {
@@ -945,6 +946,40 @@ function DocumentOutline({ editor }: DocumentOutlineProps) {
     return () => { editor.off('update', extractHeadings); };
   }, [editor, extractHeadings]);
 
+  // Highlight the heading the reader is currently under: the last heading whose top has
+  // scrolled to or above the top of the editor viewport.
+  useEffect(() => {
+    if (!editor || headings.length === 0) { setActiveIndex(-1); return; }
+    const scroller = editor.view.dom.parentElement;
+    if (!scroller) return;
+    // Anchor the "reading line" just below the scroller's top padding so the very first
+    // heading counts as active when the document is scrolled to the top.
+    const padTop = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+    let raf = 0;
+    const recompute = () => {
+      raf = 0;
+      const top = scroller.getBoundingClientRect().top + padTop + 4;
+      let active = -1;
+      for (let i = 0; i < headings.length; i++) {
+        const dom = editor.view.nodeDOM(headings[i].pos);
+        if (dom instanceof HTMLElement && dom.getBoundingClientRect().top <= top + 8) {
+          active = i;
+        } else {
+          // Headings are in document order, so once one is below the fold the rest are too.
+          break;
+        }
+      }
+      setActiveIndex(active);
+    };
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(recompute); };
+    recompute();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [editor, headings]);
+
   if (!editor) {
     return <div className="sidebar-empty">No document open</div>;
   }
@@ -958,7 +993,7 @@ function DocumentOutline({ editor }: DocumentOutlineProps) {
       {headings.map((h, i) => (
         <div
           key={i}
-          className={`outline-item outline-h${h.level}`}
+          className={`outline-item outline-h${h.level} ${i === activeIndex ? 'active' : ''}`}
           onClick={() => {
             editor.view.dom.focus();
             const { tr } = editor.state;

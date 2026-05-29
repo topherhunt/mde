@@ -320,6 +320,10 @@ body {
   background: var(--bg-tertiary);
 }
 
+.outline-item.active {
+  color: var(--accent);
+}
+
 .outline-h1 { padding-left: 12px; font-weight: 600; }
 .outline-h2 { padding-left: 24px; font-weight: 500; }
 .outline-h3 { padding-left: 36px; }

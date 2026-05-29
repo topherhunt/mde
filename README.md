@@ -142,9 +142,3 @@ On failure it uploads Playwright traces as a build artifact; download and inspec
 ### For Claude
 
 - (W) Set up Github Action to build Release artifacts & create a Release for them
-
----
-
-- As for the visual code folding, that's a great start, but if I move my mouse over where the gray caret is, The gray carrot disappears because that's outside of the actual LI element box itself. I don't know what you would suggest as far as the best way to reconcile that. But obviously moving over where the grey carrot lives should cause the gray carrot to show. Basically anywhere if you're in this vertical slice of the document should cause the gray carrot to show. Is that easy? Or are you kind of bound by the padding of the li element itself? I don't know. Let me know what you think.
-- Copying text from a table cell doesn't work. It just pastes as `[table]`. If I select just the contents of a single cell, it shouldn't try to copy the cell markup, it should just copy the selected text itself. And with multiple cells, I mean it does need to copy ideally in a format that would paste nicely into a Word document or something, but the format that it copies into should also paste nicely as plain text. So if I copy it into VS Code, it should paste as just let's say tab-separated text. Do clipboards work like that? Can you provide different clipboard formattings for different contexts?
-- In the left sidebar outline view, when you have that activated, based on where your scroll is, let's say the top of the editable visible viewport, based on where that point is in the scroll, you should have the heading that you're in colored blue, and the rest should be white like standard.

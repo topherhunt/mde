@@ -36,6 +36,37 @@ const TextNode = Text.extend({
   },
 });
 
+// Convert a copied slice that contains table structure into tab-separated rows.
+// Returns null if the slice has no table node/row/cell (so the caller falls back to
+// markdown serialization). A single selected cell yields just its text -- no tabs/newlines.
+function tableSliceToTSV(content: Fragment): string | null {
+  const rows: string[][] = [];
+  let foundTable = false;
+
+  const collectRow = (rowNode: any) => {
+    const cells: string[] = [];
+    rowNode.forEach((cell: any) => cells.push(cell.textContent));
+    rows.push(cells);
+  };
+
+  content.forEach((node: any) => {
+    const name = node.type.name;
+    if (name === 'table') {
+      foundTable = true;
+      node.forEach((row: any) => { if (row.type.name === 'tableRow') collectRow(row); });
+    } else if (name === 'tableRow') {
+      foundTable = true;
+      collectRow(node);
+    } else if (name === 'tableCell' || name === 'tableHeader') {
+      foundTable = true;
+      rows.push([node.textContent]);
+    }
+  });
+
+  if (!foundTable) return null;
+  return rows.map((r) => r.join('\t')).join('\n');
+}
+
 // When copying a single list item, strip the list wrapper so the clipboard gets
 // just the text, not "- text". Multi-item copies keep the list markers.
 const SmartClipboard = Extension.create({
@@ -50,6 +81,12 @@ const SmartClipboard = Extension.create({
             // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
             const serializer = editor.storage.markdown.serializer;
             const { content } = slice;
+            // Table selections (CellSelection or a copied table) -- tiptap-markdown has no
+            // table serializer and would emit "[table]". Emit tab-separated rows instead,
+            // which paste cleanly as plain text (e.g. VS Code) and as a real table into Word
+            // (which reads the text/html representation ProseMirror writes alongside this one).
+            const tsv = tableSliceToTSV(content);
+            if (tsv !== null) return tsv;
             if (content.childCount === 1) {
               const child = content.firstChild!;
               if ((child.type.name === 'bulletList' || child.type.name === 'orderedList')
@@ -786,32 +823,30 @@ const CodeFolding = Extension.create({
             // under the cursor is marked -- never its parents or children.
             mousemove(view, event) {
               const fold = foldKey.getState(view.state);
+              // While the pointer is on the caret itself, keep it shown -- recomputing here
+              // could clear the hover and detach the caret out from under a click.
+              if ((event.target as HTMLElement)?.closest?.('.fold-caret')) return false;
               let pos: number | null = null;
-              const liDom = (event.target as HTMLElement)?.closest?.('li');
-              if (liDom) {
-                try {
-                  const p = view.posAtDOM(liDom, 0) - 1;
-                  const node = view.state.doc.nodeAt(p);
-                  if (node && node.type.name === 'listItem' && listItemHasSublist(node) && !fold.collapsed.has(p)) {
-                    pos = p;
-                  }
-                } catch { /* ignore */ }
-              }
-              // Bridge the gutter strip between the item's text and its caret so moving
-              // the mouse leftward toward the caret doesn't dismiss it.
-              if (pos === null && fold.hover !== null) {
-                try {
-                  const dom = view.nodeDOM(fold.hover) as HTMLElement | null;
-                  const para = dom?.firstElementChild as HTMLElement | null;
-                  if (para) {
-                    const r = para.getBoundingClientRect();
-                    if (event.clientY >= r.top && event.clientY <= r.bottom &&
-                        event.clientX >= r.left - 44 && event.clientX <= r.right) {
-                      pos = fold.hover;
+              // Resolve the document position under the pointer's vertical position rather
+              // than its DOM target. Probing by coordinates -- with the X clamped into the
+              // editor -- makes the whole row a hover target, including the left gutter where
+              // the caret sits. So moving the mouse onto the caret never dismisses it.
+              try {
+                const rect = view.dom.getBoundingClientRect();
+                const probeX = Math.min(Math.max(event.clientX, rect.left + 1), rect.right - 1);
+                const coords = view.posAtCoords({ left: probeX, top: event.clientY });
+                if (coords) {
+                  const $pos = view.state.doc.resolve(coords.pos);
+                  // Only the innermost list item under the pointer -- never its parents.
+                  for (let d = $pos.depth; d >= 1; d--) {
+                    if ($pos.node(d).type.name === 'listItem') {
+                      const p = $pos.before(d);
+                      if (listItemHasSublist($pos.node(d)) && !fold.collapsed.has(p)) pos = p;
+                      break;
                     }
                   }
-                } catch { /* ignore */ }
-              }
+                }
+              } catch { /* ignore */ }
               if (pos !== fold.hover) {
                 view.dispatch(view.state.tr.setMeta(SET_FOLD_HOVER, pos).setMeta('addToHistory', false));
               }

@@ -3,14 +3,30 @@ import { launchApp, fixturePath } from './electron-helpers';
 import { ElectronApplication, Page } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 
 let app: ElectronApplication;
 let page: Page;
+let tmpDirs: string[] = [];
+
+// Create a temp dir whose cleanup is deferred to afterEach -- AFTER the app
+// closes. Deleting a temp dir while the app still holds an open file inside it
+// hangs app.close() on Windows (the OS keeps the file/dir handle alive), so
+// cleanup must happen post-close, never inline in the test body.
+function makeTmpDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mde-test-'));
+  tmpDirs.push(dir);
+  return dir;
+}
 
 test.afterEach(async () => {
   if (app) {
     await app.close();
   }
+  for (const dir of tmpDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+  tmpDirs = [];
 });
 
 // ---------------------------------------------------------------------------
@@ -336,7 +352,7 @@ test.describe('Editing', () => {
     ({ app, page } = await launchApp());
 
     // Use a temporary copy so we don't modify fixtures
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'test.md');
     fs.copyFileSync(fixturePath('test-project/doc1.md'), tmpFile);
 
@@ -366,7 +382,6 @@ test.describe('Editing', () => {
     expect(content).toContain('more text');
 
     // Cleanup
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -391,7 +406,7 @@ test.describe('Toolbar', () => {
   test('bold button toggles bold on selected text', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'toolbar-test.md');
     fs.writeFileSync(tmpFile, '# Test\n\nSome plain text here.\n');
 
@@ -411,13 +426,12 @@ test.describe('Toolbar', () => {
 
     await expect(boldBtn).toHaveClass(/active/);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('heading dropdown changes heading level', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'heading-test.md');
     fs.writeFileSync(tmpFile, 'Just a paragraph.\n');
 
@@ -434,7 +448,6 @@ test.describe('Toolbar', () => {
 
     await expect(editor.locator('h2')).toBeVisible();
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -614,7 +627,7 @@ test.describe('File conflict detection', () => {
   test('silently reloads when file changes and buffer is clean', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'conflict.md');
     fs.writeFileSync(tmpFile, '# Original Content\n\nHello world.\n');
 
@@ -647,13 +660,12 @@ test.describe('File conflict detection', () => {
     await expect(page.locator('.conflict-banner')).toBeHidden();
     await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('shows conflict banner when file changes and buffer is dirty', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'conflict.md');
     fs.writeFileSync(tmpFile, '# Original\n\nSome text.\n');
 
@@ -686,13 +698,12 @@ test.describe('File conflict detection', () => {
     await expect(page.locator('.conflict-btn-reload')).toBeVisible();
     await expect(page.locator('.conflict-btn-saveas')).toBeVisible();
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('reload from disk dismisses conflict banner', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'conflict.md');
     fs.writeFileSync(tmpFile, '# Original\n\nText.\n');
 
@@ -724,7 +735,6 @@ test.describe('File conflict detection', () => {
     await expect(editor).toContainText('Reloaded Content');
     await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -736,7 +746,7 @@ test.describe('Markdown round-trip', () => {
   test('save preserves markdown structure', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'roundtrip.md');
     const original = '# Heading\n\nA paragraph with **bold** and *italic*.\n\n- List item\n';
     fs.writeFileSync(tmpFile, original);
@@ -766,7 +776,6 @@ test.describe('Markdown round-trip', () => {
     expect(saved).toContain('*italic*');
     expect(saved).toContain('appended');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -778,7 +787,7 @@ test.describe('Import conversion', () => {
   test('converts PDF to markdown', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const pdfSrc = fixturePath('sample-20-page-pdf-a4-size.pdf');
     const pdfDst = path.join(tmpDir, 'sample.pdf');
     fs.copyFileSync(pdfSrc, pdfDst);
@@ -795,13 +804,12 @@ test.describe('Import conversion', () => {
     expect(content.length).toBeGreaterThan(0);
     expect(fs.existsSync(path.join(tmpDir, 'sample.bak.pdf'))).toBe(true);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('converts DOCX to markdown', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const docxSrc = fixturePath('sample-files.com-large-document.docx');
     const docxDst = path.join(tmpDir, 'sample.docx');
     fs.copyFileSync(docxSrc, docxDst);
@@ -818,7 +826,6 @@ test.describe('Import conversion', () => {
     expect(content.length).toBeGreaterThan(0);
     expect(fs.existsSync(path.join(tmpDir, 'sample.bak.docx'))).toBe(true);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -830,7 +837,7 @@ test.describe('Todo lists', () => {
   test('todo list toolbar button creates a task list', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'todo.md');
     fs.writeFileSync(tmpFile, '# Todo\n\nSome text.\n');
 
@@ -856,13 +863,12 @@ test.describe('Todo lists', () => {
     // Verify task item is rendered with data-checked attribute
     await expect(editor.locator('li[data-checked]')).toBeVisible();
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('todo list round-trips through markdown save', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'todo.md');
     fs.writeFileSync(tmpFile, '# Tasks\n\n- [ ] Unchecked\n- [x] Checked\n');
 
@@ -891,13 +897,12 @@ test.describe('Todo lists', () => {
     expect(saved).toContain('- [ ]');
     expect(saved).toContain('- [x]');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('mixed bullet and task items render without spurious checkboxes', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'mixed.md');
     fs.writeFileSync(tmpFile, '- one\n- [ ] two\n- three\n- [x] four\n- five\n');
 
@@ -946,13 +951,12 @@ test.describe('Todo lists', () => {
     // No blank lines between adjacent list items
     expect(saved).not.toMatch(/^- .+\n\n- /m);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('save after cycling statuses has no blank lines between list items', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'cycle-gaps.md');
     fs.writeFileSync(tmpFile, '- alpha\n- beta\n- gamma\n- delta\n');
 
@@ -996,13 +1000,12 @@ test.describe('Todo lists', () => {
     expect(saved).toContain('- gamma');
     expect(saved).toContain('- delta');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('copy single list item omits leading hyphen', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'copy.md');
     fs.writeFileSync(tmpFile, '- alpha\n- beta\n- gamma\n');
 
@@ -1034,13 +1037,12 @@ test.describe('Todo lists', () => {
     // No blank lines between items
     expect(clipMulti).not.toMatch(/^- .+\n\n+- /m);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('nested mixed bullet and task items render correctly', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'nested.md');
     fs.writeFileSync(tmpFile, '- foo\n- [ ] bar\n  - baz\n  - [x] done\n- plain\n');
 
@@ -1078,7 +1080,6 @@ test.describe('Todo lists', () => {
     expect(saved).toContain('  - [x] done');
     expect(saved).toContain('- plain');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -1151,7 +1152,7 @@ test.describe('Markdown special characters', () => {
   test('angle brackets and special chars survive round-trip', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'special.md');
     fs.writeFileSync(tmpFile, '# Comparisons\n\nApples > oranges.\n\nUse <div> tags carefully.\n\n3 < 5 is true.\n');
 
@@ -1180,7 +1181,6 @@ test.describe('Markdown special characters', () => {
     expect(saved).not.toContain('&gt;');
     expect(saved).not.toContain('&lt;');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -1192,7 +1192,7 @@ test.describe('List keyboard interactions', () => {
   test('Tab indents list items and stays in editor at max depth', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'list.md');
     fs.writeFileSync(tmpFile, '- Alpha\n- Beta\n- Gamma\n');
 
@@ -1225,13 +1225,12 @@ test.describe('List keyboard interactions', () => {
     await page.keyboard.press('Shift+Tab');
     await expect(editor).toContainText('Beta!X');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('Cmd+Enter cycles bullet, unchecked task, checked task', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'cycle.md');
     fs.writeFileSync(tmpFile, 'A plain paragraph.\n');
 
@@ -1264,13 +1263,12 @@ test.describe('List keyboard interactions', () => {
     await expect(editor.locator('li:not([data-checked])')).toBeVisible();
     await expect(editor.locator('li[data-checked]')).toHaveCount(0);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('Cmd+Enter on mixed bullet+task selection converts all items uniformly', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'mixed.md');
     fs.writeFileSync(tmpFile, '- [ ] task item\n- bullet item\n');
 
@@ -1305,13 +1303,12 @@ test.describe('List keyboard interactions', () => {
 
     await expect(editor.locator('li[data-checked="false"]')).toHaveCount(2);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('Cmd+Enter on mixed checked+unchecked tasks converts all uniformly', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'mixed3.md');
     fs.writeFileSync(tmpFile, '- [ ] alpha\n- [x] beta\n- [ ] gamma\n');
 
@@ -1350,13 +1347,12 @@ test.describe('List keyboard interactions', () => {
 
     await expect(editor.locator('li[data-checked="false"]')).toHaveCount(3);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('Cmd+Enter with multi-item bullet list converts all items to tasks', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'multi.md');
     fs.writeFileSync(tmpFile, '- one\n- two\n- three\n');
 
@@ -1391,13 +1387,12 @@ test.describe('List keyboard interactions', () => {
     await expect(editor.locator('li[data-checked]')).toHaveCount(0);
     await expect(editor.locator('li')).toHaveCount(3);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('Cmd+Enter on partial selection only converts selected items, not entire list', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'partial.md');
     fs.writeFileSync(tmpFile, '- alpha\n- beta\n- gamma\n- delta\n');
 
@@ -1443,7 +1438,6 @@ test.describe('List keyboard interactions', () => {
     // alpha and delta still bullets
     await expect(editor.locator('li:not([data-checked])')).toHaveCount(2);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -1455,7 +1449,7 @@ test.describe('Move block', () => {
   test('Cmd+Alt+Down moves a paragraph below the next paragraph', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'move.md');
     fs.writeFileSync(tmpFile, 'First paragraph\n\nSecond paragraph\n\nThird paragraph\n');
 
@@ -1480,13 +1474,12 @@ test.describe('Move block', () => {
     await expect(paragraphs.nth(1)).toContainText('First paragraph');
     await expect(paragraphs.nth(2)).toContainText('Third paragraph');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('Cmd+Alt+Up moves a list item above its sibling', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'moveli.md');
     fs.writeFileSync(tmpFile, '- Apple\n- Banana\n- Cherry\n');
 
@@ -1511,7 +1504,6 @@ test.describe('Move block', () => {
     await expect(items.nth(1)).toContainText('Apple');
     await expect(items.nth(2)).toContainText('Cherry');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -1523,7 +1515,7 @@ test.describe('Scroll position', () => {
   test('switching tabs preserves scroll position', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     // Create a long file
     const longContent = Array.from({ length: 100 }, (_, i) => `## Heading ${i}\n\nParagraph ${i} content.\n`).join('\n');
     const file1 = path.join(tmpDir, 'long.md');
@@ -1570,7 +1562,6 @@ test.describe('Scroll position', () => {
     });
     expect(scrollAfter).toBeGreaterThanOrEqual(400);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -1582,7 +1573,7 @@ test.describe('Context menu', () => {
   test('right-click on folder shows New File and New Folder options', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const subDir = path.join(tmpDir, 'subfolder');
     fs.mkdirSync(subDir);
     fs.writeFileSync(path.join(tmpDir, 'test.md'), '# Test\n');
@@ -1601,13 +1592,12 @@ test.describe('Context menu', () => {
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New File' })).toBeVisible();
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New Folder' })).toBeVisible();
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('Esc dismisses context menu', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     fs.writeFileSync(path.join(tmpDir, 'test.md'), '# Test\n');
 
     await app.evaluate(({ BrowserWindow }, root) => {
@@ -1626,13 +1616,12 @@ test.describe('Context menu', () => {
     await page.waitForTimeout(200);
     await expect(page.locator('.ctx-menu')).not.toBeVisible();
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('right-click on file does not show New File/New Folder', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     fs.writeFileSync(path.join(tmpDir, 'test.md'), '# Test\n');
 
     await app.evaluate(({ BrowserWindow }, root) => {
@@ -1654,7 +1643,6 @@ test.describe('Context menu', () => {
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Rename' })).toBeVisible();
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Delete' })).toBeVisible();
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -1666,7 +1654,7 @@ test.describe('Click-based code folding', () => {
   test('hovering a foldable item shows a gray caret that folds on click', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'list.md');
     fs.writeFileSync(tmpFile, '# List\n\n- Parent item\n    - Child item\n- Sibling\n');
 
@@ -1694,13 +1682,12 @@ test.describe('Click-based code folding', () => {
     // The sublist is hidden (collapsed), though its text remains in the DOM.
     await expect(editor.getByText('Child item')).not.toBeVisible();
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 
   test('leaf list items show no fold caret on hover', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'list.md');
     fs.writeFileSync(tmpFile, '# List\n\n- Parent item\n    - Child item\n- Sibling\n');
 
@@ -1716,7 +1703,6 @@ test.describe('Click-based code folding', () => {
     await page.waitForTimeout(200);
     await expect(page.locator('.fold-caret')).toHaveCount(0);
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -1728,7 +1714,7 @@ test.describe('Toolbar tooltips', () => {
   test('toolbar buttons expose styled tooltips hinting their shortcut', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'doc.md');
     fs.writeFileSync(tmpFile, '# Heading\n\nSome text.\n');
 
@@ -1744,7 +1730,6 @@ test.describe('Toolbar tooltips', () => {
     expect(boldTooltip).toMatch(/Cmd|Ctrl/);
     expect(boldTooltip).toContain('B');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -1756,7 +1741,7 @@ test.describe('Sidebar default mode', () => {
   test('defaults to the outline tab when a file opens with no project folder', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'doc.md');
     fs.writeFileSync(tmpFile, '# Heading One\n\n## Heading Two\n\nText.\n');
 
@@ -1771,7 +1756,6 @@ test.describe('Sidebar default mode', () => {
     await expect(page.locator('.sidebar-tab[title="Document Outline"]')).toHaveClass(/active/, { timeout: 5000 });
     await expect(page.locator('.outline-item').first()).toContainText('Heading One');
 
-    fs.rmSync(tmpDir, { recursive: true });
   });
 });
 
@@ -1783,7 +1767,7 @@ test.describe('Open file with no window', () => {
   test('creates a window and loads the file when none is open', async () => {
     ({ app, page } = await launchApp());
 
-    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpDir = makeTmpDir();
     const tmpFile = path.join(tmpDir, 'pending.md');
     fs.writeFileSync(tmpFile, '# Pending File\n\nLoaded via pending-file path.\n');
 
@@ -1813,6 +1797,106 @@ test.describe('Open file with no window', () => {
     // The file must load (this was the intermittent empty-screen bug).
     await expect(newPage.locator('.tiptap')).toContainText('Pending File', { timeout: 5000 });
 
-    fs.rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Copying from a table (plain-text clipboard)
+// ---------------------------------------------------------------------------
+
+test.describe('Table cell copy', () => {
+  test('copying a single cell yields just its text, not "[table]"', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'table.md');
+    fs.writeFileSync(tmpFile, '# Doc\n\n| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('one', { timeout: 5000 });
+
+    // Select just the text of one cell and copy.
+    await editor.locator('td', { hasText: 'one' }).click({ clickCount: 3 });
+    await page.keyboard.press('ControlOrMeta+c');
+
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip.trim()).toBe('one');
+    expect(clip).not.toContain('[table]');
+
+  });
+
+  test('copying multiple cells yields tab-separated rows', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'table.md');
+    fs.writeFileSync(tmpFile, '# Doc\n\n| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('four', { timeout: 5000 });
+
+    // Drag from the first body cell to the last -> a CellSelection across all 4 body cells.
+    const startCell = editor.locator('td', { hasText: 'one' });
+    const endCell = editor.locator('td', { hasText: 'four' });
+    const a = await startCell.boundingBox();
+    const b = await endCell.boundingBox();
+    if (!a || !b) throw new Error('cell bounding boxes not found');
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 8 });
+    await page.mouse.up();
+
+    // Confirm a multi-cell selection is active before copying.
+    await expect(editor.locator('td.selectedCell')).toHaveCount(4, { timeout: 3000 });
+    await page.keyboard.press('ControlOrMeta+c');
+
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip).not.toContain('[table]');
+    // Cells tab-separated, rows newline-separated.
+    expect(clip).toBe('one\ttwo\nthree\tfour');
+
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Outline highlights the heading at the current scroll position
+// ---------------------------------------------------------------------------
+
+test.describe('Outline active heading', () => {
+  test('highlights the heading scrolled to the top of the viewport', async () => {
+    ({ app, page } = await launchApp());
+
+    const filler = Array.from({ length: 20 }, (_, i) => `Filler paragraph ${i}.`).join('\n\n');
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'long.md');
+    fs.writeFileSync(tmpFile, `# First\n\n${filler}\n\n# Second\n\n${filler}\n\n# Third\n\n${filler}\n`);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    await expect(page.locator('.tiptap')).toContainText('First', { timeout: 5000 });
+    await page.locator('.sidebar-tab[title="Document Outline"]').click();
+
+    const items = page.locator('.outline-item');
+    await expect(items).toHaveCount(3);
+
+    // At the top of the document, the first heading is active.
+    await expect(items.nth(0)).toHaveClass(/active/, { timeout: 3000 });
+
+    // Clicking "Second" scrolls it to the top; the outline highlight follows.
+    await items.nth(1).click();
+    await expect(items.nth(1)).toHaveClass(/active/, { timeout: 3000 });
+    await expect(items.nth(0)).not.toHaveClass(/active/);
+    await expect(items.nth(2)).not.toHaveClass(/active/);
+
   });
 });

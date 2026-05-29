@@ -23,8 +23,8 @@ test('HR shows blue outline when selected', async () => {
   const hr = page.locator('.tiptap hr');
   await expect(hr).toHaveClass(/ProseMirror-selectednode/, { timeout: 2000 });
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('Enter at end of parent list item creates first child', async () => {
@@ -56,8 +56,8 @@ test('Enter at end of parent list item creates first child', async () => {
   expect(await sublistItems.nth(1).innerText()).toBe('child1');
   expect(await sublistItems.nth(2).innerText()).toBe('child2');
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('Cmd+. folds and unfolds list items with children', async () => {
@@ -91,8 +91,8 @@ test('Cmd+. folds and unfolds list items with children', async () => {
   await expect(parentLi).not.toHaveClass(/folded/, { timeout: 2000 });
   await expect(childList).toBeVisible();
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('Enter on empty nested item creates sibling, not bare paragraph', async () => {
@@ -122,8 +122,8 @@ test('Enter on empty nested item creates sibling, not bare paragraph', async () 
   const bareParagraphs = editor.locator('li > p + p');
   expect(await bareParagraphs.count()).toBe(0);
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('Cmd+. on childless nested item does nothing', async () => {
@@ -148,8 +148,8 @@ test('Cmd+. on childless nested item does nothing', async () => {
   const foldedItems = editor.locator('li.folded');
   expect(await foldedItems.count()).toBe(0);
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('loose list split with nested items', async () => {
@@ -190,8 +190,8 @@ test('loose list split with nested items', async () => {
   expect(saved).toMatch(/item 5/);
   expect(saved).toMatch(/item 4\n\n.*item 5/s);
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('fold state persists across file close and reopen', async () => {
@@ -229,8 +229,8 @@ test('fold state persists across file close and reopen', async () => {
   // Sibling should be visible
   await expect(editor).toContainText('sibling');
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('fold state survives external file change', async () => {
@@ -260,8 +260,8 @@ test('fold state survives external file change', async () => {
   await expect(editor.locator('li.folded')).toHaveCount(1, { timeout: 2000 });
   await expect(editor.locator('li.folded > ul')).toBeHidden();
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('fold state works with bold text in folded item', async () => {
@@ -294,8 +294,8 @@ test('fold state works with bold text in folded item', async () => {
   await expect(editor.locator('li.folded')).toHaveCount(1, { timeout: 2000 });
   await expect(editor.locator('li.folded > ul')).toBeHidden();
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('fold state works with special chars and escapes', async () => {
@@ -328,6 +328,6 @@ test('fold state works with special chars and escapes', async () => {
   // Fold should be restored despite special characters
   await expect(editor.locator('li.folded')).toHaveCount(1, { timeout: 2000 });
 
-  fs.rmSync(tmpDir, { recursive: true });
   await app.close();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
