@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.2.1
+
+### Windows support
+
+- **Windows build**: Installer, `.md` file association, `mde` CLI launcher, and native title bar, released alongside the macOS build.
+
+### Editor
+
+- **Table cell copy**: Copying a single cell yields just its text; copying multiple cells yields tab-separated rows (pastes as plain text in editors, as a real table into Word).
+- **Click-to-fold caret**: Hovering an unfolded foldable list item shows a dim gray caret (with a "Fold sub-list" tooltip) that folds the item on click.
+- **Scroll-synced outline**: The document outline highlights the heading currently scrolled to the top of the viewport.
+
+### Interface
+
+- **Toolbar tooltips**: Toolbar buttons show a styled tooltip hinting their keyboard shortcut on hover.
+- **Outline default**: Sidebar defaults to the outline tab when a file is opened with no project folder set.
+- **Fix dock-open empty screen**: Opening a file from the dock with no window open no longer intermittently loads a blank screen.
+
+### Development
+
+- **Windows CI**: Manually-triggered Windows Playwright workflow to catch Windows-specific breakage; documented the release process.
+- CI runs on Node 22; GitHub Actions bumped to v5 (Node 24 runtime).
+- Fixed a save-test race and `npm ci` errors.
+
+---
+
 ## v0.2.0
 
 ### Editor
