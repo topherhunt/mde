@@ -127,6 +127,11 @@ On failure it uploads Playwright traces as a build artifact; download and inspec
 
 ### For me
 
+- [ ] Run windows CI, get all tests passing
+- [ ] Build a new release with Windows included
+- [ ] Send it to Claire & Anny, ask them to test, include a list of things for them to test
+- [ ]
+
 - Support right-click to convert to .docx or .pdf, w standard nice-looking formatting & colors (customizable)
   - PDF export -- does this require chrome/puppeteer? can it just use the built-in engine?
 - **Add Claude agent support.**
@@ -135,17 +140,11 @@ On failure it uploads Playwright traces as a build artifact; download and inspec
 
 ### For Claude
 
-1. Title bar: what's the easiest way to do this? How does titleBarOverlay work?
-2. launchFileHandled: Straightforward? Tricky? Please proceed
-3. Please do add windows terminal launcher support, yes
-4. File associations: Great, please proceed.
-5. Can you help me convert the existing icon to a windows .ico?
-6. PLease do fix to CmdOrCtrl
-
-- I will NOT do code signing. Our readme should instruct users in how to bypass any unsigned-app warnings.
-- I'll do testing manually, thanks
+- (W) Set up Github Action to build Release artifacts & create a Release for them
 
 ---
 
+- Let's add support for click-based code folding, so users who don't know the hotkey aren't left in the dust. I'm thinking: when your mouse is hovering over a bullet-list item that can be folded but is not folded, that item (and NO parents and NO children) has a dim gray caret appear to the left of it, where the blue folded caret would be. If you click on the gray caret, it folds that line and turns into the blue "folded" caret per the existing logic. Also, a small tooltip should appear when your mouse hovers over that caret "Fold sub-list (`Cmd + .`)" to make the hotkey discoverable.
+- Let's add same-styled tooltips to each toolbar button, hinting the hotkey for each, eg. "Bold selection (`Cmd + B`)".
 - If a file is opened in mde and no project folder is set, default to the outline tab please. It's a more useful default in that case.
 - Bug: If I close the mde window (but don't quit the app, so it's still in the dock) and then drag a .md file onto the dock icon, or double-click the .md file to open it with MDE, *sometimes* (not always) the MDE window opens but to just an empty screen, with no file loaded. Other times it does open that first file correctly. If any file IS already open, this bug doesn't happen and opening a 2nd file via double-click etc always seems to work correctly.
