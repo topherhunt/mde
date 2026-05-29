@@ -590,7 +590,16 @@ const JoinAdjacentLists = Extension.create({
 
 export const foldKey = new PluginKey('codeFolding');
 const TOGGLE_FOLD = 'toggleFold';
+const SET_FOLD_HOVER = 'setFoldHover';
 export const RESTORE_FOLDS = 'restoreFolds';
+
+// Platform-aware modifier label for shortcut hints in tooltips.
+const MOD_LABEL = (typeof window !== 'undefined' && window.mde?.platform === 'darwin') ? 'Cmd' : 'Ctrl';
+
+function listItemHasSublist(node: any): boolean {
+  return node.childCount > 1 &&
+    (node.lastChild.type.name === 'bulletList' || node.lastChild.type.name === 'orderedList');
+}
 
 // Fold state persistence uses markdown line numbers to identify folded items.
 // Currently line-number-only: if a file is edited externally and line numbers
@@ -712,18 +721,23 @@ const CodeFolding = Extension.create({
       new Plugin({
         key: foldKey,
         state: {
-          init() { return { collapsed: new Set<number>() }; },
+          init() { return { collapsed: new Set<number>(), hover: null as number | null }; },
           apply(tr, value) {
             const restorePositions = tr.getMeta(RESTORE_FOLDS) as number[] | undefined;
             if (restorePositions) {
-              return { collapsed: new Set(restorePositions) };
+              return { collapsed: new Set(restorePositions), hover: null };
             }
             const togglePos = tr.getMeta(TOGGLE_FOLD);
             if (togglePos !== undefined) {
               const next = new Set(value.collapsed);
               if (next.has(togglePos)) next.delete(togglePos);
               else next.add(togglePos);
-              return { collapsed: next };
+              return { collapsed: next, hover: null };
+            }
+            // Hover position for the click-to-fold caret. Doesn't touch fold state.
+            const hoverMeta = tr.getMeta(SET_FOLD_HOVER) as number | null | undefined;
+            if (hoverMeta !== undefined) {
+              return { ...value, hover: hoverMeta };
             }
             if (!tr.docChanged) return value;
             const next = new Set<number>();
@@ -736,7 +750,7 @@ const CodeFolding = Extension.create({
                 }
               } catch { /* position no longer valid */ }
             }
-            return { collapsed: next };
+            return { collapsed: next, hover: null };
           },
         },
         props: {
@@ -767,10 +781,52 @@ const CodeFolding = Extension.create({
               }
               return false;
             },
+            // Track which foldable (not-yet-folded) list item the mouse is over so we
+            // can show a gray "fold this" caret to its left. Only the innermost item
+            // under the cursor is marked -- never its parents or children.
+            mousemove(view, event) {
+              const fold = foldKey.getState(view.state);
+              let pos: number | null = null;
+              const liDom = (event.target as HTMLElement)?.closest?.('li');
+              if (liDom) {
+                try {
+                  const p = view.posAtDOM(liDom, 0) - 1;
+                  const node = view.state.doc.nodeAt(p);
+                  if (node && node.type.name === 'listItem' && listItemHasSublist(node) && !fold.collapsed.has(p)) {
+                    pos = p;
+                  }
+                } catch { /* ignore */ }
+              }
+              // Bridge the gutter strip between the item's text and its caret so moving
+              // the mouse leftward toward the caret doesn't dismiss it.
+              if (pos === null && fold.hover !== null) {
+                try {
+                  const dom = view.nodeDOM(fold.hover) as HTMLElement | null;
+                  const para = dom?.firstElementChild as HTMLElement | null;
+                  if (para) {
+                    const r = para.getBoundingClientRect();
+                    if (event.clientY >= r.top && event.clientY <= r.bottom &&
+                        event.clientX >= r.left - 44 && event.clientX <= r.right) {
+                      pos = fold.hover;
+                    }
+                  }
+                } catch { /* ignore */ }
+              }
+              if (pos !== fold.hover) {
+                view.dispatch(view.state.tr.setMeta(SET_FOLD_HOVER, pos).setMeta('addToHistory', false));
+              }
+              return false;
+            },
+            mouseleave(view) {
+              const fold = foldKey.getState(view.state);
+              if (fold.hover !== null) {
+                view.dispatch(view.state.tr.setMeta(SET_FOLD_HOVER, null).setMeta('addToHistory', false));
+              }
+              return false;
+            },
           },
           decorations(state) {
-            const { collapsed } = foldKey.getState(state);
-            if (!collapsed.size) return DecorationSet.empty;
+            const { collapsed, hover } = foldKey.getState(state);
             const decos: Decoration[] = [];
             for (const pos of collapsed) {
               try {
@@ -790,6 +846,29 @@ const CodeFolding = Extension.create({
                 }
               } catch { /* ignore */ }
             }
+            // Gray click-to-fold caret on the hovered (foldable, not-folded) item.
+            if (hover !== null && !collapsed.has(hover)) {
+              try {
+                const node = state.doc.nodeAt(hover);
+                if (node && node.type.name === 'listItem' && listItemHasSublist(node)) {
+                  const hoverPos = hover;
+                  decos.push(Decoration.node(hoverPos, hoverPos + node.nodeSize, { class: 'fold-hoverable' }));
+                  decos.push(Decoration.widget(hoverPos + 1, (view) => {
+                    const span = document.createElement('span');
+                    span.className = 'fold-caret';
+                    span.setAttribute('data-tooltip', `Fold sub-list (${MOD_LABEL} + .)`);
+                    span.addEventListener('mousedown', (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      // TOGGLE_FOLD also clears the hover state, removing this caret.
+                      view.dispatch(view.state.tr.setMeta(TOGGLE_FOLD, hoverPos));
+                    });
+                    return span;
+                  }, { side: -1, key: `fold-caret-${hoverPos}` }));
+                }
+              } catch { /* ignore */ }
+            }
+            if (!decos.length) return DecorationSet.empty;
             return DecorationSet.create(state.doc, decos);
           },
         },

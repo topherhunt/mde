@@ -31,6 +31,7 @@ export interface MdeAPI {
   showSaveDialog: (defaultPath?: string) => Promise<string | null>;
   exportPDF: () => Promise<string | null>;
   getProjectRoot: () => Promise<string | null>;
+  getPendingFile: () => Promise<string | null>;
   watchFile: (filePath: string) => void;
   unwatchFile: (filePath: string) => void;
   onOpenFile: (callback: (filePath: string) => void) => () => void;

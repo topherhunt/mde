@@ -1,6 +1,9 @@
 import React, { useCallback, useState, useEffect } from 'react';
 import { Editor as TipTapEditor } from '@tiptap/react';
 
+// Platform-aware modifier label for shortcut hints in tooltips.
+const MOD = window.mde?.platform === 'darwin' ? 'Cmd' : 'Ctrl';
+
 interface ToolbarProps {
   editor: TipTapEditor | null;
   linkTrigger?: number;
@@ -49,14 +52,14 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
       <div className="toolbar-group">
         <ToolbarButton
           icon="arrow-counterclockwise"
-          title="Undo (Cmd+Z)"
+          title={`Undo (${MOD} + Z)`}
           active={false}
           disabled={!editor.can().undo()}
           onClick={() => editor.chain().focus().undo().run()}
         />
         <ToolbarButton
           icon="arrow-clockwise"
-          title="Redo (Cmd+Shift+Z)"
+          title={`Redo (${MOD} + Shift + Z)`}
           active={false}
           disabled={!editor.can().redo()}
           onClick={() => editor.chain().focus().redo().run()}
@@ -100,25 +103,25 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
       <div className="toolbar-group">
         <ToolbarButton
           icon="type-bold"
-          title="Bold (Cmd+B)"
+          title={`Bold selection (${MOD} + B)`}
           active={editor.isActive('bold')}
           onClick={() => editor.chain().focus().toggleBold().run()}
         />
         <ToolbarButton
           icon="type-italic"
-          title="Italic (Cmd+I)"
+          title={`Italic selection (${MOD} + I)`}
           active={editor.isActive('italic')}
           onClick={() => editor.chain().focus().toggleItalic().run()}
         />
         <ToolbarButton
           icon="type-strikethrough"
-          title="Strikethrough (Cmd+Shift+X)"
+          title={`Strikethrough selection (${MOD} + Shift + X)`}
           active={editor.isActive('strike')}
           onClick={() => editor.chain().focus().toggleStrike().run()}
         />
         <ToolbarButton
           icon="highlighter"
-          title="Highlight"
+          title="Highlight selection"
           active={editor.isActive('highlight')}
           onClick={() => editor.chain().focus().toggleHighlight().run()}
         />
@@ -129,19 +132,19 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
       <div className="toolbar-group">
         <ToolbarButton
           icon="list-ol"
-          title="Ordered List (Cmd+Shift+7)"
+          title={`Ordered list (${MOD} + Shift + 7)`}
           active={editor.isActive('orderedList')}
           onClick={() => editor.chain().focus().toggleOrderedList().run()}
         />
         <ToolbarButton
           icon="list-ul"
-          title="Unordered List (Cmd+Shift+8)"
+          title={`Bullet list (${MOD} + Shift + 8)`}
           active={editor.isActive('bulletList') && !editor.isActive('listItem', { checked: true }) && !editor.isActive('listItem', { checked: false })}
           onClick={() => editor.chain().focus().toggleBulletList().run()}
         />
         <ToolbarButton
           icon="ui-checks"
-          title="Todo List"
+          title={`Todo list (${MOD} + Enter)`}
           active={editor.isActive('listItem', { checked: true }) || editor.isActive('listItem', { checked: false })}
           onClick={() => {
             const { state } = editor;
@@ -173,7 +176,7 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
         />
         <ToolbarButton
           icon="quote"
-          title="Blockquote (Cmd+Shift+B)"
+          title={`Blockquote (${MOD} + Shift + B)`}
           active={editor.isActive('blockquote')}
           onClick={() => editor.chain().focus().toggleBlockquote().run()}
         />
@@ -184,13 +187,13 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
       <div className="toolbar-group">
         <ToolbarButton
           icon="code"
-          title="Inline Code (Cmd+E)"
+          title={`Inline code (${MOD} + E)`}
           active={editor.isActive('code')}
           onClick={() => editor.chain().focus().toggleCode().run()}
         />
         <ToolbarButton
           icon="code-square"
-          title="Code Block (Cmd+Shift+E)"
+          title={`Code block (${MOD} + Shift + E)`}
           active={editor.isActive('codeBlock')}
           onClick={() => editor.chain().focus().toggleCodeBlock().run()}
         />
@@ -201,19 +204,19 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
       <div className="toolbar-group">
         <ToolbarButton
           icon="link-45deg"
-          title="Link (Cmd+K)"
+          title={`Insert link (${MOD} + K)`}
           active={editor.isActive('link')}
           onClick={startSetLink}
         />
         <ToolbarButton
           icon="table"
-          title="Insert Table"
+          title="Insert table"
           active={false}
           onClick={insertTable}
         />
         <ToolbarButton
           icon="hr"
-          title="Horizontal Rule"
+          title="Horizontal rule"
           active={false}
           onClick={() => editor.chain().focus().setHorizontalRule().run()}
         />
@@ -236,7 +239,8 @@ function ToolbarButton({ icon, label, title, active, disabled, onClick, classNam
   return (
     <button
       className={`toolbar-btn ${active ? 'active' : ''} ${disabled ? 'disabled' : ''} ${className || ''}`}
-      title={title}
+      data-tooltip={title}
+      aria-label={title}
       disabled={disabled}
       onMouseDown={(e) => {
         e.preventDefault();

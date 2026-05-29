@@ -111,6 +111,7 @@ git push origin v0.2.0
 This runs two parallel build jobs (`macos-latest` -> `.dmg`, `windows-latest` -> `Setup.exe`) and attaches both to a GitHub Release for that tag. The Release is created as a **draft** -- review it, smoke-test the Windows installer (file associations only register during a real install), then click **Publish**. To auto-publish instead, remove `draft: true` from the workflow.
 
 Notes:
+
 - The workflow file must exist on the commit the tag points to, so push your changes to `main` before tagging.
 - The macOS build is Apple Silicon (arm64) only -- `macos-latest` runners are arm64. Intel Macs aren't covered.
 - You can also trigger the workflow manually (Actions tab -> "Build and Release" -> Run workflow) to verify the builds compile without creating a release.
@@ -130,7 +131,7 @@ On failure it uploads Playwright traces as a build artifact; download and inspec
 - [ ] Run windows CI, get all tests passing
 - [ ] Build a new release with Windows included
 - [ ] Send it to Claire & Anny, ask them to test, include a list of things for them to test
-- [ ]
+- \[ \]
 
 - Support right-click to convert to .docx or .pdf, w standard nice-looking formatting & colors (customizable)
   - PDF export -- does this require chrome/puppeteer? can it just use the built-in engine?
@@ -144,7 +145,6 @@ On failure it uploads Playwright traces as a build artifact; download and inspec
 
 ---
 
-- Let's add support for click-based code folding, so users who don't know the hotkey aren't left in the dust. I'm thinking: when your mouse is hovering over a bullet-list item that can be folded but is not folded, that item (and NO parents and NO children) has a dim gray caret appear to the left of it, where the blue folded caret would be. If you click on the gray caret, it folds that line and turns into the blue "folded" caret per the existing logic. Also, a small tooltip should appear when your mouse hovers over that caret "Fold sub-list (`Cmd + .`)" to make the hotkey discoverable.
-- Let's add same-styled tooltips to each toolbar button, hinting the hotkey for each, eg. "Bold selection (`Cmd + B`)".
-- If a file is opened in mde and no project folder is set, default to the outline tab please. It's a more useful default in that case.
-- Bug: If I close the mde window (but don't quit the app, so it's still in the dock) and then drag a .md file onto the dock icon, or double-click the .md file to open it with MDE, *sometimes* (not always) the MDE window opens but to just an empty screen, with no file loaded. Other times it does open that first file correctly. If any file IS already open, this bug doesn't happen and opening a 2nd file via double-click etc always seems to work correctly.
+- As for the visual code folding, that's a great start, but if I move my mouse over where the gray caret is, The gray carrot disappears because that's outside of the actual LI element box itself. I don't know what you would suggest as far as the best way to reconcile that. But obviously moving over where the grey carrot lives should cause the gray carrot to show. Basically anywhere if you're in this vertical slice of the document should cause the gray carrot to show. Is that easy? Or are you kind of bound by the padding of the li element itself? I don't know. Let me know what you think.
+- Copying text from a table cell doesn't work. It just pastes as `[table]`. If I select just the contents of a single cell, it shouldn't try to copy the cell markup, it should just copy the selected text itself. And with multiple cells, I mean it does need to copy ideally in a format that would paste nicely into a Word document or something, but the format that it copies into should also paste nicely as plain text. So if I copy it into VS Code, it should paste as just let's say tab-separated text. Do clipboards work like that? Can you provide different clipboard formattings for different contexts?
+- In the left sidebar outline view, when you have that activated, based on where your scroll is, let's say the top of the editable visible viewport, based on where that point is in the scroll, you should have the heading that you're in colored blue, and the rest should be white like standard.

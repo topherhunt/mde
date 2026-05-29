@@ -73,7 +73,7 @@ test('Cmd+. folds and unfolds list items with children', async () => {
 
   // Click in "parent" and fold
   await page.locator('.tiptap li').first().locator('p').first().click();
-  await page.keyboard.press('Meta+.');
+  await page.keyboard.press('ControlOrMeta+.');
 
   // Parent should have folded class
   const parentLi = page.locator('.tiptap li').first();
@@ -87,7 +87,7 @@ test('Cmd+. folds and unfolds list items with children', async () => {
   await expect(editor).toContainText('sibling');
 
   // Unfold
-  await page.keyboard.press('Meta+.');
+  await page.keyboard.press('ControlOrMeta+.');
   await expect(parentLi).not.toHaveClass(/folded/, { timeout: 2000 });
   await expect(childList).toBeVisible();
 
@@ -142,7 +142,7 @@ test('Cmd+. on childless nested item does nothing', async () => {
   await expect(child1P).toHaveText('child1');
   await child1P.click({ position: { x: 20, y: 8 } });
   await page.waitForTimeout(100);
-  await page.keyboard.press('Meta+.');
+  await page.keyboard.press('ControlOrMeta+.');
 
   // Parent should NOT be folded
   const foldedItems = editor.locator('li.folded');
@@ -208,11 +208,11 @@ test('fold state persists across file close and reopen', async () => {
   // Fold "parent"
   const parentP = editor.locator(':scope > ul > li > p').first();
   await parentP.click({ position: { x: 20, y: 8 } });
-  await page.keyboard.press('Meta+.');
+  await page.keyboard.press('ControlOrMeta+.');
   await expect(editor.locator('li.folded')).toHaveCount(1, { timeout: 2000 });
 
   // Close the tab
-  await page.keyboard.press('Meta+w');
+  await page.keyboard.press('ControlOrMeta+w');
   await page.waitForTimeout(300);
 
   // Reopen the same file
@@ -247,7 +247,7 @@ test('fold state survives external file change', async () => {
   // Fold "parent"
   const parentP = editor.locator(':scope > ul > li > p').first();
   await parentP.click({ position: { x: 20, y: 8 } });
-  await page.keyboard.press('Meta+.');
+  await page.keyboard.press('ControlOrMeta+.');
   await expect(editor.locator('li.folded')).toHaveCount(1, { timeout: 2000 });
 
   // Simulate external edit: change sibling text but keep parent+children intact
@@ -278,11 +278,11 @@ test('fold state works with bold text in folded item', async () => {
   // Fold "bold parent"
   const parentP = editor.locator(':scope > ul > li > p').first();
   await parentP.click({ position: { x: 20, y: 8 } });
-  await page.keyboard.press('Meta+.');
+  await page.keyboard.press('ControlOrMeta+.');
   await expect(editor.locator('li.folded')).toHaveCount(1, { timeout: 2000 });
 
   // Close and reopen
-  await page.keyboard.press('Meta+w');
+  await page.keyboard.press('ControlOrMeta+w');
   await page.waitForTimeout(300);
   await app.evaluate(({ BrowserWindow }, fp) => {
     BrowserWindow.getAllWindows()[0].webContents.send('open-file', fp);
@@ -313,11 +313,11 @@ test('fold state works with special chars and escapes', async () => {
   // Fold
   const parentP = editor.locator(':scope > ul > li > p').first();
   await parentP.click({ position: { x: 20, y: 8 } });
-  await page.keyboard.press('Meta+.');
+  await page.keyboard.press('ControlOrMeta+.');
   await expect(editor.locator('li.folded')).toHaveCount(1, { timeout: 2000 });
 
   // Close and reopen
-  await page.keyboard.press('Meta+w');
+  await page.keyboard.press('ControlOrMeta+w');
   await page.waitForTimeout(300);
   await app.evaluate(({ BrowserWindow }, fp) => {
     BrowserWindow.getAllWindows()[0].webContents.send('open-file', fp);

@@ -23,6 +23,8 @@
   --danger-text: #b91c1c;
   --info-text: #1d4ed8;
   --toolbar-icon: #888888;
+  --tooltip-bg: #2a2a2c;
+  --tooltip-text: #f5f5f5;
 }
 
 [data-theme="dark"] {
@@ -43,6 +45,8 @@
   --danger-text: #fca5a5;
   --info-text: #93c5fd;
   --toolbar-icon: #d6d6d6;
+  --tooltip-bg: #3a3a3d;
+  --tooltip-text: #f0f0f0;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -64,6 +68,8 @@
     --danger-text: #fca5a5;
     --info-text: #93c5fd;
     --toolbar-icon: #d6d6d6;
+    --tooltip-bg: #3a3a3d;
+    --tooltip-text: #f0f0f0;
   }
 }
 
@@ -401,6 +407,46 @@ body {
   font-size: 13px;
   color: var(--toolbar-icon);
   cursor: pointer;
+}
+
+/* --- Tooltips (toolbar buttons, fold caret) --- */
+/* Shared styled tooltip shown after a short hover delay. Defaults to below-center;
+   the fold caret overrides to the right so it isn't clipped at the editor's left edge. */
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 2000;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: var(--tooltip-bg);
+  color: var(--tooltip-text);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.3;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+  transition-delay: 0s;
+}
+
+[data-tooltip]:hover::after {
+  opacity: 1;
+  transition-delay: 0.45s;
+}
+
+.editor-content .tiptap .fold-caret[data-tooltip]::after {
+  top: 50%;
+  left: calc(100% + 6px);
+  transform: translateY(-50%);
 }
 
 /* --- Tab bar --- */
@@ -771,6 +817,34 @@ body {
   text-decoration: none;
   cursor: pointer;
   vertical-align: baseline;
+}
+
+/* Gray "fold this" caret shown on hover over a foldable (but not folded) list item.
+   Positioned where the blue folded caret sits; clicking it folds the item. */
+.editor-content .tiptap li.fold-hoverable {
+  position: relative;
+}
+
+.editor-content .tiptap .fold-caret {
+  position: absolute;
+  left: -33px;
+  top: 4px;
+  width: 16px;
+  height: 16px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 6l5 5 5-5' stroke='%23888' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 10px 10px;
+  background-position: center;
+  background-repeat: no-repeat;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.editor-content .tiptap .fold-caret:hover {
+  opacity: 1;
+}
+
+.editor-content .tiptap li[data-checked].fold-hoverable .fold-caret {
+  left: -36px;
 }
 
 .editor-content .tiptap img {

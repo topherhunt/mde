@@ -278,7 +278,7 @@ test.describe('Editing', () => {
 
     // Press Cmd+Z (undo) -- should NOT clear the content
     await editor.click();
-    await page.keyboard.press('Meta+z');
+    await page.keyboard.press('ControlOrMeta+z');
 
     await expect(editor).toContainText('Document One');
   });
@@ -293,8 +293,8 @@ test.describe('Editing', () => {
     const editor = page.locator('.tiptap');
     await expect(editor).toContainText('Document One', { timeout: 5000 });
 
-    const undoBtn = page.locator('.toolbar-btn[title*="Undo"]');
-    const redoBtn = page.locator('.toolbar-btn[title*="Redo"]');
+    const undoBtn = page.locator('.toolbar-btn[data-tooltip*="Undo"]');
+    const redoBtn = page.locator('.toolbar-btn[data-tooltip*="Redo"]');
     await expect(undoBtn).toBeDisabled();
     await expect(redoBtn).toBeDisabled();
 
@@ -305,7 +305,7 @@ test.describe('Editing', () => {
     await expect(undoBtn).toBeEnabled();
 
     // Undo -- redo should become enabled, undo disabled again
-    await page.keyboard.press('Meta+z');
+    await page.keyboard.press('ControlOrMeta+z');
     await expect(redoBtn).toBeEnabled();
     await expect(undoBtn).toBeDisabled();
   });
@@ -328,7 +328,7 @@ test.describe('Editing', () => {
     await expect(page.locator('.tab-dirty-dot')).toBeVisible();
 
     // Undo -- dirty dot should disappear
-    await page.keyboard.press('Meta+z');
+    await page.keyboard.press('ControlOrMeta+z');
     await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
   });
 
@@ -404,9 +404,9 @@ test.describe('Toolbar', () => {
     const editor = page.locator('.tiptap');
     const paragraph = editor.locator('p');
     await paragraph.click();
-    await page.keyboard.press('Meta+a');
+    await page.keyboard.press('ControlOrMeta+a');
 
-    const boldBtn = page.locator('.toolbar-btn[title*="Bold"]');
+    const boldBtn = page.locator('.toolbar-btn[data-tooltip*="Bold"]');
     await boldBtn.click();
 
     await expect(boldBtn).toHaveClass(/active/);
@@ -851,7 +851,7 @@ test.describe('Todo lists', () => {
     await page.keyboard.press('Shift+End');
 
     // Click todo list toolbar button
-    await page.locator('.toolbar-btn[title="Todo List"]').click();
+    await page.locator('.toolbar-btn[data-tooltip*="Todo"]').click();
 
     // Verify task item is rendered with data-checked attribute
     await expect(editor.locator('li[data-checked]')).toBeVisible();
@@ -975,11 +975,11 @@ test.describe('Todo lists', () => {
     await page.waitForTimeout(100);
 
     // Cycle: bullet -> unchecked -> checked -> bullet
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(100);
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(100);
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     // Save and check for gaps
@@ -1016,7 +1016,7 @@ test.describe('Todo lists', () => {
     // Select just "beta" text by clicking and Cmd+A within the item (use triple-click)
     const betaLi = editor.locator('li', { hasText: 'beta' });
     await betaLi.click({ clickCount: 3 });
-    await page.keyboard.press('Meta+c');
+    await page.keyboard.press('ControlOrMeta+c');
 
     // Read clipboard
     const clipSingle = await page.evaluate(() => navigator.clipboard.readText());
@@ -1024,8 +1024,8 @@ test.describe('Todo lists', () => {
 
     // Now select all three items and copy
     await editor.click();
-    await page.keyboard.press('Meta+a');
-    await page.keyboard.press('Meta+c');
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ControlOrMeta+c');
 
     const clipMulti = await page.evaluate(() => navigator.clipboard.readText());
     expect(clipMulti).toContain('- alpha');
@@ -1099,7 +1099,10 @@ test.describe('Keyboard Shortcuts', () => {
     await expect(tab.locator('.tab-name')).toContainText('Keyboard Shortcuts');
 
     const editor = page.locator('.tiptap');
-    await expect(editor).toContainText('Cmd + O');
+    // The shortcuts doc is authored with macOS key names; the app maps Cmd -> Ctrl
+    // for Windows/Linux, so assert against the label for the current platform.
+    const modLabel = process.platform === 'darwin' ? 'Cmd' : 'Ctrl';
+    await expect(editor).toContainText(`${modLabel} + O`);
     await expect(editor).toContainText('Bold');
   });
 
@@ -1243,21 +1246,21 @@ test.describe('List keyboard interactions', () => {
     await editor.locator('p', { hasText: 'plain paragraph' }).click();
 
     // 1st Cmd+Enter: paragraph -> bullet list
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await expect(editor.locator('li:not([data-checked])')).toBeVisible();
 
     // 2nd Cmd+Enter: bullet -> unchecked task
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
     await expect(editor.locator('li[data-checked="false"]')).toBeVisible();
 
     // 3rd Cmd+Enter: unchecked -> checked
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
     await expect(editor.locator('li[data-checked="true"]')).toBeVisible();
 
     // 4th Cmd+Enter: checked -> bullet (NOT paragraph)
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await expect(editor.locator('li:not([data-checked])')).toBeVisible();
     await expect(editor.locator('li[data-checked]')).toHaveCount(0);
 
@@ -1280,24 +1283,24 @@ test.describe('List keyboard interactions', () => {
 
     // Select all content (Cmd+A reliably creates a ProseMirror AllSelection)
     await editor.click();
-    await page.keyboard.press('Meta+a');
+    await page.keyboard.press('ControlOrMeta+a');
 
     // First item is unchecked task -> target is checked task
     // Both items should become checked tasks
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     await expect(editor.locator('li[data-checked="true"]')).toHaveCount(2);
 
     // Cmd+Enter again WITHOUT re-selecting: selection should be preserved
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     await expect(editor.locator('li[data-checked]')).toHaveCount(0);
     await expect(editor.locator('li')).toHaveCount(2);
 
     // And again: bullet items -> unchecked tasks (still no re-select)
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     await expect(editor.locator('li[data-checked="false"]')).toHaveCount(2);
@@ -1327,22 +1330,22 @@ test.describe('List keyboard interactions', () => {
 
     // Select all: first item is unchecked task -> target = checked task
     await editor.click();
-    await page.keyboard.press('Meta+a');
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     // All 3 should be checked
     await expect(editor.locator('li[data-checked="true"]')).toHaveCount(3);
 
     // Again without re-selecting (selection preserved): checked -> bullet
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     await expect(editor.locator('li[data-checked]')).toHaveCount(0);
     await expect(editor.locator('li')).toHaveCount(3);
 
     // Again: bullet -> unchecked task
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     await expect(editor.locator('li[data-checked="false"]')).toHaveCount(3);
@@ -1366,23 +1369,23 @@ test.describe('List keyboard interactions', () => {
 
     // Select all and convert bullets -> tasks
     await editor.click();
-    await page.keyboard.press('Meta+a');
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     // All 3 items should be unchecked tasks
     await expect(editor.locator('li[data-checked="false"]')).toHaveCount(3);
 
     // Check all tasks
-    await page.keyboard.press('Meta+a');
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     await expect(editor.locator('li[data-checked="true"]')).toHaveCount(3);
 
     // Back to bullets
-    await page.keyboard.press('Meta+a');
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     await expect(editor.locator('li[data-checked]')).toHaveCount(0);
@@ -1417,7 +1420,7 @@ test.describe('List keyboard interactions', () => {
     await page.waitForTimeout(100);
 
     // Cmd+Enter: only beta+gamma should become unchecked tasks
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     // alpha and delta should still be plain bullet items
@@ -1433,7 +1436,7 @@ test.describe('List keyboard interactions', () => {
     await expect(editor.locator('ul')).toHaveCount(1);
 
     // Cmd+Enter again (selection preserved): unchecked -> checked
-    await page.keyboard.press('Meta+Enter');
+    await page.keyboard.press('ControlOrMeta+Enter');
     await page.waitForTimeout(200);
 
     await expect(editor.locator('li[data-checked="true"]')).toHaveCount(2);
@@ -1468,7 +1471,7 @@ test.describe('Move block', () => {
     await page.waitForTimeout(100);
 
     // Move it down
-    await page.keyboard.press('Meta+Alt+ArrowDown');
+    await page.keyboard.press('ControlOrMeta+Alt+ArrowDown');
     await page.waitForTimeout(200);
 
     // Now order should be: Second, First, Third
@@ -1499,7 +1502,7 @@ test.describe('Move block', () => {
     await page.waitForTimeout(100);
 
     // Move it up
-    await page.keyboard.press('Meta+Alt+ArrowUp');
+    await page.keyboard.press('ControlOrMeta+Alt+ArrowUp');
     await page.waitForTimeout(200);
 
     // Now order should be: Banana, Apple, Cherry
@@ -1650,6 +1653,165 @@ test.describe('Context menu', () => {
     // But should still have Rename, Delete, Copy Path
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Rename' })).toBeVisible();
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Delete' })).toBeVisible();
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Click-based code folding (gray hover caret)
+// ---------------------------------------------------------------------------
+
+test.describe('Click-based code folding', () => {
+  test('hovering a foldable item shows a gray caret that folds on click', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'list.md');
+    fs.writeFileSync(tmpFile, '# List\n\n- Parent item\n    - Child item\n- Sibling\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Parent item', { timeout: 5000 });
+
+    // No caret until we hover a foldable item.
+    await expect(page.locator('.fold-caret')).toHaveCount(0);
+
+    // Hover the parent item's own paragraph (it has a child sublist -> foldable).
+    const parentPara = editor.locator('li', { hasText: 'Parent item' }).locator('> p').first();
+    await parentPara.hover();
+
+    const caret = page.locator('.fold-caret');
+    await expect(caret).toBeVisible({ timeout: 3000 });
+
+    // Clicking the caret folds the item: the sublist hides and the "..." badge appears.
+    await caret.click();
+    await expect(editor.locator('li.folded')).toBeVisible();
+    await expect(editor.locator('.fold-badge')).toBeVisible();
+    // The sublist is hidden (collapsed), though its text remains in the DOM.
+    await expect(editor.getByText('Child item')).not.toBeVisible();
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  test('leaf list items show no fold caret on hover', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'list.md');
+    fs.writeFileSync(tmpFile, '# List\n\n- Parent item\n    - Child item\n- Sibling\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Sibling', { timeout: 5000 });
+
+    // "Sibling" is a leaf item (no children) -> hovering it must not show a caret.
+    await editor.locator('li', { hasText: 'Sibling' }).locator('> p').first().hover();
+    await page.waitForTimeout(200);
+    await expect(page.locator('.fold-caret')).toHaveCount(0);
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Toolbar tooltips
+// ---------------------------------------------------------------------------
+
+test.describe('Toolbar tooltips', () => {
+  test('toolbar buttons expose styled tooltips hinting their shortcut', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'doc.md');
+    fs.writeFileSync(tmpFile, '# Heading\n\nSome text.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    await expect(page.locator('.toolbar')).toBeVisible({ timeout: 5000 });
+
+    // The bold button advertises the shortcut via a data-tooltip (styled, not native title).
+    const boldTooltip = await page.locator('.toolbar-btn[data-tooltip*="Bold"]').getAttribute('data-tooltip');
+    expect(boldTooltip).toContain('Bold');
+    expect(boldTooltip).toMatch(/Cmd|Ctrl/);
+    expect(boldTooltip).toContain('B');
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Outline default when no project folder is set
+// ---------------------------------------------------------------------------
+
+test.describe('Sidebar default mode', () => {
+  test('defaults to the outline tab when a file opens with no project folder', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'doc.md');
+    fs.writeFileSync(tmpFile, '# Heading One\n\n## Heading Two\n\nText.\n');
+
+    // Explorer is the default before any file opens.
+    await expect(page.locator('.sidebar-tab[title="File Explorer"]')).toHaveClass(/active/);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    // With no project folder set, the outline tab becomes active.
+    await expect(page.locator('.sidebar-tab[title="Document Outline"]')).toHaveClass(/active/, { timeout: 5000 });
+    await expect(page.locator('.outline-item').first()).toContainText('Heading One');
+
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Opening a file when no window is open (pending-file path)
+// ---------------------------------------------------------------------------
+
+test.describe('Open file with no window', () => {
+  test('creates a window and loads the file when none is open', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'mde-test-'));
+    const tmpFile = path.join(tmpDir, 'pending.md');
+    fs.writeFileSync(tmpFile, '# Pending File\n\nLoaded via pending-file path.\n');
+
+    // Close every window but keep the app running (mac dock scenario).
+    // close() is async, so wait until no windows remain -- otherwise the
+    // open-file handler may still see the dying window and route the IPC to it.
+    await app.evaluate(async ({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows().forEach((w) => w.close());
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          if (BrowserWindow.getAllWindows().length === 0) resolve();
+          else setTimeout(check, 20);
+        };
+        check();
+      });
+    });
+
+    // Simulate a dock-drop / double-click arriving while no window exists.
+    const newWindowPromise = app.waitForEvent('window');
+    await app.evaluate(({ app: electronApp }, filePath) => {
+      electronApp.emit('open-file', { preventDefault() {} }, filePath);
+    }, tmpFile);
+
+    const newPage = await newWindowPromise;
+    await newPage.waitForSelector('.app', { timeout: 10000 });
+
+    // The file must load (this was the intermittent empty-screen bug).
+    await expect(newPage.locator('.tiptap')).toContainText('Pending File', { timeout: 5000 });
 
     fs.rmSync(tmpDir, { recursive: true });
   });

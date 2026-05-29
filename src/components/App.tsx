@@ -178,6 +178,7 @@ export default function App() {
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [importConfirm, setImportConfirm] = useState<string | null>(null);
   const [linkBarVisible, setLinkBarVisible] = useState(false);
+  const initialSidebarModeSetRef = useRef(false);
 
   const showToast = useCallback((msg: string, variant?: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -520,6 +521,11 @@ export default function App() {
     window.mde.getProjectRoot().then(root => {
       if (root) dispatch({ type: 'SET_PROJECT_ROOT', root });
     });
+    // A file queued at window creation (launched/dock-opened) is pulled here
+    // rather than pushed, so it loads even if it arrived before this listener.
+    window.mde.getPendingFile().then(filePath => {
+      if (filePath) openFile(filePath);
+    });
     window.mde.getTheme().then(applyTheme);
     window.mde.getSpellcheck().then(setSpellcheck);
     window.mde.getAutosave().then(setAutosave);
@@ -538,6 +544,17 @@ export default function App() {
       document.documentElement.setAttribute('data-theme', t);
     }
   }
+
+  // When the first file opens with no project folder set, the file explorer has
+  // nothing to show, so default to the outline tab. Runs once; later user toggles stick.
+  useEffect(() => {
+    if (initialSidebarModeSetRef.current) return;
+    if (state.tabs.length === 0) return;
+    initialSidebarModeSetRef.current = true;
+    if (!state.projectRoot) {
+      dispatch({ type: 'SET_SIDEBAR_MODE', mode: 'outline' });
+    }
+  }, [state.tabs.length, state.projectRoot]);
 
   useEffect(() => {
     if (state.projectRoot) {

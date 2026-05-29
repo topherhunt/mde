@@ -68,6 +68,10 @@ if (handleSquirrelEvent()) {
 
 interface WindowState {
   projectRoot: string | null;
+  // A file queued to open once the renderer is ready. The renderer pulls this
+  // via the `get-pending-file` IPC on mount, rather than us pushing `open-file`
+  // on `did-finish-load` (which races the renderer registering its listener).
+  pendingFile: string | null;
 }
 
 const windowStates = new Map<BrowserWindow, WindowState>();
@@ -139,7 +143,7 @@ if (process.platform !== 'darwin' && !isTest) {
   }
 }
 
-function createWindow(projectRoot: string | null = null): BrowserWindow {
+function createWindow(projectRoot: string | null = null, pendingFile: string | null = null): BrowserWindow {
   const focused = BrowserWindow.getFocusedWindow();
   const savedBounds = isTest ? null : loadState().windowBounds;
   const [x, y] = focused
@@ -166,7 +170,7 @@ function createWindow(projectRoot: string | null = null): BrowserWindow {
     },
   });
 
-  windowStates.set(win, { projectRoot });
+  windowStates.set(win, { projectRoot, pendingFile });
   if (projectRoot) saveLastProjectRoot(projectRoot);
 
   const spellcheckEnabled = loadState().spellcheck !== false;
@@ -896,6 +900,18 @@ ipcMain.handle('get-project-root', (event) => {
   return windowStates.get(win)?.projectRoot ?? null;
 });
 
+// Returns (and clears) the file queued for this window at creation time. The
+// renderer calls this once on mount, so a launch/dock-opened file loads reliably
+// even though the renderer's `open-file` listener isn't ready at `did-finish-load`.
+ipcMain.handle('get-pending-file', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return null;
+  const ws = windowStates.get(win);
+  const file = ws?.pendingFile ?? null;
+  if (ws) ws.pendingFile = null;
+  return file;
+});
+
 // --- File watching ---
 
 const watchers = new Map<string, fs.FSWatcher>();
@@ -1139,8 +1155,7 @@ function openResolvedPath(target: string): void {
       win.focus();
       win.webContents.send('open-file', target);
     } else {
-      const newWin = createWindow();
-      newWin.webContents.once('did-finish-load', () => newWin.webContents.send('open-file', target));
+      createWindow(null, target);
     }
   }
 }
@@ -1171,12 +1186,7 @@ app.on('open-file', (event, filePath) => {
       win.webContents.send('open-file', filePath);
     } else {
       launchFileHandled = true;
-      app.whenReady().then(() => {
-        const newWin = createWindow();
-        newWin.webContents.on('did-finish-load', () => {
-          newWin.webContents.send('open-file', filePath);
-        });
-      });
+      app.whenReady().then(() => createWindow(null, filePath));
     }
   }
 });
@@ -1206,8 +1216,7 @@ app.on('ready', () => {
       createWindow(target);
       return;
     }
-    const win = createWindow();
-    win.webContents.once('did-finish-load', () => win.webContents.send('open-file', target));
+    createWindow(null, target);
     return;
   }
   createWindow(loadLastProjectRoot());

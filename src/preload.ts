@@ -36,6 +36,9 @@ const api = {
   getProjectRoot: (): Promise<string | null> =>
     ipcRenderer.invoke('get-project-root'),
 
+  getPendingFile: (): Promise<string | null> =>
+    ipcRenderer.invoke('get-pending-file'),
+
   watchFile: (filePath: string): void =>
     ipcRenderer.send('watch-file', filePath),
 
