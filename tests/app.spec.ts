@@ -1765,6 +1765,7 @@ test.describe('Sidebar default mode', () => {
 
 test.describe('Open file with no window', () => {
   test('creates a window and loads the file when none is open', async () => {
+    test.skip(process.platform === 'win32', 'open-file/dock-reopen is macOS-only; Windows quits on window-all-closed');
     ({ app, page } = await launchApp());
 
     const tmpDir = makeTmpDir();

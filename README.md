@@ -131,7 +131,6 @@ On failure it uploads Playwright traces as a build artifact; download and inspec
 - [ ] Run windows CI, get all tests passing
 - [ ] Build a new release with Windows included
 - [ ] Send it to Claire & Anny, ask them to test, include a list of things for them to test
-- \[ \]
 
 - Support right-click to convert to .docx or .pdf, w standard nice-looking formatting & colors (customizable)
   - PDF export -- does this require chrome/puppeteer? can it just use the built-in engine?
