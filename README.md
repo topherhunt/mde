@@ -96,7 +96,32 @@ Runs headless Playwright E2E tests against a packaged build.
 npm run make
 ```
 
-Produces distributables in the `out/make/` directory: a `.dmg`/`.zip` on macOS, a Squirrel `Setup.exe` on Windows. Run `npm run make` on each target OS to build that platform's artifacts.
+Produces distributables in the `out/make/` directory. Note that Electron Forge only builds for the OS you run it on: macOS produces a `.dmg`, Windows produces a Squirrel `Setup.exe`. You **cannot** reliably cross-build the Windows installer from macOS (it needs Windows-native tooling), so releases are built in CI instead.
+
+### Cutting a release (GitHub Actions)
+
+Releases are built and published by `.github/workflows/release.yml`, triggered by pushing a version tag:
+
+```
+# bump "version" in package.json first (so the installer filename matches), then:
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+This runs two parallel build jobs (`macos-latest` -> `.dmg`, `windows-latest` -> `Setup.exe`) and attaches both to a GitHub Release for that tag. The Release is created as a **draft** -- review it, smoke-test the Windows installer (file associations only register during a real install), then click **Publish**. To auto-publish instead, remove `draft: true` from the workflow.
+
+Notes:
+- The workflow file must exist on the commit the tag points to, so push your changes to `main` before tagging.
+- The macOS build is Apple Silicon (arm64) only -- `macos-latest` runners are arm64. Intel Macs aren't covered.
+- You can also trigger the workflow manually (Actions tab -> "Build and Release" -> Run workflow) to verify the builds compile without creating a release.
+
+### Running the test suite on Windows
+
+`.github/workflows/windows-tests.yml` runs the full Playwright E2E suite on `windows-latest` to catch Windows-specific breakage (path handling, launch behavior). It's manually triggered: Actions tab -> **Windows Tests** -> **Run workflow**.
+
+On failure it uploads Playwright traces as a build artifact; download and inspect with `npx playwright show-trace <trace.zip>`.
+
+(`workflow_dispatch` workflows only appear in the Actions tab once the file is on the default branch, so push to `main` first.)
 
 ## Tasks
 

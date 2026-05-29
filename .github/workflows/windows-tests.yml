@@ -1,0 +1,34 @@
+name: Windows Tests
+
+# Manually-triggered run of the full Playwright E2E suite on Windows, to catch
+# Windows-specific breakage (path handling, launch behavior, etc.) that the local
+# macOS test runs can't surface. Trigger from the Actions tab ("Run workflow").
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Build the .webpack bundle the tests launch against (same as the `pretest` script).
+      - run: npx electron-forge package
+
+      # retain-on-failure captures a Playwright trace for any failing test so it can be
+      # downloaded and inspected, since these failures can't be reproduced on macOS.
+      - run: npx playwright test --trace=retain-on-failure
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: test-results/
+          if-no-files-found: ignore
