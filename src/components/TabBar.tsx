@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Tab } from '../types';
+import { Tab, FileEntry } from '../types';
+import { FileContextMenu } from './FileContextMenu';
+import { basename } from '../utils/paths';
 
 interface TabBarProps {
   tabs: Tab[];
@@ -8,12 +10,28 @@ interface TabBarProps {
   onClose: (index: number) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onPinTab: (tabId: string) => void;
+  projectRoot: string | null;
+  onToast: (msg: string, variant?: string) => void;
+  onRenameFile: (target: FileEntry) => void;
+  onRequestDeleteFile: (target: FileEntry) => void;
 }
 
-export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder, onPinTab }: TabBarProps) {
+export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder, onPinTab, projectRoot, onToast, onRenameFile, onRequestDeleteFile }: TabBarProps) {
   const activeTabRef = useRef<HTMLDivElement>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; target: FileEntry } | null>(null);
+
+  const handleContextMenu = (e: React.MouseEvent, tab: Tab) => {
+    // Special tabs (e.g. Keyboard Shortcuts) have no file on disk.
+    if (!tab.filePath) return;
+    e.preventDefault();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      target: { path: tab.filePath, name: basename(tab.filePath) || tab.fileName, isDirectory: false },
+    });
+  };
 
   useEffect(() => {
     activeTabRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
@@ -73,6 +91,7 @@ export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder
             onDragEnd={handleDragEnd}
             onClick={() => onSelect(i)}
             onDoubleClick={() => { if (tab.tentative) onPinTab(tab.id); }}
+            onContextMenu={(e) => handleContextMenu(e, tab)}
             onAuxClick={(e) => {
               if (e.button === 1) onClose(i);
             }}
@@ -95,6 +114,18 @@ export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder
         </React.Fragment>
       ))}
       {dropIndex === tabs.length && <div className="tab-drop-indicator" />}
+      {contextMenu && (
+        <FileContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          target={contextMenu.target}
+          projectRoot={projectRoot}
+          onClose={() => setContextMenu(null)}
+          onStartRename={onRenameFile}
+          onRequestDelete={onRequestDeleteFile}
+          onToast={onToast}
+        />
+      )}
     </div>
   );
 }

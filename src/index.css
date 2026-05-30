@@ -967,6 +967,24 @@ body {
   color: var(--danger);
 }
 
+.error-banner {
+  background: var(--danger-bg);
+  border-bottom: 2px solid var(--danger-border);
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.error-banner-text {
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 500;
+  word-break: break-word;
+}
+
 /* --- Find bar --- */
 .find-bar {
   background: var(--bg-secondary);

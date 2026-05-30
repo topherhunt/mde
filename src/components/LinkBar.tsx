@@ -10,6 +10,7 @@ interface LinkBarProps {
 
 export default function LinkBar({ editor, onClose }: LinkBarProps) {
   const previousUrl = editor.getAttributes('link').href || '';
+  const hasLink = editor.isActive('link');
   const [url, setUrl] = useState(previousUrl);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectionRef = useRef<{ from: number; to: number } | null>(null);
@@ -53,6 +54,11 @@ export default function LinkBar({ editor, onClose }: LinkBarProps) {
     onClose();
   }, [editor, onClose]);
 
+  const removeLink = useCallback(() => {
+    editor.chain().focus().extendMarkRange('link').unsetLink().run();
+    onClose();
+  }, [editor, onClose]);
+
   return (
     <div className="link-bar">
       <div className="link-bar-row">
@@ -72,6 +78,11 @@ export default function LinkBar({ editor, onClose }: LinkBarProps) {
         <button className="find-bar-btn" onMouseDown={(e) => { e.preventDefault(); apply(); }} title="Apply">
           <i className="bi bi-check-lg" />
         </button>
+        {hasLink && (
+          <button className="find-bar-btn" onMouseDown={(e) => { e.preventDefault(); removeLink(); }} title="Remove link">
+            <i className="bi bi-trash" />
+          </button>
+        )}
         <button className="find-bar-btn" onMouseDown={(e) => { e.preventDefault(); cancel(); }} title="Cancel (Escape)">
           <i className="bi bi-x-lg" />
         </button>

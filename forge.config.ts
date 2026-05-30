@@ -42,7 +42,7 @@ const config: ForgeConfig = {
   makers: [
     new MakerSquirrel({
       setupIcon: './icon.ico',
-      setupExe: `MDE-${pkg.version} Setup.exe`,
+      setupExe: `MDE-${pkg.version} Windows Setup.exe`,
     }),
     new MakerZIP({}, ['darwin']),
     new MakerDMG({

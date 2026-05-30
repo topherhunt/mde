@@ -1906,3 +1906,243 @@ test.describe('Outline active heading', () => {
 
   });
 });
+
+// ---------------------------------------------------------------------------
+// Paste behavior: no auto-linking; Cmd+Shift+V plain text
+// ---------------------------------------------------------------------------
+
+test.describe('Paste behavior', () => {
+  test('pasting a plain-text path does not auto-link it', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'paste.md');
+    fs.writeFileSync(tmpFile, 'Start here.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Start here', { timeout: 5000 });
+
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' ');
+    await page.evaluate(() => navigator.clipboard.writeText('docs/gameplay/09-creature-abilities.md'));
+    await page.keyboard.press('ControlOrMeta+v');
+
+    await expect(editor).toContainText('09-creature-abilities.md', { timeout: 3000 });
+    // The pasted text must remain literal -- no <a> link created.
+    await expect(editor.locator('a')).toHaveCount(0);
+  });
+
+  test('Cmd+Shift+V pastes as plain text without parsing Markdown', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'plain.md');
+    fs.writeFileSync(tmpFile, 'Plain start.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Plain start', { timeout: 5000 });
+
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' ');
+    await page.evaluate(() => navigator.clipboard.writeText('**not bold** text'));
+    await page.keyboard.press('ControlOrMeta+Shift+V');
+
+    // Asterisks stay literal and no bold formatting is applied.
+    await expect(editor).toContainText('**not bold** text', { timeout: 3000 });
+    await expect(editor.locator('strong')).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tab context menu (shares the file explorer's menu)
+// ---------------------------------------------------------------------------
+
+test.describe('Tab context menu', () => {
+  test('right-clicking a tab shows the same file options as the explorer', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'tabmenu.md');
+    fs.writeFileSync(tmpFile, '# Tab Menu\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    await expect(page.locator('.tab-name')).toContainText('tabmenu.md', { timeout: 5000 });
+
+    await page.locator('.tab').first().click({ button: 'right' });
+    await expect(page.locator('.ctx-menu')).toBeVisible();
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Rename' })).toBeVisible();
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Delete' })).toBeVisible();
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Copy Relative Path' })).toBeVisible();
+    // A file (not a folder) -- no New File / New Folder.
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New File' })).toHaveCount(0);
+  });
+
+  test('renaming a file from the tab context menu renames it on disk', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'old.md');
+    fs.writeFileSync(tmpFile, '# Old\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    await expect(page.locator('.tab-name')).toContainText('old.md', { timeout: 5000 });
+
+    await page.locator('.tab').first().click({ button: 'right' });
+    await page.locator('.ctx-menu-item').filter({ hasText: 'Rename' }).click();
+
+    const input = page.locator('.modal-dialog input');
+    await expect(input).toBeVisible();
+    await input.fill('renamed.md');
+    await page.keyboard.press('Enter');
+
+    await expect(page.locator('.tab-name')).toContainText('renamed.md', { timeout: 5000 });
+    expect(fs.existsSync(path.join(tmpDir, 'renamed.md'))).toBe(true);
+    expect(fs.existsSync(tmpFile)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Link bar remove-link button
+// ---------------------------------------------------------------------------
+
+test.describe('Link bar', () => {
+  test('the remove-link button removes an existing link', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'link.md');
+    fs.writeFileSync(tmpFile, 'hello world\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('hello world', { timeout: 5000 });
+
+    // Select all and create a link via the link bar.
+    await editor.click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('insert-link');
+    });
+    await expect(page.locator('.link-bar')).toBeVisible();
+    await page.locator('.link-bar-input').fill('http://example.com');
+    await page.keyboard.press('Enter');
+    await expect(editor.locator('a')).toHaveCount(1);
+
+    // Put the cursor in the link, reopen the link bar, and remove the link.
+    await editor.locator('a').click();
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('insert-link');
+    });
+    await expect(page.locator('.link-bar')).toBeVisible();
+    await page.locator('.link-bar button[title="Remove link"]').click();
+
+    await expect(editor.locator('a')).toHaveCount(0);
+    await expect(editor).toContainText('hello world');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Enter in empty nested list items
+// ---------------------------------------------------------------------------
+
+test.describe('Enter in empty nested list items', () => {
+  test('Enter on an empty FINAL sub-item outdents to the parent level', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'nested.md');
+    // beta is nested under alpha (4-space indent).
+    fs.writeFileSync(tmpFile, '- alpha\n    - beta\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('beta', { timeout: 5000 });
+    await expect(editor.locator('ul ul')).toContainText('beta');
+
+    // Cursor at end of beta. Enter once: create an empty final sub-item.
+    // Enter again: outdent it to the top level.
+    await editor.locator('ul ul p', { hasText: 'beta' }).click();
+    await page.waitForTimeout(100);
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('gamma');
+
+    // gamma should have left the nested list (outdented to top level).
+    await expect(editor.locator('ul ul')).not.toContainText('gamma');
+    await expect(editor.locator('ul ul')).toContainText('beta');
+    await expect(editor).toContainText('gamma');
+  });
+
+  test('Enter on an empty NON-final sub-item creates a sibling (stays nested)', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'nested2.md');
+    // z and w are both nested under a (4-space indent).
+    fs.writeFileSync(tmpFile, '- a\n    - z\n    - w\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('w', { timeout: 5000 });
+    await expect(editor.locator('ul ul')).toContainText('w');
+
+    // Cursor at end of z -> Enter makes an empty item between z and w (not final).
+    await editor.locator('ul ul p', { hasText: 'z' }).click();
+    await page.waitForTimeout(100);
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    // Enter again should create a sibling within the sublist, not outdent.
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('MARK');
+
+    // MARK stays nested (sibling of z and w), and w is still below it.
+    await expect(editor.locator('ul ul')).toContainText('MARK');
+    await expect(editor.locator('ul ul')).toContainText('w');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error banner for uncaught failures
+// ---------------------------------------------------------------------------
+
+test.describe('Error banner', () => {
+  test('an uncaught promise rejection shows a dismissable red banner', async () => {
+    ({ app, page } = await launchApp());
+
+    await expect(page.locator('.app')).toBeVisible();
+
+    await page.evaluate(() => { Promise.reject(new Error('boom test failure')); });
+
+    await expect(page.locator('.error-banner')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('.error-banner-text')).toContainText('boom test failure');
+
+    await page.locator('.error-banner button').click();
+    await expect(page.locator('.error-banner')).toHaveCount(0);
+  });
+});

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
 import { useEditor, EditorContent, Editor as TipTapEditor, createNodeFromContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
@@ -256,6 +256,15 @@ const UnifiedListItem = ListItem.extend({
             if ($from.node(d).type.name === 'listItem') { isNested = true; break; }
           }
           if (isNested) {
+            // If this empty item is the FINAL child of its sublist (no siblings
+            // below it), outdent to the parent level instead of nesting deeper.
+            // If it has siblings below, just create an empty sibling.
+            const parentList = $from.node(liDepth - 1);
+            const isLastChild = $from.index(liDepth - 1) === parentList.childCount - 1;
+            if (isLastChild) {
+              editor.commands.liftListItem('listItem');
+              return true;
+            }
             const schema = state.schema;
             const newItem = schema.nodes.listItem.create(
               { checked: isTask ? false : null },
@@ -318,6 +327,36 @@ const TabHandler = Extension.create({
             }
           }
         }
+        return true;
+      },
+    };
+  },
+});
+
+// Insert clipboard text verbatim (no Markdown parsing, no auto-linking),
+// splitting on newlines into hard breaks so line structure survives.
+function insertAsPlainText(editor: any, text: string) {
+  if (!text) return;
+  const lines = text.split('\n');
+  const content: any[] = [];
+  lines.forEach((line, i) => {
+    if (i > 0) content.push({ type: 'hardBreak' });
+    if (line.length) content.push({ type: 'text', text: line });
+  });
+  try {
+    editor.chain().focus().insertContent(content).run();
+  } catch {
+    editor.chain().focus().insertContent(text).run();
+  }
+}
+
+// Cmd+Shift+V: paste as plain text, stripping any formatting (like Google Docs).
+const PlainTextPaste = Extension.create({
+  name: 'plainTextPaste',
+  addKeyboardShortcuts() {
+    return {
+      'Mod-Shift-v': ({ editor }) => {
+        navigator.clipboard.readText().then(text => insertAsPlainText(editor, text)).catch(() => {});
         return true;
       },
     };
@@ -963,11 +1002,27 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
         codeBlock: false,
         text: false,
         listItem: false,
+        // StarterKit bundles its own Link extension (autolink + paste rules on
+        // by default). Disable it so the configured Link below is the only one.
+        link: false,
       }),
       TextNode,
       Highlight,
-      Link.configure({
+      Link.extend({
+        // The Link extension's paste rule runs linkifyjs over pasted text and
+        // marks anything URL-shaped as a link, regardless of the autolink /
+        // linkOnPaste options (those only gate the editor plugins). Disable it
+        // so pasting "docs/foo/09-bar.md" stays literal text.
+        addPasteRules() {
+          return [];
+        },
+      }).configure({
         openOnClick: false,
+        // Don't turn plain text into links. Pasting or typing something like
+        // "docs/foo/09-bar.md" should stay literal text, not become a link.
+        // Real Markdown links ([text](url)) are still parsed on load.
+        autolink: false,
+        linkOnPaste: false,
       }),
       TableKit.configure({
         table: { resizable: true },
@@ -978,6 +1033,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       UnifiedListItem,
       CmdEnterCycle,
       TabHandler,
+      PlainTextPaste,
       MoveBlock,
       JoinAdjacentLists,
       CodeFolding,
@@ -1101,6 +1157,20 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
 
 function LinkPreview({ editor }: { editor: TipTapEditor }) {
   const [link, setLink] = useState<{ url: string; top: number; left: number } | null>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+
+  // After render, shift the preview left if it would overflow the editor's
+  // right edge, so the URL and the remove-link button stay on screen.
+  useLayoutEffect(() => {
+    const el = previewRef.current;
+    if (!el || !link) return;
+    const wrapper = editor.view.dom.closest('.editor-wrapper');
+    if (!wrapper) return;
+    const wrapperWidth = wrapper.getBoundingClientRect().width;
+    const elWidth = el.offsetWidth;
+    const maxLeft = wrapperWidth - elWidth - 8;
+    el.style.left = `${Math.max(8, Math.min(link.left, maxLeft))}px`;
+  }, [link, editor]);
 
   const update = useCallback(() => {
     if (!editor.isActive('link')) {
@@ -1148,7 +1218,7 @@ function LinkPreview({ editor }: { editor: TipTapEditor }) {
   if (!link) return null;
 
   return (
-    <div className="link-preview" style={{ top: link.top, left: link.left }}>
+    <div ref={previewRef} className="link-preview" style={{ top: link.top, left: link.left }}>
       <a
         href={link.url}
         onClick={(e) => {

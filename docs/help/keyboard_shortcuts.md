@@ -14,6 +14,7 @@
 | Cmd + Alt + Right | Next Tab |
 | Cmd + , | Settings |
 | Cmd + F | Find & Replace |
+| Cmd + Shift + V | Paste as Plain Text |
 
 ## Text Formatting
 

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { FileEntry } from '../types';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { basename, dirname, joinPath } from '../utils/paths';
+import { FileContextMenu, DeleteConfirmDialog } from './FileContextMenu';
 
 interface SidebarProps {
   projectRoot: string | null;
@@ -147,125 +148,6 @@ interface ContextMenuState {
   x: number;
   y: number;
   entry: FileEntry;
-}
-
-interface ContextMenuProps {
-  menu: ContextMenuState;
-  projectRoot: string;
-  onClose: () => void;
-  onStartRename: (entry: FileEntry) => void;
-  onRequestDelete: (entry: FileEntry) => void;
-  onToast: (msg: string, variant?: string) => void;
-  onCreateInFolder: (folderPath: string, type: 'file' | 'folder') => void;
-}
-
-function ContextMenu({ menu, projectRoot, onClose, onStartRename, onRequestDelete, onToast, onCreateInFolder }: ContextMenuProps) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
-    };
-    document.addEventListener('mousedown', onClick);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onClick); document.removeEventListener('keydown', onKey); };
-  }, [onClose]);
-
-  const style: React.CSSProperties = {
-    position: 'fixed',
-    left: Math.min(menu.x, window.innerWidth - 180),
-    top: Math.min(menu.y, window.innerHeight - 120),
-    zIndex: 9500,
-  };
-
-  const relativePath = menu.entry.path.startsWith(projectRoot)
-    ? menu.entry.path.slice(projectRoot.length + 1)
-    : menu.entry.path;
-
-  const handleCopyPath = () => {
-    navigator.clipboard.writeText(relativePath);
-    onToast(`Copied path: ${relativePath}`, 'info');
-    onClose();
-  };
-
-  const handleRename = () => {
-    onStartRename(menu.entry);
-    onClose();
-  };
-
-  const handleDelete = () => {
-    onRequestDelete(menu.entry);
-    onClose();
-  };
-
-  const handleNewFile = () => {
-    onCreateInFolder(menu.entry.path, 'file');
-    onClose();
-  };
-
-  const handleNewFolder = () => {
-    onCreateInFolder(menu.entry.path, 'folder');
-    onClose();
-  };
-
-  return (
-    <div ref={ref} className="ctx-menu" style={style}>
-      {menu.entry.isDirectory && (
-        <>
-          <button className="ctx-menu-item" onClick={handleNewFile}>
-            <i className="bi bi-file-earmark-plus" /> New File
-          </button>
-          <button className="ctx-menu-item" onClick={handleNewFolder}>
-            <i className="bi bi-folder-plus" /> New Folder
-          </button>
-          <div className="ctx-menu-divider" />
-        </>
-      )}
-      <button className="ctx-menu-item" onClick={handleRename}>
-        <i className="bi bi-pencil" /> Rename
-      </button>
-      <button className="ctx-menu-item ctx-menu-item-danger" onClick={handleDelete}>
-        <i className="bi bi-trash" /> Delete
-      </button>
-      <div className="ctx-menu-divider" />
-      <button className="ctx-menu-item" onClick={handleCopyPath}>
-        <i className="bi bi-clipboard" /> Copy Relative Path
-      </button>
-    </div>
-  );
-}
-
-function DeleteConfirmDialog({ entry, onConfirm, onCancel }: { entry: FileEntry; onConfirm: () => void; onCancel: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-      if (e.key === 'Enter') onConfirm();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onConfirm, onCancel]);
-
-  return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header" style={{ justifyContent: 'center' }}>
-          <span className="fw-bold">Delete {entry.isDirectory ? 'folder' : 'file'}</span>
-        </div>
-        <div className="modal-body">
-          <p className="text-muted fs-sm">
-            Really delete <code>{entry.name}</code>? It will be moved to the Trash.
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
-            <button className="settings-btn" onClick={onCancel}>Cancel</button>
-            <button className="settings-btn btn-danger" onClick={onConfirm}>Delete</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function flattenVisibleEntries(
@@ -524,14 +406,16 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
       />
       {deletingEntry && (
         <DeleteConfirmDialog
-          entry={deletingEntry}
+          target={deletingEntry}
           onConfirm={confirmDelete}
           onCancel={() => setDeletingEntry(null)}
         />
       )}
       {contextMenu && (
-        <ContextMenu
-          menu={contextMenu}
+        <FileContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          target={contextMenu.entry}
           projectRoot={projectRoot}
           onClose={() => setContextMenu(null)}
           onStartRename={setRenamingEntry}
@@ -583,6 +467,13 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
         setEntries(result);
         setLoaded(true);
         onRegisterEntries?.(path, result);
+      }).catch(() => {
+        // The directory may have been moved/deleted on disk (e.g. by an
+        // external tool). Treat it as empty rather than crashing with an
+        // unhandled rejection; the project watcher will refresh the tree.
+        setEntries([]);
+        setLoaded(true);
+        onRegisterEntries?.(path, []);
       });
     }
   }, [isRoot, expanded, path, refreshKey]);

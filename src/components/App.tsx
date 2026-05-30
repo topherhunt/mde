@@ -8,8 +8,10 @@ import ConflictBanner from './ConflictBanner';
 import FindBar from './FindBar';
 import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
+import { DeleteConfirmDialog } from './FileContextMenu';
 import { Editor as TipTapEditor } from '@tiptap/react';
-import { basename } from '../utils/paths';
+import { FileEntry } from '../types';
+import { basename, dirname, joinPath } from '../utils/paths';
 import KEYBOARD_SHORTCUTS_CONTENT from '../../docs/help/keyboard_shortcuts.md';
 
 interface AppState {
@@ -179,6 +181,9 @@ export default function App() {
   const [importConfirm, setImportConfirm] = useState<string | null>(null);
   const [linkBarVisible, setLinkBarVisible] = useState(false);
   const initialSidebarModeSetRef = useRef(false);
+  const [tabRenameTarget, setTabRenameTarget] = useState<FileEntry | null>(null);
+  const [tabDeleteTarget, setTabDeleteTarget] = useState<FileEntry | null>(null);
+  const [appError, setAppError] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string, variant?: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -411,6 +416,37 @@ export default function App() {
     dispatch({ type: 'CLOSE_TAB', index: tabIndex });
   }, [state.tabs, unregisterEditor]);
 
+  const confirmTabRename = useCallback(async (newName: string) => {
+    const target = tabRenameTarget;
+    setTabRenameTarget(null);
+    if (!target || !newName || newName === target.name) return;
+    const newPath = joinPath(dirname(target.path), newName);
+    const tab = state.tabs.find(t => t.filePath === target.path);
+    if (tab && tab.filePath) window.mde.unwatchFile(tab.filePath);
+    await window.mde.renameFile(target.path, newPath);
+    if (tab) {
+      const stats = await window.mde.getFileStats(newPath);
+      dispatch({
+        type: 'UPDATE_TAB_PATH',
+        tabId: tab.id,
+        filePath: newPath,
+        fileName: fileNameFromPath(newPath),
+        mtime: stats?.mtimeMs ?? null,
+      });
+      window.mde.watchFile(newPath);
+    }
+    setSidebarRefreshKey(n => n + 1);
+  }, [tabRenameTarget, state.tabs]);
+
+  const confirmTabDelete = useCallback(async () => {
+    const target = tabDeleteTarget;
+    setTabDeleteTarget(null);
+    if (!target) return;
+    await window.mde.trashFile(target.path);
+    handleDeleteFile(target.path);
+    setSidebarRefreshKey(n => n + 1);
+  }, [tabDeleteTarget, handleDeleteFile]);
+
   const handleCloseTab = useCallback((index: number) => {
     const tab = state.tabs[index];
     if (!tab) return;
@@ -624,6 +660,28 @@ export default function App() {
     };
   }, [openFile, showToast, state.projectRoot, state.tabs.length]);
 
+  // Surface otherwise-silent failures (e.g. an IPC call rejecting because a
+  // watched directory was moved on disk) as a visible red banner, since they
+  // can leave the app in a broken state where saving stops working.
+  useEffect(() => {
+    const onRejection = (e: PromiseRejectionEvent) => {
+      const reason = e.reason;
+      const msg = (reason && (reason.message || String(reason))) || 'Unknown error';
+      setAppError(msg);
+    };
+    const onError = (e: ErrorEvent) => {
+      // ResizeObserver loop warnings are benign browser noise, not real errors.
+      if (e.message && e.message.includes('ResizeObserver')) return;
+      setAppError(e.message || 'Unknown error');
+    };
+    window.addEventListener('unhandledrejection', onRejection);
+    window.addEventListener('error', onError);
+    return () => {
+      window.removeEventListener('unhandledrejection', onRejection);
+      window.removeEventListener('error', onError);
+    };
+  }, []);
+
   return (
     <div className="app">
       <div className="app-drag-region">
@@ -658,6 +716,10 @@ export default function App() {
             onClose={handleCloseTab}
             onReorder={(from, to) => dispatch({ type: 'REORDER_TABS', fromIndex: from, toIndex: to })}
             onPinTab={(tabId) => dispatch({ type: 'PIN_TAB', tabId })}
+            projectRoot={state.projectRoot}
+            onToast={showToast}
+            onRenameFile={setTabRenameTarget}
+            onRequestDeleteFile={setTabDeleteTarget}
           />
           {!activeTab?.readOnly && (
             <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} />
@@ -669,6 +731,17 @@ export default function App() {
             />
           )}
           <div className="editor-area">
+            {appError && (
+              <div className="error-banner">
+                <span className="error-banner-text">
+                  <i className="bi bi-exclamation-triangle-fill" /> An error occurred -- you may need to quit and restart.
+                  Please report this: {appError}
+                </span>
+                <button className="conflict-btn conflict-btn-saveas" onClick={() => setAppError(null)}>
+                  Dismiss
+                </button>
+              </div>
+            )}
             {activeTab?.conflict && (
               <ConflictBanner onReload={reloadActiveTab} onSaveAs={saveActiveTabAs} />
             )}
@@ -720,6 +793,20 @@ export default function App() {
           filePath={importConfirm}
           onConfirm={confirmImport}
           onCancel={() => setImportConfirm(null)}
+        />
+      )}
+      {tabRenameTarget && (
+        <RenameDialog
+          target={tabRenameTarget}
+          onConfirm={confirmTabRename}
+          onCancel={() => setTabRenameTarget(null)}
+        />
+      )}
+      {tabDeleteTarget && (
+        <DeleteConfirmDialog
+          target={tabDeleteTarget}
+          onConfirm={confirmTabDelete}
+          onCancel={() => setTabDeleteTarget(null)}
         />
       )}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} spellcheck={spellcheck} autosave={autosave} />}
@@ -839,6 +926,47 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
           {status === 'error' && (
             <div className="settings-error">{errorMsg}</div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RenameDialog({ target, onConfirm, onCancel }: { target: FileEntry; onConfirm: (newName: string) => void; onCancel: () => void }) {
+  const [name, setName] = useState(target.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    // Select the base name, leaving the extension unselected (like Finder).
+    const dot = target.name.lastIndexOf('.');
+    if (inputRef.current) inputRef.current.setSelectionRange(0, dot > 0 ? dot : target.name.length);
+  }, []);
+
+  const submit = () => onConfirm(name.trim());
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header" style={{ justifyContent: 'center' }}>
+          <span className="fw-bold">Rename {target.isDirectory ? 'folder' : 'file'}</span>
+        </div>
+        <div className="modal-body">
+          <input
+            ref={inputRef}
+            className="settings-select"
+            style={{ width: '100%' }}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit();
+              if (e.key === 'Escape') onCancel();
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
+            <button className="settings-btn" onClick={onCancel}>Cancel</button>
+            <button className="settings-btn btn-primary" onClick={submit}>Rename</button>
+          </div>
         </div>
       </div>
     </div>
