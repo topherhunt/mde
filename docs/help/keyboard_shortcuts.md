@@ -40,6 +40,7 @@
 | Cmd + Alt + Up | Move Block Up |
 | Cmd + Alt + Down | Move Block Down |
 | Cmd + . | Toggle Fold (list items with children) |
+| Cmd + Left / Right | To start/end of wrapped line, then of the paragraph or list item |
 | Tab | Indent List Item |
 | Shift + Tab | Outdent List Item |
 

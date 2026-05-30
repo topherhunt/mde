@@ -2146,3 +2146,93 @@ test.describe('Error banner', () => {
     await expect(page.locator('.error-banner')).toHaveCount(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Move block keeps a plain cursor (does not expand to a range selection)
+// ---------------------------------------------------------------------------
+
+test.describe('Move block cursor', () => {
+  test('Cmd+Alt+Down with only a cursor keeps a collapsed cursor in the moved item', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'movecursor.md');
+    fs.writeFileSync(tmpFile, '- one\n- two\n- three\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('two', { timeout: 5000 });
+
+    // Place a plain cursor in "two" (no range selected).
+    await editor.locator('li:nth-child(2) p').click();
+    await page.waitForTimeout(100);
+    await page.keyboard.press('End');
+
+    await page.keyboard.press('ControlOrMeta+Alt+ArrowDown');
+    await page.waitForTimeout(200);
+
+    // Order is now one, three, two.
+    const items = editor.locator('li');
+    await expect(items.nth(0)).toContainText('one');
+    await expect(items.nth(1)).toContainText('three');
+    await expect(items.nth(2)).toContainText('two');
+
+    // The selection must still be a collapsed cursor, not an expanded range.
+    const sel = await page.evaluate(() => {
+      const s = window.getSelection()!;
+      return { collapsed: s.isCollapsed, text: s.toString(), anchor: s.anchorNode?.textContent ?? '' };
+    });
+    expect(sel.collapsed).toBe(true);
+    expect(sel.text).toBe('');
+    expect(sel.anchor).toContain('two');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cmd+Left / Cmd+Right: wrapped-line boundary, then paragraph/list-item boundary
+// ---------------------------------------------------------------------------
+
+test.describe('Line-then-block cursor motion', () => {
+  // A list item long enough to wrap across multiple visual lines.
+  const longText = 'This is a deliberately very long bullet list item written so that it wraps across several visual lines in the editor, which lets us verify that the two stage cursor motion first reaches the wrapped line boundary and then the whole item boundary.';
+
+  test('Cmd+Shift+Right/Left twice selects the whole wrapped list item', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'wrapline.md');
+    fs.writeFileSync(tmpFile, '- ' + longText + '\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('deliberately', { timeout: 5000 });
+
+    const li = editor.locator('li').first();
+    const box = await li.boundingBox();
+    // The item must actually wrap (more than one visual line) for this test to mean anything.
+    expect(box!.height).toBeGreaterThan(40);
+
+    // Cursor at the very start of the item.
+    await li.click({ position: { x: 3, y: 6 } });
+    await page.waitForTimeout(100);
+
+    // First press: extend to the end of the wrapped line. Second: to the item end.
+    await page.keyboard.press('ControlOrMeta+Shift+ArrowRight');
+    await page.keyboard.press('ControlOrMeta+Shift+ArrowRight');
+    const selectedRight = await page.evaluate(() => window.getSelection()!.toString().trim());
+    expect(selectedRight).toBe(longText);
+
+    // Collapse to the item end, then walk back: wrapped-line start, then item start.
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ControlOrMeta+Shift+ArrowLeft');
+    await page.keyboard.press('ControlOrMeta+Shift+ArrowLeft');
+    const selectedLeft = await page.evaluate(() => window.getSelection()!.toString().trim());
+    expect(selectedLeft).toBe(longText);
+  });
+});

@@ -459,6 +459,9 @@ function moveBlock(editor: any, direction: 'up' | 'down'): boolean {
   const { state } = editor;
   const { from, to } = state.selection;
   const { $from } = state.selection;
+  // If the user only had a cursor (no range), keep it a cursor after moving --
+  // don't expand the moved block into a full text selection.
+  const wasCollapsed = from === to;
 
   let targetDepth = 1;
   for (let d = $from.depth; d > 0; d--) {
@@ -524,9 +527,13 @@ function moveBlock(editor: any, direction: 'up' | 'down'): boolean {
       tr.replaceWith(blockStart, siblingEnd, Fragment.from([siblingNode, ...allNodes]));
       newBlockStart = blockStart + siblingNode.nodeSize;
     }
-    const $selFrom = tr.doc.resolve(newBlockStart + 1);
-    const $selTo = tr.doc.resolve(newBlockStart + blockSize - 1);
-    tr.setSelection(TextSelection.between($selFrom, $selTo));
+    if (wasCollapsed) {
+      tr.setSelection(TextSelection.create(tr.doc, newBlockStart + (from - blockStart)));
+    } else {
+      const $selFrom = tr.doc.resolve(newBlockStart + 1);
+      const $selTo = tr.doc.resolve(newBlockStart + blockSize - 1);
+      tr.setSelection(TextSelection.between($selFrom, $selTo));
+    }
     editor.view.dispatch(tr);
     return true;
   }
@@ -618,9 +625,13 @@ function moveBlock(editor: any, direction: 'up' | 'down'): boolean {
     insertPos += 1;
   }
 
-  const $selFrom = tr.doc.resolve(insertPos + 1);
-  const $selTo = tr.doc.resolve(insertPos + blockSize - 1);
-  tr.setSelection(TextSelection.between($selFrom, $selTo));
+  if (wasCollapsed) {
+    tr.setSelection(TextSelection.create(tr.doc, insertPos + (from - blockStart)));
+  } else {
+    const $selFrom = tr.doc.resolve(insertPos + 1);
+    const $selTo = tr.doc.resolve(insertPos + blockSize - 1);
+    tr.setSelection(TextSelection.between($selFrom, $selTo));
+  }
   editor.view.dispatch(tr);
   return true;
 }
@@ -631,6 +642,85 @@ const MoveBlock = Extension.create({
     return {
       'Mod-Alt-ArrowUp': ({ editor }) => moveBlock(editor, 'up'),
       'Mod-Alt-ArrowDown': ({ editor }) => moveBlock(editor, 'down'),
+    };
+  },
+});
+
+// Cmd+Left / Cmd+Right: the browser's native behavior moves to the start/end of
+// the wrapped (visual) line. We let that first press happen, then -- once the
+// cursor already sits at the wrapped-line boundary -- a second press jumps to
+// the start/end of the whole paragraph or list item. Shift extends at each
+// stage, so Cmd+Shift+Left twice selects the entire (multi-line) item.
+function lineThenBlockBoundary(editor: any, dir: 'left' | 'right', extend: boolean): boolean {
+  // On non-Mac, Ctrl+Arrow means word movement, not line -- leave it native.
+  const isMac = typeof window !== 'undefined' && window.mde?.platform === 'darwin';
+  if (!isMac) return false;
+
+  const { view } = editor;
+  const { state } = view;
+
+  // Read the live caret from the DOM. ProseMirror's state.selection can lag a
+  // native (browser-handled) cursor motion within a rapid keypress sequence, so
+  // on the second press its state would still report the pre-move position.
+  const domSel = view.dom.ownerDocument.getSelection();
+  if (!domSel || !domSel.focusNode || !view.dom.contains(domSel.focusNode)) return false;
+  let pos: number, anchor: number;
+  try {
+    pos = view.posAtDOM(domSel.focusNode, domSel.focusOffset);
+    anchor = view.posAtDOM(domSel.anchorNode, domSel.anchorOffset);
+  } catch {
+    return false;
+  }
+
+  const $head = state.doc.resolve(pos);
+  if (!$head.parent.isTextblock) return false;
+
+  const blockStart = $head.start();
+  const blockEnd = $head.end();
+  const boundary = dir === 'left' ? blockStart : blockEnd;
+  if (pos === boundary) return false; // already at the block boundary
+  // Going right needs a character to the left to measure the current line.
+  if (dir === 'right' && pos <= blockStart) return false;
+
+  // Detect whether the cursor already sits at the wrapped-line boundary by
+  // measuring the adjacent characters: at a soft wrap the char on one side
+  // lands on a different visual line than the cursor's own line. (Comparing
+  // coordsAtPos side -1 vs +1 at the same position is unreliable around the
+  // space at a wrap point, so we measure the neighbouring positions instead.)
+  let atWrapBoundary = false;
+  try {
+    if (dir === 'left') {
+      const cursorLine = view.coordsAtPos(pos);      // char to the right -- cursor's line
+      const prevChar = view.coordsAtPos(pos - 1);    // char to the left
+      atWrapBoundary = prevChar.bottom <= cursorLine.top + 1;
+    } else {
+      const cursorLine = view.coordsAtPos(pos - 1);  // char to the left -- cursor's line
+      const nextChar = view.coordsAtPos(pos);        // char to the right
+      atWrapBoundary = nextChar.top >= cursorLine.bottom - 1;
+    }
+  } catch {
+    atWrapBoundary = false;
+  }
+  if (!atWrapBoundary) return false;
+
+  const tr = state.tr;
+  if (extend) {
+    tr.setSelection(TextSelection.create(state.doc, anchor, boundary));
+  } else {
+    tr.setSelection(TextSelection.create(state.doc, boundary));
+  }
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+const LineBoundaryNav = Extension.create({
+  name: 'lineBoundaryNav',
+  addKeyboardShortcuts() {
+    return {
+      'Mod-ArrowLeft': ({ editor }) => lineThenBlockBoundary(editor, 'left', false),
+      'Mod-ArrowRight': ({ editor }) => lineThenBlockBoundary(editor, 'right', false),
+      'Mod-Shift-ArrowLeft': ({ editor }) => lineThenBlockBoundary(editor, 'left', true),
+      'Mod-Shift-ArrowRight': ({ editor }) => lineThenBlockBoundary(editor, 'right', true),
     };
   },
 });
@@ -1035,6 +1125,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       TabHandler,
       PlainTextPaste,
       MoveBlock,
+      LineBoundaryNav,
       JoinAdjacentLists,
       CodeFolding,
       Placeholder.configure({
