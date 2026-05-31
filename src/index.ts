@@ -482,6 +482,10 @@ ipcMain.handle('trash-file', async (_event, filePath: string) => {
   await shell.trashItem(filePath);
 });
 
+ipcMain.handle('reveal-in-finder', (_event, filePath: string) => {
+  shell.showItemInFolder(filePath);
+});
+
 ipcMain.handle('create-file', async (_event, filePath: string) => {
   await fs.promises.writeFile(filePath, '', 'utf-8');
 });

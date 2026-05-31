@@ -74,6 +74,7 @@ export interface MdeAPI {
   getPathForFile: (file: File) => string;
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   trashFile: (filePath: string) => Promise<void>;
+  revealInFinder: (filePath: string) => Promise<void>;
   createFile: (filePath: string) => Promise<void>;
   createDirectory: (dirPath: string) => Promise<void>;
   getSidebarWidth: () => Promise<number | null>;

@@ -1113,6 +1113,16 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
         // Real Markdown links ([text](url)) are still parsed on load.
         autolink: false,
         linkOnPaste: false,
+        // TipTap's default isAllowedUri regex contains `[^a-z+.-:]`, where
+        // `.-:` is (almost certainly unintentionally) a character RANGE
+        // covering `/`. That makes it reject relative links that start with a
+        // lowercase letter and contain a slash (e.g. "docs/foo/09-bar.md"):
+        // the link mark is dropped while parsing HTML on load, so the link
+        // collapses to plain text on the next save. Accept a URL if the
+        // default validator passes OR if it has no scheme at all (a relative
+        // path) -- dangerous schemes like javascript:/data: still carry a
+        // scheme prefix and remain blocked by the default validator.
+        isAllowedUri: (url, ctx) => ctx.defaultValidate(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url),
       }),
       TableKit.configure({
         table: { resizable: true },

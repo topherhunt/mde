@@ -209,6 +209,9 @@ const api = {
   trashFile: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('trash-file', filePath),
 
+  revealInFinder: (filePath: string): Promise<void> =>
+    ipcRenderer.invoke('reveal-in-finder', filePath),
+
   createFile: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('create-file', filePath),
 

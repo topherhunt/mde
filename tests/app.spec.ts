@@ -383,6 +383,58 @@ test.describe('Editing', () => {
 
     // Cleanup
   });
+
+  test('preserves existing relative links through a load/save round-trip', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'links.md');
+    // Cover the variants that exposed the bug: a relative path starting with a
+    // lowercase letter and containing a slash (was being stripped), plus ones
+    // that survived (leading ./, ../, digit, bare filename) and an absolute URL.
+    const original = [
+      'See [canon](docs/foo/00-canon.md) for details.',
+      '',
+      'Also [howler](../client/Howler.md) and [self](./00-canon.md).',
+      '',
+      'Bare [file](report.md) and [site](https://example.com).',
+      '',
+    ].join('\n');
+    fs.writeFileSync(tmpFile, original);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    // All five links should render as anchors (not collapse to plain text).
+    await expect(editor.locator('a[href="docs/foo/00-canon.md"]')).toBeVisible();
+    await expect(editor.locator('a[href="../client/Howler.md"]')).toBeVisible();
+    await expect(editor.locator('a[href="./00-canon.md"]')).toBeVisible();
+    await expect(editor.locator('a[href="report.md"]')).toBeVisible();
+    await expect(editor.locator('a[href="https://example.com"]')).toBeVisible();
+
+    // Make the doc dirty, then save.
+    await editor.click();
+    await editor.press('End');
+    await editor.type(' edited');
+    await expect(page.locator('.tab-dirty-dot')).toBeVisible();
+
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+    });
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+
+    // Every link must still be present in the saved Markdown.
+    const content = fs.readFileSync(tmpFile, 'utf-8');
+    expect(content).toContain('[canon](docs/foo/00-canon.md)');
+    expect(content).toContain('[howler](../client/Howler.md)');
+    expect(content).toContain('[self](./00-canon.md)');
+    expect(content).toContain('[file](report.md)');
+    expect(content).toContain('[site](https://example.com)');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1644,10 +1696,12 @@ test.describe('Context menu', () => {
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New File' })).not.toBeVisible();
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New Folder' })).not.toBeVisible();
 
-    // But should still have Rename, Delete, Copy Path
+    // But should still have Rename, Delete, and (since a project folder is
+    // set) a real "Copy Relative Path" -- not the "Copy File Name" fallback.
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Rename' })).toBeVisible();
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Delete' })).toBeVisible();
-
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Copy Relative Path' })).toBeVisible();
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Copy File Name' })).toHaveCount(0);
   });
 });
 
@@ -1985,9 +2039,64 @@ test.describe('Tab context menu', () => {
     await expect(page.locator('.ctx-menu')).toBeVisible();
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Rename' })).toBeVisible();
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Delete' })).toBeVisible();
-    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Copy Relative Path' })).toBeVisible();
+    // No project folder is set, so there's no relative path to copy -- the
+    // item degrades to "Copy File Name" rather than promising a relative path.
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Copy File Name' })).toBeVisible();
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Copy Relative Path' })).toHaveCount(0);
+    await expect(page.locator('.ctx-menu-item').filter({ hasText: 'Reveal in Finder' })).toBeVisible();
     // A file (not a folder) -- no New File / New Folder.
     await expect(page.locator('.ctx-menu-item').filter({ hasText: 'New File' })).toHaveCount(0);
+  });
+
+  test('with no project folder, Copy File Name copies just the file name', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'standalone.md');
+    fs.writeFileSync(tmpFile, '# Standalone\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    await expect(page.locator('.tab-name')).toContainText('standalone.md', { timeout: 5000 });
+
+    await page.locator('.tab').first().click({ button: 'right' });
+    await page.locator('.ctx-menu-item').filter({ hasText: 'Copy File Name' }).click();
+
+    // The toast echoes exactly what was copied -- the bare file name, not a
+    // path. (The clipboard write itself can't be asserted in a headless
+    // renderer: navigator.clipboard.writeText is rejected without window focus.)
+    await expect(page.locator('.toast')).toContainText('Copied file name: standalone.md');
+  });
+
+  test('Reveal in Finder asks the OS to show the file', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'reveal.md');
+    fs.writeFileSync(tmpFile, '# Reveal\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    await expect(page.locator('.tab-name')).toContainText('reveal.md', { timeout: 5000 });
+
+    // Stub shell.showItemInFolder so the test stays headless (it would
+    // otherwise pop open Finder/Explorer) and record what it was asked to show.
+    await app.evaluate(({ shell }) => {
+      (globalThis as Record<string, unknown>).__revealed = [];
+      shell.showItemInFolder = (p: string) => {
+        (((globalThis as Record<string, unknown>).__revealed) as string[]).push(p);
+      };
+    });
+
+    await page.locator('.tab').first().click({ button: 'right' });
+    await page.locator('.ctx-menu-item').filter({ hasText: 'Reveal in Finder' }).click();
+
+    const revealed = await app.evaluate(() => (globalThis as Record<string, unknown>).__revealed);
+    expect(revealed).toEqual([tmpFile]);
   });
 
   test('renaming a file from the tab context menu renames it on disk', async () => {

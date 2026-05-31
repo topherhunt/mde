@@ -5,6 +5,11 @@ import { FileEntry } from '../types';
 // explorer (Sidebar) and the tab bar. Adding or changing a menu item here
 // updates both places automatically.
 
+const REVEAL_LABEL =
+  window.mde?.platform === 'darwin' ? 'Reveal in Finder'
+  : window.mde?.platform === 'win32' ? 'Show in Explorer'
+  : 'Show in Folder';
+
 interface FileContextMenuProps {
   x: number;
   y: number;
@@ -43,13 +48,26 @@ export function FileContextMenu({
     zIndex: 9500,
   };
 
-  const relativePath = projectRoot && target.path.startsWith(projectRoot)
-    ? target.path.slice(projectRoot.length + 1)
-    : target.path;
+  // A relative path is only meaningful when the file lives under the project
+  // root. Without a project folder (or for a file outside it) there's nothing
+  // to be relative to, so we offer "Copy File Name" instead of promising a
+  // relative path we can't produce.
+  const hasRelativePath = !!projectRoot && target.path.startsWith(projectRoot);
+  const relativePath = hasRelativePath ? target.path.slice(projectRoot!.length + 1) : target.path;
 
   const handleCopyPath = () => {
-    navigator.clipboard.writeText(relativePath);
-    onToast(`Copied path: ${relativePath}`, 'info');
+    if (hasRelativePath) {
+      navigator.clipboard.writeText(relativePath);
+      onToast(`Copied path: ${relativePath}`, 'info');
+    } else {
+      navigator.clipboard.writeText(target.name);
+      onToast(`Copied file name: ${target.name}`, 'info');
+    }
+    onClose();
+  };
+
+  const handleReveal = () => {
+    window.mde.revealInFinder(target.path);
     onClose();
   };
 
@@ -84,7 +102,10 @@ export function FileContextMenu({
       </button>
       <div className="ctx-menu-divider" />
       <button className="ctx-menu-item" onClick={handleCopyPath}>
-        <i className="bi bi-clipboard" /> Copy Relative Path
+        <i className="bi bi-clipboard" /> {hasRelativePath ? 'Copy Relative Path' : 'Copy File Name'}
+      </button>
+      <button className="ctx-menu-item" onClick={handleReveal}>
+        <i className="bi bi-folder2-open" /> {REVEAL_LABEL}
       </button>
     </div>
   );
