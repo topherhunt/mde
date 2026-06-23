@@ -438,6 +438,156 @@ test.describe('Editing', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 4b. Following relative links (Cmd/Ctrl+click)
+// ---------------------------------------------------------------------------
+
+test.describe('Following links', () => {
+  // 'ControlOrMeta' = Meta on macOS, Control elsewhere -- matches the app's
+  // handler, which follows a link on either metaKey or ctrlKey.
+  const MOD = 'ControlOrMeta' as const;
+
+  test('Cmd+click on a relative link opens the target file in a new tab', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'index.md'), 'Go to [the target](target.md) now.\n');
+    fs.writeFileSync(path.join(tmpDir, 'target.md'), '# Target Heading\n\nHello from the target.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.tab')).toHaveCount(1);
+
+    await editor.locator('a[href="target.md"]').click({ modifiers: [MOD] });
+
+    await expect(page.locator('.tab')).toHaveCount(2);
+    await expect(page.locator('.tab').nth(1)).toContainText('target.md');
+    // A second tab adds a second (hidden) .tiptap pane; assert against the visible one.
+    await expect(page.locator('.tiptap:visible')).toContainText('Hello from the target');
+  });
+
+  test('Cmd+click resolves links relative to the source file folder', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.mkdirSync(path.join(tmpDir, 'sub'));
+    // index.md lives in sub/, links up-and-over to ../notes/deep.md
+    fs.mkdirSync(path.join(tmpDir, 'notes'));
+    fs.writeFileSync(path.join(tmpDir, 'sub', 'index.md'), 'See [deep](../notes/deep.md).\n');
+    fs.writeFileSync(path.join(tmpDir, 'notes', 'deep.md'), '# Deep\n\nResolved correctly.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'sub', 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.locator('a[href="../notes/deep.md"]').click({ modifiers: [MOD] });
+
+    await expect(page.locator('.tab')).toHaveCount(2);
+    await expect(page.locator('.tab').nth(1)).toContainText('deep.md');
+    await expect(page.locator('.tiptap:visible')).toContainText('Resolved correctly');
+  });
+
+  test('plain click on a relative link does not open it', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'index.md'), 'Go to [the target](target.md) now.\n');
+    fs.writeFileSync(path.join(tmpDir, 'target.md'), '# Target\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.locator('a[href="target.md"]').click();
+
+    // A plain click places the cursor for editing -- it must not open a tab.
+    await expect(page.locator('.tab')).toHaveCount(1);
+  });
+
+  test('Cmd+click on a missing link offers to create the file', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'index.md'), 'Start a [new note](new-note.md) here.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.locator('a[href="new-note.md"]').click({ modifiers: [MOD] });
+
+    const dialog = page.locator('.modal-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("doesn");
+    await expect(dialog).toContainText('new-note.md');
+
+    expect(fs.existsSync(path.join(tmpDir, 'new-note.md'))).toBe(false);
+
+    await dialog.getByRole('button', { name: 'Create & Open' }).click();
+
+    await expect(page.locator('.tab')).toHaveCount(2);
+    await expect(page.locator('.tab').nth(1)).toContainText('new-note.md');
+    expect(fs.existsSync(path.join(tmpDir, 'new-note.md'))).toBe(true);
+  });
+
+  test('Cmd+click on a missing link can be cancelled without creating it', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'index.md'), 'Start a [new note](nope.md) here.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.locator('a[href="nope.md"]').click({ modifiers: [MOD] });
+
+    const dialog = page.locator('.modal-dialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('.tab')).toHaveCount(1);
+    expect(fs.existsSync(path.join(tmpDir, 'nope.md'))).toBe(false);
+  });
+
+  test('Cmd+click on an external link does not open a tab or a create dialog', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'index.md'), 'Visit [the site](https://example.com) online.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.locator('a[href="https://example.com"]').click({ modifiers: [MOD] });
+
+    // External URLs route to the system browser, not a tab or the create dialog.
+    await expect(page.locator('.tab')).toHaveCount(1);
+    await expect(page.locator('.modal-dialog')).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 5. Toolbar
 // ---------------------------------------------------------------------------
 

@@ -1080,11 +1080,16 @@ interface EditorProps {
   onReady: (editor: TipTapEditor) => void;
   onDestroy: () => void;
   onDirtyChange: (dirty: boolean) => void;
+  onLinkClick: (href: string) => void;
 }
 
-export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: EditorProps) {
+export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkClick }: EditorProps) {
   const loadedRef = useRef(false);
   const cleanDocRef = useRef<string | null>(null);
+  // Keep the latest onLinkClick reachable from the ProseMirror handleClick closure,
+  // which is created once when the editor is initialized.
+  const onLinkClickRef = useRef(onLinkClick);
+  onLinkClickRef.current = onLinkClick;
 
   const editor = useEditor({
     extensions: [
@@ -1150,6 +1155,22 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange }: Edito
       }),
     ],
     editorProps: {
+      handleClick(view, pos, event) {
+        // Cmd/Ctrl+click follows a link: opens a relative file in a new tab (App
+        // handles existence checks / create prompts) or an external URL in the browser.
+        // A plain click falls through so the cursor can be placed inside link text.
+        if (!event.metaKey && !event.ctrlKey) return false;
+        const target = event.target as HTMLElement;
+        const anchor = target.closest('a');
+        if (!anchor) return false;
+        // getAttribute keeps the raw href (e.g. "../docs/foo.md"); the .href property
+        // would resolve it to an absolute file:// URL.
+        const href = anchor.getAttribute('href');
+        if (!href) return false;
+        event.preventDefault();
+        onLinkClickRef.current(href);
+        return true;
+      },
       handleTripleClickOn(view, pos, node, nodePos) {
         if (node.type.name === 'tableCell' || node.type.name === 'tableHeader') {
           const from = nodePos + 1;

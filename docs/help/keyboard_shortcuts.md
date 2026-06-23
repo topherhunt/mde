@@ -41,6 +41,7 @@
 | Cmd + Alt + Down | Move Block Down |
 | Cmd + . | Toggle Fold (list items with children) |
 | Cmd + Left / Right | To start/end of wrapped line, then of the paragraph or list item |
+| Cmd + Click | Follow a link (open a relative file in a new tab, or a URL in the browser) |
 | Tab | Indent List Item |
 | Shift + Tab | Outdent List Item |
 

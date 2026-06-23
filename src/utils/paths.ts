@@ -21,3 +21,19 @@ export function joinPath(dir: string, name: string): string {
   const sep = dir.includes('\\') ? '\\' : '/';
   return dir + sep + name;
 }
+
+// Resolve a relative path (e.g. a Markdown link like "../docs/foo.md") against a base
+// directory, collapsing "." and ".." segments. Markdown links use "/" separators; the
+// base dir uses the OS separator. Result uses the base dir's separator. The leading "/"
+// of an absolute POSIX base is preserved.
+export function resolvePath(baseDir: string, rel: string): string {
+  const sep = baseDir.includes('\\') ? '\\' : '/';
+  const leading = baseDir.startsWith('/') ? '/' : '';
+  const parts = baseDir.split(SEP).filter(Boolean);
+  for (const part of rel.split(SEP)) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return leading + parts.join(sep);
+}

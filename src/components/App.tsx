@@ -11,7 +11,7 @@ import QuickOpen from './QuickOpen';
 import { DeleteConfirmDialog } from './FileContextMenu';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { FileEntry } from '../types';
-import { basename, dirname, joinPath } from '../utils/paths';
+import { basename, dirname, joinPath, resolvePath } from '../utils/paths';
 import KEYBOARD_SHORTCUTS_CONTENT from '../../docs/help/keyboard_shortcuts.md';
 
 interface AppState {
@@ -179,6 +179,7 @@ export default function App() {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [importConfirm, setImportConfirm] = useState<string | null>(null);
+  const [linkCreateTarget, setLinkCreateTarget] = useState<string | null>(null);
   const [linkBarVisible, setLinkBarVisible] = useState(false);
   const initialSidebarModeSetRef = useRef(false);
   const [tabRenameTarget, setTabRenameTarget] = useState<FileEntry | null>(null);
@@ -245,6 +246,46 @@ export default function App() {
     dispatch({ type: 'OPEN_TAB', tab });
     window.mde.watchFile(filePath);
   }, [state.tabs]);
+
+  // Cmd/Ctrl+click on a link in the editor. External URLs open in the browser;
+  // relative paths resolve against the source file's folder (or the project root
+  // for unsaved buffers) and open in a tab. A missing target prompts to create it.
+  const handleLinkClick = useCallback(async (href: string, sourceFilePath: string | null) => {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+      window.mde.openExternal(href);
+      return;
+    }
+    // Drop any in-page anchor / query so "doc.md#section" resolves to the file.
+    const filePart = href.replace(/[#?].*$/, '');
+    if (!filePart) return; // pure anchor like "#section" -- nothing to open
+    const baseDir = sourceFilePath ? dirname(sourceFilePath) : state.projectRoot;
+    if (!baseDir) {
+      showToast('Save this file before following relative links.', 'danger');
+      return;
+    }
+    const resolved = resolvePath(baseDir, filePart);
+    const stats = await window.mde.getFileStats(resolved);
+    if (stats?.isDirectory) {
+      showToast('That link points to a folder, not a file.', 'danger');
+    } else if (stats) {
+      openFile(resolved);
+    } else {
+      setLinkCreateTarget(resolved);
+    }
+  }, [openFile, showToast, state.projectRoot]);
+
+  const confirmCreateLink = useCallback(async () => {
+    if (!linkCreateTarget) return;
+    const target = linkCreateTarget;
+    setLinkCreateTarget(null);
+    try {
+      await window.mde.createDirectory(dirname(target));
+      await window.mde.createFile(target);
+      openFile(target);
+    } catch {
+      showToast('Could not create the file.', 'danger');
+    }
+  }, [linkCreateTarget, openFile, showToast]);
 
   const openKeyboardShortcuts = useCallback(() => {
     const existing = state.tabs.find(t => t.id === 'keyboard-shortcuts');
@@ -765,6 +806,7 @@ export default function App() {
                     dispatch({ type: 'MARK_DIRTY', tabId: tab.id, dirty });
                     if (dirty) triggerAutosave();
                   }}
+                  onLinkClick={(href) => handleLinkClick(href, tab.filePath)}
                 />
               </div>
             ))}
@@ -793,6 +835,13 @@ export default function App() {
           filePath={importConfirm}
           onConfirm={confirmImport}
           onCancel={() => setImportConfirm(null)}
+        />
+      )}
+      {linkCreateTarget && (
+        <CreateFileDialog
+          filePath={linkCreateTarget}
+          onConfirm={confirmCreateLink}
+          onCancel={() => setLinkCreateTarget(null)}
         />
       )}
       {tabRenameTarget && (
@@ -966,6 +1015,39 @@ function RenameDialog({ target, onConfirm, onCancel }: { target: FileEntry; onCo
           <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
             <button className="settings-btn" onClick={onCancel}>Cancel</button>
             <button className="settings-btn btn-primary" onClick={submit}>Rename</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CreateFileDialog({ filePath, onConfirm, onCancel }: { filePath: string; onConfirm: () => void; onCancel: () => void }) {
+  const fileName = basename(filePath) || filePath;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Enter') onConfirm();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onConfirm, onCancel]);
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header" style={{ justifyContent: 'center' }}>
+          <span className="fw-bold">File doesn&rsquo;t exist</span>
+        </div>
+        <div className="modal-body">
+          <p className="text-muted fs-sm">
+            <code>{fileName}</code> doesn&rsquo;t exist yet. Create it and open it in a new tab?
+          </p>
+          <p className="text-muted fs-sm" style={{ wordBreak: 'break-all' }}>{filePath}</p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
+            <button className="settings-btn" onClick={onCancel}>Cancel</button>
+            <button className="settings-btn btn-primary" onClick={onConfirm}>Create &amp; Open</button>
           </div>
         </div>
       </div>
