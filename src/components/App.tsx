@@ -258,6 +258,9 @@ export default function App() {
     // Drop any in-page anchor / query so "doc.md#section" resolves to the file.
     const filePart = href.replace(/[#?].*$/, '');
     if (!filePart) return; // pure anchor like "#section" -- nothing to open
+    // Relative links resolve against the source file's folder (CommonMark / GitHub /
+    // VS Code semantics), regardless of any ./ or ../ prefix. For an unsaved buffer
+    // with no folder, fall back to the project root.
     const baseDir = sourceFilePath ? dirname(sourceFilePath) : state.projectRoot;
     if (!baseDir) {
       showToast('Save this file before following relative links.', 'danger');

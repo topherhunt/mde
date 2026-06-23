@@ -566,6 +566,35 @@ test.describe('Following links', () => {
     expect(fs.existsSync(path.join(tmpDir, 'nope.md'))).toBe(false);
   });
 
+  test('bare relative paths resolve against the current file, not the project root', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.mkdirSync(path.join(tmpDir, 'sub'));
+    // Two files named target.md: one at the project root, one beside index.md.
+    // A bare link must follow CommonMark semantics and pick the sibling, even
+    // though a project root is loaded.
+    fs.writeFileSync(path.join(tmpDir, 'target.md'), '# Root\n\nFrom project root.\n');
+    fs.writeFileSync(path.join(tmpDir, 'sub', 'target.md'), '# Sibling\n\nFrom current folder.\n');
+    fs.writeFileSync(path.join(tmpDir, 'sub', 'index.md'), 'Bare [link](target.md) here.\n');
+
+    await app.evaluate(({ BrowserWindow }, dir) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', dir);
+    }, tmpDir);
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'sub', 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.locator('a[href="target.md"]').click({ modifiers: [MOD] });
+
+    await expect(page.locator('.tab')).toHaveCount(2);
+    await expect(page.locator('.tiptap:visible')).toContainText('From current folder');
+    await expect(page.locator('.tiptap:visible')).not.toContainText('From project root');
+  });
+
   test('Cmd+click on an external link does not open a tab or a create dialog', async () => {
     ({ app, page } = await launchApp());
 

@@ -35,12 +35,16 @@ Download the latest build for your platform from the [releases page](https://git
 
 ### macOS (Apple Silicon)
 
-The app isn't code-signed, so macOS will block ("quarantine") it by default, giving you no option to proceed. To open the app:
+The app isn't code-signed, so macOS will block ("quarantine") it by default. On Sequoia, the right-click > Open workaround no longer works. Instead:
 
-1. Right-click (or Control-click) `MDE.app` and select **Open**
-2. Click **Open** in the confirmation dialog
+1. Move `MDE.app` to `/Applications`
+2. Run this command in Terminal:
 
-You only need to do this once. After that, macOS will remember your choice and let you open it normally.
+```
+xattr -d com.apple.quarantine /Applications/MDE.app
+```
+
+You only need to do this once. After that, the app opens normally.
 
 ### Windows
 
