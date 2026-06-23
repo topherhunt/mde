@@ -15,9 +15,10 @@ interface SidebarProps {
   refreshKey: number;
   onToast: (msg: string, variant?: string) => void;
   onDeleteFile: (filePath: string) => void;
+  onFileRenamed?: (oldPath: string, newPath: string) => void;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed }: SidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const resizing = useRef(false);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -112,6 +113,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onIm
             onCollapseAll={collapseAll}
             sidebarRef={sidebarRef}
             onDeleteFile={onDeleteFile}
+            onFileRenamed={onFileRenamed}
           />
         ) : (
           <DocumentOutline editor={activeEditor} />
@@ -134,6 +136,7 @@ interface FileExplorerProps {
   onCollapseAll: () => void;
   sidebarRef: React.RefObject<HTMLDivElement>;
   onDeleteFile: (filePath: string) => void;
+  onFileRenamed?: (oldPath: string, newPath: string) => void;
 }
 
 function isEditable(name: string): boolean {
@@ -166,7 +169,7 @@ function flattenVisibleEntries(
   return result;
 }
 
-function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef, onDeleteFile }: FileExplorerProps) {
+function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef, onDeleteFile, onFileRenamed }: FileExplorerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingEntry, setRenamingEntry] = useState<FileEntry | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -199,10 +202,11 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
     if (newName && newName !== entry.name) {
       const newPath = joinPath(dirname(entry.path), newName);
       await window.mde.renameFile(entry.path, newPath);
+      onFileRenamed?.(entry.path, newPath);
       triggerRefresh();
     }
     setRenamingEntry(null);
-  }, [triggerRefresh]);
+  }, [triggerRefresh, onFileRenamed]);
 
   const handleSelect = useCallback((entry: FileEntry) => {
     setSelectedPath(entry.path);

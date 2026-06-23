@@ -165,6 +165,8 @@ export default function App() {
   const editorsRef = useRef<Map<string, TipTapEditor>>(new Map());
   const closedTabsRef = useRef<string[]>([]);
   const scrollPositionsRef = useRef<Map<string, number>>(new Map());
+  const suppressEditorFocusRef = useRef(false);
+  const findBarOpenRef = useRef(false);
   const [activeEditor, setActiveEditor] = useState<TipTapEditor | null>(null);
   const [theme, setTheme] = useState<string>('system');
   const [toast, setToast] = useState<{ msg: string; variant?: string; hiding?: boolean } | null>(null);
@@ -185,6 +187,7 @@ export default function App() {
   const [tabRenameTarget, setTabRenameTarget] = useState<FileEntry | null>(null);
   const [tabDeleteTarget, setTabDeleteTarget] = useState<FileEntry | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
+  const [findFocusTrigger, setFindFocusTrigger] = useState(0);
 
   const showToast = useCallback((msg: string, variant?: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -200,7 +203,7 @@ export default function App() {
   useEffect(() => {
     const editor = activeTab ? editorsRef.current.get(activeTab.id) || null : null;
     setActiveEditor(editor);
-    if (editor) {
+    if (editor && !suppressEditorFocusRef.current) {
       editor.commands.focus();
       const tabId = activeTab?.id;
       requestAnimationFrame(() => {
@@ -212,6 +215,7 @@ export default function App() {
         }
       });
     }
+    suppressEditorFocusRef.current = false;
   }, [activeTab?.id]);
 
   const openFile = useCallback(async (filePath: string, tentative = false) => {
@@ -460,6 +464,21 @@ export default function App() {
     dispatch({ type: 'CLOSE_TAB', index: tabIndex });
   }, [state.tabs, unregisterEditor]);
 
+  const handleFileRenamedInSidebar = useCallback(async (oldPath: string, newPath: string) => {
+    const tab = state.tabs.find(t => t.filePath === oldPath);
+    if (!tab) return;
+    window.mde.unwatchFile(oldPath);
+    const stats = await window.mde.getFileStats(newPath);
+    dispatch({
+      type: 'UPDATE_TAB_PATH',
+      tabId: tab.id,
+      filePath: newPath,
+      fileName: fileNameFromPath(newPath),
+      mtime: stats?.mtimeMs ?? null,
+    });
+    window.mde.watchFile(newPath);
+  }, [state.tabs]);
+
   const confirmTabRename = useCallback(async (newName: string) => {
     const target = tabRenameTarget;
     setTabRenameTarget(null);
@@ -537,7 +556,13 @@ export default function App() {
       }),
       window.mde.onSaveFile(saveActiveTab),
       window.mde.onSaveFileAs(saveActiveTabAs),
-      window.mde.onToggleFind(() => dispatch({ type: 'TOGGLE_FIND_BAR' })),
+      window.mde.onToggleFind(() => {
+        if (findBarOpenRef.current) {
+          setFindFocusTrigger(n => n + 1);
+        } else {
+          dispatch({ type: 'TOGGLE_FIND_BAR' });
+        }
+      }),
       window.mde.onExportPDF(async () => {
         await window.mde.exportPDF();
       }),
@@ -615,6 +640,8 @@ export default function App() {
     const cleanupProjectFiles = window.mde.onProjectFilesChanged(() => setSidebarRefreshKey(n => n + 1));
     return () => { cleanupTheme(); cleanupSpell(); cleanupAutosave(); cleanupProjectFiles(); };
   }, []);
+
+  useEffect(() => { findBarOpenRef.current = state.findBarOpen; }, [state.findBarOpen]);
 
   function applyTheme(t: string) {
     setTheme(t);
@@ -744,13 +771,17 @@ export default function App() {
           projectRoot={state.projectRoot}
           mode={state.sidebarMode}
           onSetMode={(mode) => dispatch({ type: 'SET_SIDEBAR_MODE', mode })}
-          onOpenFile={openFile}
+          onOpenFile={(filePath, tentative) => {
+            suppressEditorFocusRef.current = true;
+            openFile(filePath, tentative);
+          }}
           onImportFile={handleImportFile}
           activeEditor={activeEditor}
           activeFilePath={activeTab?.filePath || null}
           refreshKey={sidebarRefreshKey}
           onToast={showToast}
           onDeleteFile={handleDeleteFile}
+          onFileRenamed={handleFileRenamedInSidebar}
         />
         <div className="main-area">
           <TabBar
@@ -772,6 +803,11 @@ export default function App() {
             <FindBar
               editor={activeEditor}
               onClose={() => dispatch({ type: 'TOGGLE_FIND_BAR' })}
+              focusTrigger={findFocusTrigger}
+              projectRoot={state.projectRoot}
+              tabs={state.tabs}
+              onOpenFile={openFile}
+              onToast={showToast}
             />
           )}
           <div className="editor-area">

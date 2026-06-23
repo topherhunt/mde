@@ -1180,6 +1180,24 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
         }
         return false;
       },
+      transformPastedHTML(html: string): string {
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        div.querySelectorAll('li').forEach((li: HTMLElement) => {
+          const input = li.querySelector('input[type="checkbox"]');
+          if (input) {
+            const isChecked = (input as HTMLInputElement).checked;
+            li.setAttribute('data-checked', isChecked ? 'true' : 'false');
+            input.remove();
+            li.classList.remove('task-list-item');
+          }
+        });
+        div.querySelectorAll('ul, ol').forEach((list: HTMLElement) => {
+          list.classList.remove('contains-task-list');
+          list.removeAttribute('data-type');
+        });
+        return div.innerHTML;
+      },
     },
     onTransaction: ({ transaction: t, editor: e }) => {
       if (loadedRef.current && t.getMeta('addToHistory') === false && t.docChanged) {
@@ -1207,6 +1225,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
     onReady(editor);
     return () => onDestroy();
   }, [editor]);
+
 
   const prevDirtyRef = useRef(tab.dirty);
   useEffect(() => {
