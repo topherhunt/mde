@@ -1151,8 +1151,10 @@ function openResolvedPath(target: string): void {
   try { stat = fs.statSync(target); } catch { return; }
   if (stat.isDirectory()) {
     const existing = BrowserWindow.getAllWindows().find(w => windowStates.get(w)?.projectRoot === target);
-    if (existing) existing.focus();
-    else createWindow(target);
+    if (existing) {
+      if (existing.isMinimized()) existing.restore();
+      existing.focus();
+    } else createWindow(target);
   } else {
     const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
     if (win) {
@@ -1175,6 +1177,7 @@ app.on('open-file', (event, filePath) => {
       return ws && ws.projectRoot === filePath;
     });
     if (existing) {
+      if (existing.isMinimized()) existing.restore();
       existing.focus();
     } else {
       if (app.isReady()) {
