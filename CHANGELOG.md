@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.3.0
+
+### Editor
+
+- **Follow links (Cmd/Ctrl+click)**: Cmd/Ctrl+click a Markdown link to follow it -- relative file links open in a new tab (resolved against the current file's folder, per CommonMark / GitHub / VS Code semantics), a missing target prompts to create the file, and external URLs open in the system browser. Plain click still positions the cursor for editing.
+- **Two-stage Cmd+Left/Right (macOS)**: Cmd+Left/Right moves first to the start/end of the wrapped visual line, then -- on a second press -- to the start/end of the whole paragraph or list item. Shift extends at each stage. Non-Mac platforms keep native Ctrl+Arrow word motion.
+- **Paste as plain text**: Cmd+Shift+V inserts clipboard text verbatim (newlines as hard breaks, no Markdown parsing).
+- **No auto-linking**: Typing or pasting a bare path like `docs/foo.md` now stays literal text -- only real Markdown `[text](url)` links become links.
+- **Fix: relative links no longer stripped on save**: Real Markdown links to relative local files (e.g. `[canon](docs/foo/00-canon.md)`) now survive a load/save round-trip instead of collapsing to plain text.
+- **Obsidian/GitHub task-list paste**: Pasting HTML with GitHub-style task lists now correctly converts to checked/unchecked list items.
+- **Enter outdents empty final child**: Enter on an empty final item of a sublist outdents to the parent level instead of nesting deeper.
+- **Link bar remove button**: A trash button in the LinkBar removes an existing link; LinkPreview shifts left when it would overflow the editor's right edge.
+- **Move-block keeps a plain cursor**: Cmd+Alt+Up/Down with no selection leaves a collapsed cursor in the moved block instead of selecting it.
+
+### Find & Replace
+
+- **Cross-file Find & Replace**: A toggle in the Find bar switches between current-file and all-project-files search. All-files mode scans every Markdown file in the project, shows a scrollable result list with per-file match counts, and replace shows a confirmation ("Replace N in M files?"), skipping any tab with unsaved changes.
+- **Cmd+F focus**: Pressing Cmd+F while the Find bar is already open focuses and selects the search input instead of toggling the bar closed.
+
+### Interface
+
+- **Tab context menu**: Right-clicking a tab opens a Rename / Delete / Copy Relative Path menu (the same actions as the file explorer), with the open tab's path and watcher kept in sync.
+- **Reveal in Finder**: File context menu gains a platform-aware "Reveal in Finder" / "Show in Explorer" / "Show in Folder" item. The copy-path item degrades to "Copy File Name" when no project folder is set.
+- **Sidebar rename syncs open tab**: Renaming a file in the sidebar updates any open tab's name, path, mtime, and file watcher -- no more phantom conflict banners or broken saves.
+- **Global error banner**: Otherwise-silent unhandled errors (e.g. an IPC call failing because a watched directory moved) surface as a dismissable red banner.
+- **Fix: restore minimized windows**: Re-opening an already-open file or folder whose window is minimized now un-minimizes it instead of leaving it in the Dock.
+
+### Development
+
+- **Dependencies**: Replaced `pdf-parse` with a direct `pdfjs-dist` (^4.10.38) dependency (drops the transitive native canvas binaries); bumped Electron 42.1.0 -> 42.4.1.
+- **Reproducible toolchain**: Added `.tool-versions` pinning Node 22.14.0.
+- Renamed the `make` npm script to `release`; named the Windows installer `MDE-<version> Windows Setup.exe` to distinguish it from the macOS artifacts.
+
+---
+
 ## v0.2.1
 
 ### Windows support
