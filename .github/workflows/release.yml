@@ -33,7 +33,7 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run make
+      - run: npm run release
 
       - uses: actions/upload-artifact@v5
         with:
