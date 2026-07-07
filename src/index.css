@@ -882,21 +882,6 @@ body {
   background: var(--accent-light);
 }
 
-/* --- Syntax highlighting (lowlight / VS Code Dark+ inspired) --- */
-.editor-content .tiptap pre .hljs-comment,
-.editor-content .tiptap pre .hljs-quote { color: #6a9955; }
-.editor-content .tiptap pre .hljs-keyword,
-.editor-content .tiptap pre .hljs-selector-tag,
-.editor-content .tiptap pre .hljs-built_in { color: #569cd6; }
-.editor-content .tiptap pre .hljs-string,
-.editor-content .tiptap pre .hljs-attr { color: #ce9178; }
-.editor-content .tiptap pre .hljs-number,
-.editor-content .tiptap pre .hljs-literal { color: #b5cea8; }
-.editor-content .tiptap pre .hljs-type,
-.editor-content .tiptap pre .hljs-title { color: #4ec9b0; }
-.editor-content .tiptap pre .hljs-function { color: #dcdcaa; }
-.editor-content .tiptap pre .hljs-variable { color: #9cdcfe; }
-
 /* --- Code copy button --- */
 .code-copy-btn {
   position: absolute;

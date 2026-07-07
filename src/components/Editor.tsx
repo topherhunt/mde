@@ -4,17 +4,16 @@ import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
 import Link from '@tiptap/extension-link';
 import { TableKit } from '@tiptap/extension-table';
-import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import CodeBlock from '@tiptap/extension-code-block';
 import Placeholder from '@tiptap/extension-placeholder';
 import { ListItem } from '@tiptap/extension-list';
 import taskListPlugin from 'markdown-it-task-lists';
-import { common, createLowlight } from 'lowlight';
 import { Markdown as MarkdownExt } from 'tiptap-markdown';
 import Text from '@tiptap/extension-text';
 import { Extension, InputRule, mergeAttributes } from '@tiptap/core';
 import { TextSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { Fragment } from '@tiptap/pm/model';
+import { Fragment, DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { Tab } from '../types';
 import { splitLooseLists, cleanParsedListHtml } from '../utils/markdown';
 import TableMenu from './TableMenu';
@@ -395,6 +394,20 @@ function dedentPastedText(text: string): string {
     if (!prefix) return text;
   }
   return lines.map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : l)).join('\n');
+}
+
+// Escape an ordered-list marker that sits directly inside a bullet item -- e.g.
+// "- 1. SIS" -- by backslash-escaping the dot/paren ("- 1\. SIS"). Without this,
+// markdown-it (correctly per CommonMark, but not how Obsidian renders it) reads
+// "- 1. x" as a bullet whose sole content is an ordered sub-list, which collapses
+// into an empty parent bullet + a stray "1." item on paste. Only the number that
+// immediately follows a bullet marker on the SAME line is touched, so a genuine
+// ordered sub-list on its own line (or a top-level "1. x") is left alone.
+function escapeBulletNumbers(text: string): string {
+  return text
+    .split('\n')
+    .map((l) => l.replace(/^(\s*[-*+]\s+)(\d+)([.)])(\s)/, '$1$2\\$3$4'))
+    .join('\n');
 }
 
 function insertAsPlainText(editor: any, text: string) {
@@ -1153,9 +1166,9 @@ const CodeFolding = Extension.create({
   },
 });
 
-const lowlight = createLowlight(common);
-
-const CodeBlockWithCopy = CodeBlockLowlight.extend({
+// Plain CodeBlock (not CodeBlockLowlight): code fences render as uniform,
+// unhighlighted text -- no per-token syntax colors.
+const CodeBlockWithCopy = CodeBlock.extend({
   addNodeView() {
     return ({ node, editor: _editor, getPos }) => {
       const wrapper = document.createElement('div');
@@ -1202,6 +1215,9 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
   // which is created once when the editor is initialized.
   const onLinkClickRef = useRef(onLinkClick);
   onLinkClickRef.current = onLinkClick;
+  // Lets the handlePaste editorProp reach the tiptap-markdown parser without a
+  // use-before-define reference to the `editor` const being created below.
+  const editorRef = useRef<TipTapEditor | null>(null);
 
   const editor = useEditor({
     extensions: [
@@ -1244,9 +1260,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
       TableKit.configure({
         table: { resizable: true },
       }),
-      CodeBlockWithCopy.configure({
-        lowlight,
-      }),
+      CodeBlockWithCopy,
       UnifiedListItem,
       CmdEnterCycle,
       TabHandler,
@@ -1269,6 +1283,49 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
       }),
     ],
     editorProps: {
+      // Obsidian (and most editors) put BOTH text/plain and text/html on the
+      // clipboard. ProseMirror's rule is `asText = text && (plainText || inCode ||
+      // !html)`, so whenever HTML is present it takes the HTML path and NEVER runs
+      // transformPastedText (our dedent). That path mis-parses an indented Obsidian
+      // list sub-tree as a code block, and turns "- 1. x" bullets into empty-bullet
+      // + ordered-sublist noise. Intercept genuine markdown-list pastes here and run
+      // them through the SAME pipeline MDE uses to load a file, so a pasted list is
+      // structurally identical to a loaded one. Everything else (prose, code blocks,
+      // Word tables via text/html) falls through to the default path untouched.
+      handlePaste(view, event) {
+        const cd = (event as ClipboardEvent).clipboardData;
+        if (!cd) return false;
+        // Shift-paste (plain) and pasting into a code block stay verbatim.
+        if ((view as any).input?.shiftKey) return false;
+        if (view.state.selection.$from.parent.type.spec.code) return false;
+        const raw = cd.getData('text/plain');
+        if (!raw) return false; // images / non-text: let the default path handle it
+        const dedented = dedentPastedText(raw);
+        const firstNonBlank = dedented.split('\n').find((l) => l.trim().length > 0);
+        // Only hijack pastes that are actually a markdown list.
+        if (!firstNonBlank || !/^[ \t]*([-*+]|\d+[.)])\s/.test(firstNonBlank)) return false;
+
+        const md = escapeBulletNumbers(dedented);
+        // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
+        const html = cleanParsedListHtml(editorRef.current!.storage.markdown.parser.parse(splitLooseLists(md)));
+        const container = document.createElement('div');
+        container.innerHTML = html;
+        // preserveWhitespace must be FALSE (matching the file-load path): markdown-it
+        // leaves a "\n" between an item's text and its nested <ul> (e.g. "<li>Questions\n
+        // <ul>..."). preserveWhitespace:true would keep that newline as a trailing
+        // soft-break in the paragraph -- a visible blank line before every child list
+        // that vanishes on serialize (why it disappears when you copy back out).
+        const slice = PMDOMParser.fromSchema(view.state.schema).parseSlice(container, {
+          preserveWhitespace: false,
+          context: view.state.selection.$from,
+        });
+        // replaceSelection with a context-parsed (open) slice merges the pasted list
+        // into the current list when the cursor is already inside one.
+        view.dispatch(
+          view.state.tr.replaceSelection(slice).scrollIntoView().setMeta('paste', true).setMeta('uiEvent', 'paste'),
+        );
+        return true;
+      },
       handleClick(view, pos, event) {
         // Cmd/Ctrl+click follows a link: opens a relative file in a new tab (App
         // handles existence checks / create prompts) or an external URL in the browser.
@@ -1344,6 +1401,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
 
   useEffect(() => {
     if (!editor) return;
+    editorRef.current = editor;
     onReady(editor);
     return () => onDestroy();
   }, [editor]);

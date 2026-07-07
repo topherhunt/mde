@@ -102,7 +102,7 @@ test.describe('File opening', () => {
     await expect(editor.locator('h3')).toContainText('Subsection');
   });
 
-  test('renders code blocks with syntax highlighting', async () => {
+  test('renders code blocks', async () => {
     ({ app, page } = await launchApp());
 
     await app.evaluate(({ BrowserWindow }, filePath) => {
@@ -2831,6 +2831,115 @@ test.describe('Indented list paste', () => {
     await expect(editor.locator('pre')).toHaveCount(0);
     await expect(editor.locator('li')).toHaveCount(3);
     await expect(editor.locator('li[data-checked="false"]')).toHaveCount(1);
+  });
+
+  // The real Obsidian case: the clipboard carries text/plain AND text/html. That
+  // used to force ProseMirror down the HTML path, bypassing the dedent entirely --
+  // producing a code fence for an indented sub-tree and empty-bullet/ordered noise
+  // for "- 1. x" bullets. handlePaste now routes list-shaped plain text through the
+  // file-load markdown pipeline regardless of any HTML on the clipboard.
+  test('pasting an Obsidian list with text/html present stays a clean nested list', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'obsidian2.md');
+    fs.writeFileSync(tmpFile, 'Start.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Start', { timeout: 5000 });
+
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+
+    // Dispatch a synthetic paste carrying BOTH representations. The text/html is a
+    // <pre> (the worst case -- what would have rendered as a code fence); handlePaste
+    // must ignore it and use the plain-text markdown list instead.
+    await editor.evaluate((el) => {
+      const plain = [
+        '- Questions',
+        '    - 1. SIS & roster sync?',
+        '        - Focus -',
+        '        - GC.',
+        '    - 2. All students have Google accounts? - Yes.',
+        '- Notes',
+      ].join('\n');
+      const dt = new DataTransfer();
+      dt.setData('text/plain', plain);
+      dt.setData('text/html', '<pre>' + plain + '</pre>');
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+
+    await expect(editor).toContainText('SIS & roster sync?', { timeout: 3000 });
+    // No code fence.
+    await expect(editor.locator('pre')).toHaveCount(0);
+    // "- 1. x" stayed a literal bullet -- no ordered list, and the "1." reads inline
+    // with its text rather than being split into a separate empty bullet + "1." item.
+    await expect(editor.locator('ol')).toHaveCount(0);
+    await expect(editor).toContainText('1. SIS & roster sync?');
+    // No stray empty bullets from the collapsed ordered sub-lists.
+    await expect(editor.locator('li p:empty')).toHaveCount(0);
+    // No spurious hard break before a nested sub-list (the "ugly newline" after every
+    // parent item). A real <br> lacks the trailing-break placeholder class.
+    await expect(editor.locator('li p br:not(.ProseMirror-trailingBreak)')).toHaveCount(0);
+    // The "Questions" item's own paragraph is exactly its text -- nothing trailing.
+    const questionsText = await editor.evaluate((root) =>
+      [...root.querySelectorAll('li > p')].find((p) => p.textContent?.includes('Questions'))?.textContent,
+    );
+    expect(questionsText).toBe('Questions');
+    // Nesting preserved: "Focus" sits three lists deep (Questions > SIS > Focus),
+    // not flattened up to the top level.
+    const focusDepth = await editor.evaluate((root) => {
+      const li = [...root.querySelectorAll('li')].find(
+        (el) => el.querySelector(':scope > p')?.textContent?.trim() === 'Focus -',
+      );
+      let depth = 0;
+      for (let n = li?.parentElement; n && n !== root; n = n.parentElement) {
+        if (n.tagName === 'UL') depth++;
+      }
+      return depth;
+    });
+    expect(focusDepth).toBe(3);
+  });
+
+  // Pasting a list while the cursor sits inside an existing bullet merges the pasted
+  // items into that SAME list (one <ul>) rather than starting a detached list or a
+  // code fence. (Exact item boundaries are left to ProseMirror's list-paste merging.)
+  test('pasting a list inside an existing bullet merges into the same list', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'merge.md');
+    fs.writeFileSync(tmpFile, '- existing\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor.locator('li')).toHaveText(['existing']);
+
+    // Cursor on a fresh empty bullet below "existing", then paste a two-item list.
+    await editor.locator('li').click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await editor.evaluate((el) => {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', '- pasted one\n- pasted two');
+      dt.setData('text/html', '<pre>- pasted one\n- pasted two</pre>');
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+
+    await expect(editor).toContainText('pasted two', { timeout: 3000 });
+    // Stayed one list -- not a detached second <ul> and not a code fence.
+    await expect(editor.locator(':scope > ul')).toHaveCount(1);
+    await expect(editor.locator('pre')).toHaveCount(0);
+    await expect(editor).toContainText('existing');
+    await expect(editor).toContainText('pasted one');
   });
 });
 
