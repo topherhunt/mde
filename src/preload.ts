@@ -12,6 +12,13 @@ export interface FileStats {
   isDirectory: boolean;
 }
 
+export interface GuardedWriteResult {
+  ok: boolean;
+  conflict: boolean;
+  mtimeMs: number | null;
+  hash: string;
+}
+
 const api = {
   platform: process.platform,
 
@@ -20,6 +27,16 @@ const api = {
 
   writeFile: (filePath: string, content: string): Promise<number> =>
     ipcRenderer.invoke('write-file', filePath, content),
+
+  hashFile: (filePath: string): Promise<string | null> =>
+    ipcRenderer.invoke('hash-file', filePath),
+
+  writeFileIfUnchanged: (
+    filePath: string,
+    content: string,
+    expectedHash: string | null
+  ): Promise<GuardedWriteResult> =>
+    ipcRenderer.invoke('write-file-if-unchanged', filePath, content, expectedHash),
 
   getFileStats: (filePath: string): Promise<FileStats | null> =>
     ipcRenderer.invoke('get-file-stats', filePath),

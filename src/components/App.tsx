@@ -29,8 +29,8 @@ type Action =
   | { type: 'SET_ACTIVE_TAB'; index: number }
   | { type: 'MARK_DIRTY'; tabId: string; dirty: boolean }
   | { type: 'MARK_CONFLICT'; tabId: string; conflict: boolean }
-  | { type: 'UPDATE_TAB_PATH'; tabId: string; filePath: string; fileName: string; mtime: number }
-  | { type: 'UPDATE_TAB_MTIME'; tabId: string; mtime: number }
+  | { type: 'UPDATE_TAB_PATH'; tabId: string; filePath: string; fileName: string; mtime: number | null; hash: string | null }
+  | { type: 'UPDATE_TAB_MTIME'; tabId: string; mtime: number | null; hash: string | null }
   | { type: 'SET_SIDEBAR_MODE'; mode: 'explorer' | 'outline' }
   | { type: 'TOGGLE_FIND_BAR' }
   | { type: 'REORDER_TABS'; fromIndex: number; toIndex: number }
@@ -110,7 +110,7 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         tabs: state.tabs.map(t =>
           t.id === action.tabId
-            ? { ...t, filePath: action.filePath, fileName: action.fileName, diskMtime: action.mtime }
+            ? { ...t, filePath: action.filePath, fileName: action.fileName, diskMtime: action.mtime, diskHash: action.hash }
             : t
         ),
       };
@@ -119,7 +119,7 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         tabs: state.tabs.map(t =>
-          t.id === action.tabId ? { ...t, diskMtime: action.mtime } : t
+          t.id === action.tabId ? { ...t, diskMtime: action.mtime, diskHash: action.hash } : t
         ),
       };
 
@@ -188,6 +188,21 @@ export default function App() {
   const [tabDeleteTarget, setTabDeleteTarget] = useState<FileEntry | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   const [findFocusTrigger, setFindFocusTrigger] = useState(0);
+  // Set when a file is silently auto-reloaded after an external change; drives the thin
+  // blue "detected changes" banner. It overlays the top of the editor (never pushes text
+  // down), fades in, stays 5s, then fades out. `hiding` triggers the fade-out animation.
+  const [reloadNotice, setReloadNotice] = useState<{ fileName: string; hiding?: boolean } | null>(null);
+  const reloadTimersRef = useRef<{ hide?: ReturnType<typeof setTimeout>; remove?: ReturnType<typeof setTimeout> }>({});
+  const showReloadNotice = useCallback((fileName: string) => {
+    const timers = reloadTimersRef.current;
+    if (timers.hide) clearTimeout(timers.hide);
+    if (timers.remove) clearTimeout(timers.remove);
+    setReloadNotice({ fileName });
+    timers.hide = setTimeout(() => {
+      setReloadNotice(prev => (prev ? { ...prev, hiding: true } : null));
+      timers.remove = setTimeout(() => setReloadNotice(null), 300); // matches fade-out duration
+    }, 5000);
+  }, []);
 
   const showToast = useCallback((msg: string, variant?: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -237,13 +252,17 @@ export default function App() {
       }
     }
 
-    const stats = await window.mde.getFileStats(filePath);
+    const [stats, diskHash] = await Promise.all([
+      window.mde.getFileStats(filePath),
+      window.mde.hashFile(filePath),
+    ]);
     const tab: Tab = {
       id: nextTabId(),
       filePath,
       fileName: fileNameFromPath(filePath),
       dirty: false,
       diskMtime: stats?.mtimeMs ?? null,
+      diskHash,
       conflict: false,
       tentative,
     };
@@ -307,6 +326,7 @@ export default function App() {
       fileName: 'Keyboard Shortcuts',
       dirty: false,
       diskMtime: null,
+      diskHash: null,
       conflict: false,
       tentative: false,
       readOnly: true,
@@ -347,21 +367,36 @@ export default function App() {
     const { Markdown } = await import('../utils/markdown');
     const markdown = Markdown.serialize(activeEditor);
 
+    // The backstop: only overwrite if the on-disk file still hashes to what we last
+    // synced. Writing to a new path (Save As / first save) has no prior hash to match,
+    // so we force it. If the file changed underneath us, refuse and raise the conflict
+    // banner instead of clobbering -- there is no code path that overwrites a stale file.
+    const isSamePath = activeTab.filePath === filePath;
+    const expectedHash = isSamePath ? activeTab.diskHash : null;
+
     if (activeTab.filePath) {
       window.mde.unwatchFile(activeTab.filePath);
     }
-    const mtime = await window.mde.writeFile(filePath, markdown);
+    const result = await window.mde.writeFileIfUnchanged(filePath, markdown, expectedHash);
 
-    if (activeTab.filePath !== filePath) {
+    if (result.conflict) {
+      // Re-watch the file we refused to overwrite so we keep tracking it.
+      window.mde.watchFile(filePath);
+      dispatch({ type: 'MARK_CONFLICT', tabId: activeTab.id, conflict: true });
+      return;
+    }
+
+    if (!isSamePath) {
       dispatch({
         type: 'UPDATE_TAB_PATH',
         tabId: activeTab.id,
         filePath,
         fileName: fileNameFromPath(filePath),
-        mtime,
+        mtime: result.mtimeMs,
+        hash: result.hash,
       });
     } else {
-      dispatch({ type: 'UPDATE_TAB_MTIME', tabId: activeTab.id, mtime });
+      dispatch({ type: 'UPDATE_TAB_MTIME', tabId: activeTab.id, mtime: result.mtimeMs, hash: result.hash });
     }
     dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
     window.mde.watchFile(filePath);
@@ -384,14 +419,17 @@ export default function App() {
 
     const { Markdown } = await import('../utils/markdown');
     const markdown = Markdown.serialize(activeEditor);
-    const mtime = await window.mde.writeFile(filePath, markdown);
+    // Save As writes to a user-chosen path (possibly overwriting a different file on
+    // purpose), so we force the write and adopt the new file's hash as our baseline.
+    const result = await window.mde.writeFileIfUnchanged(filePath, markdown, null);
 
     dispatch({
       type: 'UPDATE_TAB_PATH',
       tabId: activeTab.id,
       filePath,
       fileName: fileNameFromPath(filePath),
-      mtime,
+      mtime: result.mtimeMs,
+      hash: result.hash,
     });
     dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
     dispatch({ type: 'MARK_CONFLICT', tabId: activeTab.id, conflict: false });
@@ -406,7 +444,10 @@ export default function App() {
     const savedFoldLines = foldPosToLineNumbers(activeEditor, collapsed);
 
     const content = await window.mde.readFile(activeTab.filePath);
-    const stats = await window.mde.getFileStats(activeTab.filePath);
+    const [stats, diskHash] = await Promise.all([
+      window.mde.getFileStats(activeTab.filePath),
+      window.mde.hashFile(activeTab.filePath),
+    ]);
     const { Markdown } = await import('../utils/markdown');
     Markdown.deserializeInto(activeEditor, content);
 
@@ -421,7 +462,7 @@ export default function App() {
       }
     }
 
-    dispatch({ type: 'UPDATE_TAB_MTIME', tabId: activeTab.id, mtime: stats?.mtimeMs ?? null });
+    dispatch({ type: 'UPDATE_TAB_MTIME', tabId: activeTab.id, mtime: stats?.mtimeMs ?? null, hash: diskHash });
     dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
     dispatch({ type: 'MARK_CONFLICT', tabId: activeTab.id, conflict: false });
   }, [activeTab, activeEditor]);
@@ -468,13 +509,17 @@ export default function App() {
     const tab = state.tabs.find(t => t.filePath === oldPath);
     if (!tab) return;
     window.mde.unwatchFile(oldPath);
-    const stats = await window.mde.getFileStats(newPath);
+    const [stats, hash] = await Promise.all([
+      window.mde.getFileStats(newPath),
+      window.mde.hashFile(newPath),
+    ]);
     dispatch({
       type: 'UPDATE_TAB_PATH',
       tabId: tab.id,
       filePath: newPath,
       fileName: fileNameFromPath(newPath),
       mtime: stats?.mtimeMs ?? null,
+      hash,
     });
     window.mde.watchFile(newPath);
   }, [state.tabs]);
@@ -488,13 +533,17 @@ export default function App() {
     if (tab && tab.filePath) window.mde.unwatchFile(tab.filePath);
     await window.mde.renameFile(target.path, newPath);
     if (tab) {
-      const stats = await window.mde.getFileStats(newPath);
+      const [stats, hash] = await Promise.all([
+        window.mde.getFileStats(newPath),
+        window.mde.hashFile(newPath),
+      ]);
       dispatch({
         type: 'UPDATE_TAB_PATH',
         tabId: tab.id,
         filePath: newPath,
         fileName: fileNameFromPath(newPath),
         mtime: stats?.mtimeMs ?? null,
+        hash,
       });
       window.mde.watchFile(newPath);
     }
@@ -585,36 +634,44 @@ export default function App() {
         const tab = state.tabs.find(t => t.filePath === filePath);
         if (!tab) return;
 
-        const stats = await window.mde.getFileStats(filePath);
-        if (!stats) return;
+        // Decide whether the file REALLY changed by content hash, not mtime. This is
+        // authoritative (immune to mtime resolution/equality quirks) and makes the
+        // directory watcher's occasional spurious fires -- and our own saves -- no-ops.
+        const [stats, diskHash] = await Promise.all([
+          window.mde.getFileStats(filePath),
+          window.mde.hashFile(filePath),
+        ]);
+        if (!stats || diskHash === null) return;
+        if (diskHash === tab.diskHash) return; // nothing actually changed on disk
 
-        if (tab.diskMtime !== null && stats.mtimeMs > tab.diskMtime) {
-          if (tab.dirty) {
-            dispatch({ type: 'MARK_CONFLICT', tabId: tab.id, conflict: true });
-          } else {
-            const editor = editorsRef.current.get(tab.id);
-            if (editor) {
-              // Save fold state before silent reload
-              const { collapsed } = foldKey.getState(editor.state);
-              const savedFoldLines = foldPosToLineNumbers(editor, collapsed);
+        if (tab.dirty) {
+          dispatch({ type: 'MARK_CONFLICT', tabId: tab.id, conflict: true });
+        } else {
+          const editor = editorsRef.current.get(tab.id);
+          if (editor) {
+            // Save fold state before silent reload
+            const { collapsed } = foldKey.getState(editor.state);
+            const savedFoldLines = foldPosToLineNumbers(editor, collapsed);
 
-              const content = await window.mde.readFile(filePath);
-              const { Markdown } = await import('../utils/markdown');
-              Markdown.deserializeInto(editor, content);
+            const content = await window.mde.readFile(filePath);
+            const { Markdown } = await import('../utils/markdown');
+            Markdown.deserializeInto(editor, content);
 
-              // Restore fold state after silent reload
-              if (savedFoldLines.length) {
-                const positions = lineNumbersToFoldPositions(editor.state.doc, content, savedFoldLines);
-                if (positions.length) {
-                  const tr = editor.state.tr;
-                  tr.setMeta(RESTORE_FOLDS, positions);
-                  tr.setMeta('addToHistory', false);
-                  editor.view.dispatch(tr);
-                }
+            // Restore fold state after silent reload
+            if (savedFoldLines.length) {
+              const positions = lineNumbersToFoldPositions(editor.state.doc, content, savedFoldLines);
+              if (positions.length) {
+                const tr = editor.state.tr;
+                tr.setMeta(RESTORE_FOLDS, positions);
+                tr.setMeta('addToHistory', false);
+                editor.view.dispatch(tr);
               }
             }
-            dispatch({ type: 'UPDATE_TAB_MTIME', tabId: tab.id, mtime: stats.mtimeMs });
           }
+          dispatch({ type: 'UPDATE_TAB_MTIME', tabId: tab.id, mtime: stats.mtimeMs, hash: diskHash });
+          // Positive proof to the user that live detection is working: a thin blue banner
+          // naming the reloaded file, shown for 5s.
+          showReloadNotice(tab.fileName);
         }
       }),
     ];
@@ -811,6 +868,12 @@ export default function App() {
             />
           )}
           <div className="editor-area">
+            {reloadNotice && (
+              <div className={`reload-notice${reloadNotice.hiding ? ' reload-notice-out' : ''}`}>
+                <i className="bi bi-arrow-clockwise" />
+                <span>Detected changes to <strong>{reloadNotice.fileName}</strong> -- reloaded from disk</span>
+              </div>
+            )}
             {appError && (
               <div className="error-banner">
                 <span className="error-banner-text">

@@ -925,6 +925,45 @@ body {
 }
 
 /* --- Conflict banner --- */
+/* Overlays the top of the editor (absolute -- never pushes the buffer text down).
+   Fades in, held for 5s by JS, then fades out via the reload-notice-out class. */
+.reload-notice {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--accent-light);
+  border-bottom: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 6px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  animation: reload-notice-in 0.3s ease-out;
+}
+
+.reload-notice .bi {
+  font-size: 13px;
+}
+
+@keyframes reload-notice-in {
+  from { opacity: 0; transform: translateY(-100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.reload-notice-out {
+  animation: reload-notice-out 0.3s ease-in forwards;
+}
+
+@keyframes reload-notice-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-100%); }
+}
+
 .conflict-banner {
   background: var(--danger-bg);
   border-bottom: 2px solid var(--danger-border);

@@ -967,6 +967,116 @@ test.describe('File conflict detection', () => {
     await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
 
   });
+
+  test('save REFUSES to overwrite a file that changed on disk without a watcher event', async () => {
+    // The bulletproof backstop: even if the file watcher misses an external change
+    // entirely (no file-changed event fires), a save must NOT clobber the newer
+    // on-disk version. It must detect the hash mismatch and raise the conflict banner.
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'guard.md');
+    fs.writeFileSync(tmpFile, '# Original\n\nAs loaded.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('As loaded', { timeout: 5000 });
+
+    // Make local edits (dirty buffer).
+    await editor.click();
+    await editor.press('End');
+    await editor.type(' plus my local edit');
+    await expect(page.locator('.tab-dirty-dot')).toBeVisible();
+
+    // Someone else rewrites the file on disk -- and crucially we DO NOT send a
+    // file-changed event, simulating a watcher that failed to notice.
+    const externalContent = '# Someone Elses Important Work\n\nMust not be lost.\n';
+    fs.writeFileSync(tmpFile, externalContent);
+
+    // Attempt to save.
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+    });
+
+    // The save must be refused: conflict banner appears, dirty dot remains.
+    await expect(page.locator('.conflict-banner')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.tab-dirty-dot')).toBeVisible();
+
+    // And the on-disk file must STILL be the external version, untouched.
+    expect(fs.readFileSync(tmpFile, 'utf-8')).toBe(externalContent);
+  });
+
+  test('auto-reload shows a blue reload-notice banner that auto-dismisses after ~5s', async () => {
+    // Positive proof to the user that live change-detection is working.
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'notice.md');
+    fs.writeFileSync(tmpFile, '# Original\n\nText.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Original', { timeout: 5000 });
+
+    // External change on a clean buffer -> silent reload.
+    fs.writeFileSync(tmpFile, '# Reloaded\n\nFresh from disk.\n');
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('file-changed', filePath);
+    }, tmpFile);
+
+    await expect(editor).toContainText('Reloaded', { timeout: 5000 });
+
+    // The blue banner appears and names the file.
+    const notice = page.locator('.reload-notice');
+    await expect(notice).toBeVisible({ timeout: 5000 });
+    await expect(notice).toContainText('notice.md');
+
+    // It overlays the editor rather than pushing the buffer down: the notice sits at
+    // the very top of the editor area, above where the editor text begins.
+    const noticeBox = await notice.boundingBox();
+    const editorBox = await editor.boundingBox();
+    expect(noticeBox!.y).toBeLessThan(editorBox!.y + 8);
+
+    // And it auto-dismisses after ~5s, without any typing.
+    await expect(notice).toBeHidden({ timeout: 8000 });
+  });
+
+  test('auto-reload survives an atomic replace (write temp + rename) via the real watcher', async () => {
+    // The actual regression: editors and Claude save atomically (write a temp file,
+    // then rename it over the target). fs.watch on the file's inode dies on that
+    // rename; watching the directory survives it. No manual file-changed here --
+    // this exercises the real watcher end to end.
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'atomic.md');
+    fs.writeFileSync(tmpFile, '# Before\n\nOriginal body.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Before', { timeout: 5000 });
+
+    // Give the watcher a beat to attach, then replace atomically.
+    await page.waitForTimeout(300);
+    const tmpNew = path.join(tmpDir, '.atomic.md.tmp');
+    fs.writeFileSync(tmpNew, '# After Atomic Replace\n\nRenamed into place.\n');
+    fs.renameSync(tmpNew, tmpFile);
+
+    // The editor should auto-reload from the real watcher event -- no conflict.
+    await expect(editor).toContainText('After Atomic Replace', { timeout: 10000 });
+    await expect(page.locator('.conflict-banner')).toBeHidden();
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
+    await expect(page.locator('.reload-notice')).toBeVisible({ timeout: 5000 });
+  });
 });
 
 // ---------------------------------------------------------------------------

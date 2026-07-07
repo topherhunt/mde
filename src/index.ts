@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -457,6 +458,48 @@ ipcMain.handle('write-file', async (_event, filePath: string, content: string) =
   const stats = await fs.promises.stat(filePath);
   return stats.mtimeMs;
 });
+
+function hashContent(content: string): string {
+  return crypto.createHash('sha256').update(content, 'utf-8').digest('hex');
+}
+
+// Content hash of the file as it currently exists on disk (null if missing/unreadable).
+// Used by the renderer to fingerprint a file the moment it reads or writes it, so a later
+// save can prove the on-disk version is still the one it remembers.
+ipcMain.handle('hash-file', async (_event, filePath: string): Promise<string | null> => {
+  try {
+    return hashContent(await fs.promises.readFile(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+});
+
+// Guarded write: the bulletproof backstop against clobbering an externally-modified file.
+// Before writing, we re-read the file's current on-disk content and hash it. If that hash
+// no longer matches `expectedHash` (the hash the renderer recorded when it last read or
+// wrote this file), someone else changed the file underneath us -- we REFUSE the write and
+// report the conflict so the renderer shows the red banner instead of overwriting.
+// Read-compare-write happens here in one main-process call so nothing can slip in between.
+// Pass expectedHash === null to force the write (brand-new file / Save As to a new path).
+ipcMain.handle(
+  'write-file-if-unchanged',
+  async (_event, filePath: string, content: string, expectedHash: string | null) => {
+    if (expectedHash !== null) {
+      let currentHash: string | null = null;
+      try {
+        currentHash = hashContent(await fs.promises.readFile(filePath, 'utf-8'));
+      } catch {
+        currentHash = null; // file missing on disk -> allow (re)creating it
+      }
+      if (currentHash !== null && currentHash !== expectedHash) {
+        return { ok: false, conflict: true, mtimeMs: null, hash: currentHash };
+      }
+    }
+    await fs.promises.writeFile(filePath, content, 'utf-8');
+    const stats = await fs.promises.stat(filePath);
+    return { ok: true, conflict: false, mtimeMs: stats.mtimeMs, hash: hashContent(content) };
+  }
+);
 
 ipcMain.handle('get-file-stats', async (_event, filePath: string) => {
   try {
@@ -918,29 +961,57 @@ ipcMain.handle('get-pending-file', (event) => {
 
 // --- File watching ---
 
-const watchers = new Map<string, fs.FSWatcher>();
+// We watch the *containing directory*, not the file itself. fs.watch on a single file
+// follows the inode, so an atomic save by another program -- write a temp file, then
+// rename it over the original, which is what most editors (and Claude's file tools) do --
+// silently kills the watcher: the old inode is unlinked and no further events ever fire.
+// Watching the directory and filtering by basename survives atomic replaces. Multiple open
+// files in the same folder share one directory watcher, refcounted via the basenames set.
+interface DirWatch {
+  watcher: fs.FSWatcher;
+  basenames: Set<string>;
+}
+const dirWatchers = new Map<string, DirWatch>();
 
 ipcMain.on('watch-file', (_event, filePath: string) => {
-  if (watchers.has(filePath)) return;
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const existing = dirWatchers.get(dir);
+  if (existing) {
+    existing.basenames.add(base);
+    return;
+  }
   try {
-    const watcher = fs.watch(filePath, () => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) {
-          win.webContents.send('file-changed', filePath);
+    const basenames = new Set([base]);
+    const watcher = fs.watch(dir, (_eventType, changed) => {
+      // `changed` (the filename) is null on some platforms; when it is we can't tell which
+      // file changed, so we notify for every watched file in this dir and let the renderer's
+      // hash comparison decide whether anything actually differs (a no-op if not).
+      const targets = changed
+        ? (basenames.has(changed) ? [changed] : [])
+        : [...basenames];
+      for (const b of targets) {
+        const full = path.join(dir, b);
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send('file-changed', full);
         }
       }
     });
-    watchers.set(filePath, watcher);
+    dirWatchers.set(dir, { watcher, basenames });
   } catch {
-    // File may not exist yet
+    // Directory may not exist
   }
 });
 
 ipcMain.on('unwatch-file', (_event, filePath: string) => {
-  const watcher = watchers.get(filePath);
-  if (watcher) {
-    watcher.close();
-    watchers.delete(filePath);
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const entry = dirWatchers.get(dir);
+  if (!entry) return;
+  entry.basenames.delete(base);
+  if (entry.basenames.size === 0) {
+    entry.watcher.close();
+    dirWatchers.delete(dir);
   }
 });
 

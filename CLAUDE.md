@@ -19,7 +19,9 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - `tiptap-markdown` handles MD parse/serialize. The TipTap document model is the source of truth while editing.
 - TipTap (ProseMirror) for the editor, not raw contenteditable.
 - Auto-save is opt-in (disabled by default). When enabled via Settings, saves after 1s of inactivity. Stored as `autosave` in `mde-state.json`. IPC: `get-autosave`, `set-autosave`, `autosave-changed`.
-- File conflict detection: poll mtime, show red banner, disable Save (but not editing).
+- File conflict detection is content-hash based, with two layers. (1) SAFETY BACKSTOP: saving goes through the `write-file-if-unchanged` IPC, which re-reads the file on disk, sha256-hashes it, and refuses the write (returning `{conflict:true}`) if that hash no longer matches the `diskHash` the tab recorded when it last read/wrote the file. A stale buffer therefore cannot clobber a newer on-disk version even if the watcher missed the change entirely -- the renderer raises the red banner instead. Pass `expectedHash: null` to force (new file / Save As). `hash-file` returns the on-disk hash; both use `hashContent()` in index.ts. Each `Tab` carries `diskHash` (set on open, save, reload, rename, silent-reload). (2) LIVE DETECTION: the `file-changed` handler recomputes the disk hash and compares to `tab.diskHash` -- if equal it's a no-op (ignores spurious watcher fires and our own writes); if different and the buffer is clean it silently reloads; if dirty it shows the banner. mtime is no longer used for the change decision (kept only as informational `diskMtime`).
+- File watching watches the *containing directory* (filtered by basename, refcounted per dir in `dirWatchers`), NOT the file inode. `fs.watch` on a single file follows the inode, so an atomic save by another program (write temp + rename over original -- what most editors and Claude's file tools do) silently kills the watcher. Watching the directory survives atomic replaces. When the platform reports a null filename, the handler notifies all watched files in that dir and lets the renderer's hash comparison decide.
+- Auto-reload proof banner: when a clean buffer is silently reloaded after an external change, a thin blue `.reload-notice` banner naming the file appears. It is `position: absolute` at the top of `.editor-area`, so it OVERLAYS the top of the buffer (never pushes the text down). It fades in, stays 5s, then fades out (`showReloadNotice` sets `reloadNotice`, schedules `hiding: true` at 5s for the fade-out animation, and clears at 5.3s). Purely informational -- positive proof that live detection is working.
 - State management: React context + useReducer, no external state lib.
 - User preferences (theme, spellcheck, sidebar width, window bounds, last project root, fold state) stored in `mde-state.json` in Electron's userData dir via `loadState`/`saveState` helpers in index.ts.
 - Initial file load uses a manual ProseMirror transaction with `addToHistory: false` so undo doesn't clear the buffer. Do not use `editor.commands.setContent()` for initial load -- TipTap's `beforeTransaction` event fires after history has already recorded the transaction.
@@ -87,7 +89,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-95 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+99 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 What exists:
 
@@ -112,7 +114,7 @@ What exists:
 - Code block copy button (NodeView-based, top-right corner, appears on hover)
 - Table cell actions dropdown (three-dots trigger centered on top-right cell border, viewport-aware dropdown alignment, icons for insert/delete row/column)
 - Copying table cells: a single cell copies just its text; multiple cells copy as tab-separated rows (pastes as plain text in editors, as a real table into Word via the HTML clipboard)
-- File conflict detection (silent reload / red banner)
+- File conflict detection (hash-guarded save that can never clobber a stale file; silent reload with a blue "detected changes" proof banner; red conflict banner when the buffer is dirty). Watches the containing directory so it survives atomic saves.
 - Quick Open command palette (Cmd+O) with fuzzy search, file indexing (10s TTL cache)
 - DOCX/PDF import: converts to `.{ext}.md` on click (e.g. `report.pdf.md` -- preserves original extension), renames original to `.bak.{ext}`, backup files hidden from sidebar/quick-open. PDF extraction: position-based line grouping, multi-column layout detection, paragraph break detection, table detection. DOCX: mammoth + turndown with HTML table preprocessing for clean Markdown table output (zero HTML in output).
 - PDF export (via Electron printToPDF)

@@ -10,12 +10,23 @@ export interface FileStats {
   isDirectory: boolean;
 }
 
+export interface GuardedWriteResult {
+  ok: boolean;
+  conflict: boolean;
+  mtimeMs: number | null;
+  hash: string;
+}
+
 export interface Tab {
   id: string;
   filePath: string | null;
   fileName: string;
   dirty: boolean;
   diskMtime: number | null;
+  // Content hash of the file as we last read/wrote it on disk. The save path refuses to
+  // write when the current on-disk hash no longer matches this, so a stale buffer can
+  // never clobber a newer version. null for unsaved buffers or read-only tabs.
+  diskHash: string | null;
   conflict: boolean;
   tentative: boolean;
   readOnly?: boolean;
@@ -26,6 +37,12 @@ export interface MdeAPI {
   platform: NodeJS.Platform;
   readFile: (filePath: string) => Promise<string>;
   writeFile: (filePath: string, content: string) => Promise<number>;
+  hashFile: (filePath: string) => Promise<string | null>;
+  writeFileIfUnchanged: (
+    filePath: string,
+    content: string,
+    expectedHash: string | null
+  ) => Promise<GuardedWriteResult>;
   getFileStats: (filePath: string) => Promise<FileStats | null>;
   listDirectory: (dirPath: string) => Promise<FileEntry[]>;
   showSaveDialog: (defaultPath?: string) => Promise<string | null>;
