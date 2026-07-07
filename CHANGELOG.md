@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.4.0
+
+### Editor
+
+- **Wrap a selection in inline code**: With text selected on a single line, pressing `` ` `` wraps it in inline code (like `this`) instead of replacing it with a literal backtick. A backtick with no selection still types normally.
+- **Copy from a code fence pastes as plain text**: Copying or cutting content from inside a code block now puts raw text on the clipboard, so it pastes anywhere -- prose or another fence -- without being re-wrapped in ``` gates.
+- **Obsidian / nested list paste**: Pasting a bullet or task list from Obsidian (including an indented sub-tree, or mixed bullets and tasks) now produces a clean nested list instead of a code block or stray empty bullets. A list pasted inside an existing list merges into it.
+- **No leading code fence**: A document can never start with a code block -- an empty paragraph is always kept above it so you have somewhere to place the cursor before the fence (mirroring the existing trailing block).
+- **Plain code fences**: Code blocks now render as uniform, unhighlighted text. The language tag is still stored and round-tripped through Markdown; it just no longer drives token colors.
+
+### Reliability
+
+- **Bulletproof conflict detection**: Saving is now guarded by a content-hash check performed in the main process -- it re-reads and re-hashes the file and refuses to overwrite a version that changed on disk, so a stale buffer can never clobber newer content. mtime polling is gone.
+- **Survives atomic saves**: File watching now watches the containing directory instead of the file inode, so an external atomic save (write-temp-then-rename, as most editors and CLI tools do) no longer silently kills the watcher.
+- **Reload proof banner**: When a clean buffer is silently reloaded after an external change, a thin blue banner naming the file briefly overlays the top of the editor -- positive proof the live detection is working.
+- **Single write path**: Every document write -- including cross-file Find & Replace -- now routes through the one hash-guarded save; the unguarded writer was removed entirely.
+
+### Interface
+
+- **About window build info**: The About window now shows both the release version and the 7-character git commit the build was made from.
+
+### Development
+
+- Inject the git commit at build time via a webpack `DefinePlugin` (`process.env.GIT_COMMIT`), with an `unknown` fallback for non-git builds.
+- Dropped the `lowlight` syntax-highlighting wiring and its `.hljs-*` CSS in favor of the plain code-block extension.
+- E2E coverage expanded to 108 tests (conflict detection, the four editor fixes, and Obsidian list paste).
+
+---
+
 ## v0.3.0
 
 ### Editor
