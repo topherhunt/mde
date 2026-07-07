@@ -229,12 +229,16 @@ function showAboutWindow(): void {
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
   const version = app.getVersion();
+  // Injected at build time by DefinePlugin (webpack.main.config.ts) -- the 7-char git
+  // commit the build came from. 'unknown' when built outside a git checkout.
+  const commit = process.env.GIT_COMMIT || 'unknown';
   const html = `<!DOCTYPE html>
 <html><head><style>
   body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; text-align: center;
     padding: 30px 20px; margin: 0; background: #f5f5f7; color: #333; user-select: none; }
   h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
   .version { font-size: 13px; color: #888; margin-bottom: 16px; }
+  .version code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .credit { font-size: 14px; margin-bottom: 8px; }
   a { color: #0066cc; text-decoration: none; font-size: 13px; }
   a:hover { text-decoration: underline; }
@@ -245,7 +249,7 @@ function showAboutWindow(): void {
   }
 </style></head><body>
   <h1>MDE</h1>
-  <div class="version">Version ${version}</div>
+  <div class="version">Version ${version} &middot; <code>${commit}</code></div>
   <div class="credit">Made with \u{1F499} by Topher Hunt</div>
   <a href="https://github.com/topherhunt/mde">github.com/topherhunt/mde</a>
 </body></html>`;
