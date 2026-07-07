@@ -453,19 +453,15 @@ ipcMain.handle('read-file', async (_event, filePath: string) => {
   return fs.promises.readFile(filePath, 'utf-8');
 });
 
-ipcMain.handle('write-file', async (_event, filePath: string, content: string) => {
-  await fs.promises.writeFile(filePath, content, 'utf-8');
-  const stats = await fs.promises.stat(filePath);
-  return stats.mtimeMs;
-});
+// No unguarded 'write-file' IPC on purpose: all document writes go through
+// 'write-file-if-unchanged' below. Don't add a raw write-file -- it bypasses the guard.
 
 function hashContent(content: string): string {
   return crypto.createHash('sha256').update(content, 'utf-8').digest('hex');
 }
 
-// Content hash of the file as it currently exists on disk (null if missing/unreadable).
-// Used by the renderer to fingerprint a file the moment it reads or writes it, so a later
-// save can prove the on-disk version is still the one it remembers.
+// Hash of the file's current on-disk content (null if missing) -- the fingerprint the
+// renderer records on read/write and later checks before overwriting.
 ipcMain.handle('hash-file', async (_event, filePath: string): Promise<string | null> => {
   try {
     return hashContent(await fs.promises.readFile(filePath, 'utf-8'));
@@ -474,13 +470,8 @@ ipcMain.handle('hash-file', async (_event, filePath: string): Promise<string | n
   }
 });
 
-// Guarded write: the bulletproof backstop against clobbering an externally-modified file.
-// Before writing, we re-read the file's current on-disk content and hash it. If that hash
-// no longer matches `expectedHash` (the hash the renderer recorded when it last read or
-// wrote this file), someone else changed the file underneath us -- we REFUSE the write and
-// report the conflict so the renderer shows the red banner instead of overwriting.
-// Read-compare-write happens here in one main-process call so nothing can slip in between.
-// Pass expectedHash === null to force the write (brand-new file / Save As to a new path).
+// DATA-SAFETY GUARD -- do not remove: the only path that writes a document to disk. Refuses
+// the write (reports a conflict) if the file's on-disk hash != expectedHash. null = force.
 ipcMain.handle(
   'write-file-if-unchanged',
   async (_event, filePath: string, content: string, expectedHash: string | null) => {
@@ -961,12 +952,9 @@ ipcMain.handle('get-pending-file', (event) => {
 
 // --- File watching ---
 
-// We watch the *containing directory*, not the file itself. fs.watch on a single file
-// follows the inode, so an atomic save by another program -- write a temp file, then
-// rename it over the original, which is what most editors (and Claude's file tools) do --
-// silently kills the watcher: the old inode is unlinked and no further events ever fire.
-// Watching the directory and filtering by basename survives atomic replaces. Multiple open
-// files in the same folder share one directory watcher, refcounted via the basenames set.
+// Watch the containing directory, not the file: fs.watch on a file follows the inode, so an
+// atomic save (write temp + rename over original -- what most editors/agents do) kills it.
+// One watcher per dir, refcounted by basename.
 interface DirWatch {
   watcher: fs.FSWatcher;
   basenames: Set<string>;
@@ -984,9 +972,8 @@ ipcMain.on('watch-file', (_event, filePath: string) => {
   try {
     const basenames = new Set([base]);
     const watcher = fs.watch(dir, (_eventType, changed) => {
-      // `changed` (the filename) is null on some platforms; when it is we can't tell which
-      // file changed, so we notify for every watched file in this dir and let the renderer's
-      // hash comparison decide whether anything actually differs (a no-op if not).
+      // `changed` is null on some platforms -- then notify all watched files here and let
+      // the renderer's hash check decide (a no-op if nothing differs).
       const targets = changed
         ? (basenames.has(changed) ? [changed] : [])
         : [...basenames];

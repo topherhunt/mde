@@ -97,7 +97,7 @@ Runs headless Playwright E2E tests against a packaged build.
 ## Build & distribute
 
 ```
-npm run make
+npm run release
 ```
 
 Produces distributables in the `out/make/` directory. Note that Electron Forge only builds for the OS you run it on: macOS produces a `.dmg`, Windows produces a Squirrel `Setup.exe`. You **cannot** reliably cross-build the Windows installer from macOS (it needs Windows-native tooling), so releases are built in CI instead.

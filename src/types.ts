@@ -36,8 +36,8 @@ export interface Tab {
 export interface MdeAPI {
   platform: NodeJS.Platform;
   readFile: (filePath: string) => Promise<string>;
-  writeFile: (filePath: string, content: string) => Promise<number>;
   hashFile: (filePath: string) => Promise<string | null>;
+  // The ONLY document-write path. Refuses to overwrite a file changed on disk. No raw writeFile.
   writeFileIfUnchanged: (
     filePath: string,
     content: string,

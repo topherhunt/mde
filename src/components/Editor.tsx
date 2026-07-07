@@ -67,16 +67,58 @@ function tableSliceToTSV(content: Fragment): string | null {
   return rows.map((r) => r.join('\t')).join('\n');
 }
 
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// True when the whole selection lies inside a single code block (an interior
+// selection, not a NodeSelection of the block itself -- there $from.parent is the
+// doc, whose spec.code is falsy).
+function selectionInsideCodeBlock(state: any): boolean {
+  const { $from, $to, empty } = state.selection;
+  return !empty && $from.parent.type.spec.code && $from.sameParent($to);
+}
+
 // When copying a single list item, strip the list wrapper so the clipboard gets
 // just the text, not "- text". Multi-item copies keep the list markers.
 const SmartClipboard = Extension.create({
   name: 'smartClipboard',
   addProseMirrorPlugins() {
     const editor = this.editor;
+    // Copy/cut from inside a code block: write the raw text to BOTH text/plain and a
+    // plain text/html (one <p> per line). Handling the DOM event ourselves -- before
+    // ProseMirror's serializeForClipboard runs -- means the code is never wrapped in a
+    // ``` fence in either representation, so it pastes as plain text ANYWHERE (prose or
+    // another fence), not as a re-created code block. Returns false for anything else
+    // (whole-block NodeSelection, selections spanning out of the block) so the normal
+    // clipboard path -- including the code-block copy button and fenced-block copies --
+    // is untouched.
+    const copyCodeAsPlainText = (view: any, event: ClipboardEvent, isCut: boolean): boolean => {
+      const { state } = view;
+      if (!selectionInsideCodeBlock(state)) return false;
+      const data = event.clipboardData;
+      if (!data) return false;
+      const text = state.doc.textBetween(state.selection.from, state.selection.to, '\n');
+      event.preventDefault();
+      data.clearData();
+      data.setData('text/plain', text);
+      // Inline HTML (lines joined by <br>, no block wrapper) so a paste merges into
+      // the target inline -- e.g. into a prose paragraph -- as plain text rather than
+      // spawning new blocks. Providing SOME html is required: with none, ProseMirror
+      // routes the text through tiptap-markdown's parser (so "- x" would become a list).
+      data.setData('text/html', text.split('\n').map(escapeHtml).join('<br>'));
+      if (isCut) {
+        view.dispatch(state.tr.deleteSelection().scrollIntoView().setMeta('uiEvent', 'cut'));
+      }
+      return true;
+    };
     return [
       new Plugin({
         key: new PluginKey('smartClipboard'),
         props: {
+          handleDOMEvents: {
+            copy: (view, event) => copyCodeAsPlainText(view, event as ClipboardEvent, false),
+            cut: (view, event) => copyCodeAsPlainText(view, event as ClipboardEvent, true),
+          },
           clipboardTextSerializer: (slice) => {
             // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
             const serializer = editor.storage.markdown.serializer;
@@ -335,6 +377,26 @@ const TabHandler = Extension.create({
 
 // Insert clipboard text verbatim (no Markdown parsing, no auto-linking),
 // splitting on newlines into hard breaks so line structure survives.
+// Strip the whitespace prefix that every non-blank line shares. Markdown copied
+// from a nested position (e.g. an indented list sub-tree from Obsidian) arrives with
+// a leading tab / 4 spaces on every line, which markdown-it parses as an indented
+// code block instead of a list. Removing the common indentation restores the list
+// structure while leaving relative (deeper) nesting intact.
+function dedentPastedText(text: string): string {
+  const lines = text.split('\n');
+  const nonBlank = lines.filter((l) => l.trim().length > 0);
+  if (nonBlank.length === 0) return text;
+  let prefix = nonBlank[0].match(/^[ \t]*/)![0];
+  for (const line of nonBlank) {
+    const ws = line.match(/^[ \t]*/)![0];
+    let i = 0;
+    while (i < prefix.length && i < ws.length && prefix[i] === ws[i]) i++;
+    prefix = prefix.slice(0, i);
+    if (!prefix) return text;
+  }
+  return lines.map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : l)).join('\n');
+}
+
 function insertAsPlainText(editor: any, text: string) {
   if (!text) return;
   const lines = text.split('\n');
@@ -360,6 +422,56 @@ const PlainTextPaste = Extension.create({
         return true;
       },
     };
+  },
+});
+
+// Typing ` with a non-empty, single-line selection wraps the selection in inline
+// code (like a `code fence`) instead of replacing it with a literal backtick.
+const BacktickWrap = Extension.create({
+  name: 'backtickWrap',
+  addProseMirrorPlugins() {
+    const editor = this.editor;
+    return [
+      new Plugin({
+        key: new PluginKey('backtickWrap'),
+        props: {
+          handleTextInput(view, from, to, text) {
+            if (text !== '`' || from === to) return false;
+            const { state } = view;
+            // Inside a code block a backtick is a literal character -- leave it alone.
+            if (state.selection.$from.parent.type.spec.code) return false;
+            if (!state.schema.marks.code) return false;
+            // Only single-line selections: a `\n` means the range spans a block
+            // boundary (or a hard break), which inline code can't wrap.
+            if (state.doc.textBetween(from, to, '\n').includes('\n')) return false;
+            editor.chain().focus().toggleCode().run();
+            return true;
+          },
+        },
+      }),
+    ];
+  },
+});
+
+// The document must never begin with a code block: with no block above it there's
+// nowhere to place the cursor to add content before it. Whenever the first child is
+// a code block, prepend an empty paragraph. (The end already gets a trailing block.)
+const LeadingParagraph = Extension.create({
+  name: 'leadingParagraph',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('leadingParagraph'),
+        appendTransaction(transactions, _oldState, newState) {
+          if (!transactions.some((tr) => tr.docChanged)) return null;
+          const first = newState.doc.firstChild;
+          if (!first || first.type.name !== 'codeBlock') return null;
+          const paragraph = newState.schema.nodes.paragraph;
+          if (!paragraph) return null;
+          return newState.tr.insert(0, paragraph.create()).setMeta('addToHistory', false);
+        },
+      }),
+    ];
   },
 });
 
@@ -1138,6 +1250,8 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
       UnifiedListItem,
       CmdEnterCycle,
       TabHandler,
+      BacktickWrap,
+      LeadingParagraph,
       PlainTextPaste,
       MoveBlock,
       LineBoundaryNav,
@@ -1179,6 +1293,14 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
           return true;
         }
         return false;
+      },
+      // Runs before tiptap-markdown parses pasted plain text (and before pasting
+      // into a code block). `codeOrPlain` is true when pasting into a code block or
+      // via an explicit plain-text (Shift) paste -- leave those verbatim; only dedent
+      // markdown that's about to be structurally parsed.
+      transformPastedText(text: string, codeOrPlain: boolean): string {
+        if (codeOrPlain) return text;
+        return dedentPastedText(text);
       },
       transformPastedHTML(html: string): string {
         const div = document.createElement('div');

@@ -188,9 +188,7 @@ export default function App() {
   const [tabDeleteTarget, setTabDeleteTarget] = useState<FileEntry | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   const [findFocusTrigger, setFindFocusTrigger] = useState(0);
-  // Set when a file is silently auto-reloaded after an external change; drives the thin
-  // blue "detected changes" banner. It overlays the top of the editor (never pushes text
-  // down), fades in, stays 5s, then fades out. `hiding` triggers the fade-out animation.
+  // Blue "detected changes" banner shown after a silent auto-reload. `hiding` drives fade-out.
   const [reloadNotice, setReloadNotice] = useState<{ fileName: string; hiding?: boolean } | null>(null);
   const reloadTimersRef = useRef<{ hide?: ReturnType<typeof setTimeout>; remove?: ReturnType<typeof setTimeout> }>({});
   const showReloadNotice = useCallback((fileName: string) => {
@@ -367,10 +365,8 @@ export default function App() {
     const { Markdown } = await import('../utils/markdown');
     const markdown = Markdown.serialize(activeEditor);
 
-    // The backstop: only overwrite if the on-disk file still hashes to what we last
-    // synced. Writing to a new path (Save As / first save) has no prior hash to match,
-    // so we force it. If the file changed underneath us, refuse and raise the conflict
-    // banner instead of clobbering -- there is no code path that overwrites a stale file.
+    // DATA-SAFETY GUARD (do not bypass): overwrite only if the file still hashes to what we
+    // last synced; else writeFileIfUnchanged refuses and we show the conflict banner. null = new path.
     const isSamePath = activeTab.filePath === filePath;
     const expectedHash = isSamePath ? activeTab.diskHash : null;
 
@@ -634,9 +630,8 @@ export default function App() {
         const tab = state.tabs.find(t => t.filePath === filePath);
         if (!tab) return;
 
-        // Decide whether the file REALLY changed by content hash, not mtime. This is
-        // authoritative (immune to mtime resolution/equality quirks) and makes the
-        // directory watcher's occasional spurious fires -- and our own saves -- no-ops.
+        // Detect real changes by content hash, not mtime -- so spurious watcher fires
+        // and our own saves become no-ops (hash matches).
         const [stats, diskHash] = await Promise.all([
           window.mde.getFileStats(filePath),
           window.mde.hashFile(filePath),

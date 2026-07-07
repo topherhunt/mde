@@ -203,7 +203,9 @@ export default function FindBar({ editor, onClose, focusTrigger, projectRoot, ta
         const newContent = content.replace(pattern, () => { matchCount++; return replaceTerm; });
 
         if (matchCount > 0) {
-          await window.mde.writeFile(filePath, newContent);
+          // Forces the write (null): content was just read+transformed and dirty tabs are
+          // skipped above. writeFileIfUnchanged is the only document-write path.
+          await window.mde.writeFileIfUnchanged(filePath, newContent, null);
           totalReplaced += matchCount;
           filesChanged++;
         }

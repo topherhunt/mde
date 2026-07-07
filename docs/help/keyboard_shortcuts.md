@@ -24,6 +24,7 @@
 | Cmd + I | Italic |
 | Cmd + Shift + X | Strikethrough |
 | Cmd + E | Inline Code |
+| ` (with text selected) | Wrap Selection in Inline Code |
 | Cmd + Shift + E | Code Block |
 | Cmd + K | Insert Link |
 | Cmd + Shift + 7 | Ordered List |

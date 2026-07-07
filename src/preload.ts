@@ -25,12 +25,11 @@ const api = {
   readFile: (filePath: string): Promise<string> =>
     ipcRenderer.invoke('read-file', filePath),
 
-  writeFile: (filePath: string, content: string): Promise<number> =>
-    ipcRenderer.invoke('write-file', filePath, content),
-
   hashFile: (filePath: string): Promise<string | null> =>
     ipcRenderer.invoke('hash-file', filePath),
 
+  // The ONLY way to write a document to disk. Refuses to overwrite a file whose on-disk
+  // hash no longer matches expectedHash (data-safety guard). Do not add a raw writeFile.
   writeFileIfUnchanged: (
     filePath: string,
     content: string,

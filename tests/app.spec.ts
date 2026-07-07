@@ -848,6 +848,49 @@ test.describe('Find and replace', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('.find-bar')).toBeHidden();
   });
+
+  test('cross-file Replace in All Files writes to disk through the guarded path', async () => {
+    // FindBar's bulk replace now routes through writeFileIfUnchanged (the only write path).
+    // This proves that swap still writes files on disk correctly.
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const fileA = path.join(tmpDir, 'a.md');
+    const fileB = path.join(tmpDir, 'b.md');
+    fs.writeFileSync(fileA, '# Doc A\n\nContains FINDME here.\n');
+    fs.writeFileSync(fileB, '# Doc B\n\nAlso FINDME twice: FINDME.\n');
+
+    // Set the project root, then open one file so the editor + FindBar are available.
+    await app.evaluate(({ BrowserWindow }, root) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
+    }, tmpDir);
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, fileA);
+    await expect(page.locator('.tiptap')).toContainText('Doc A', { timeout: 5000 });
+
+    // Open find, switch to all-files mode, search.
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('toggle-find');
+    });
+    await page.locator('button[title="Search all project files"]').click();
+    await page.locator('input[placeholder="Find..."]').fill('FINDME');
+
+    // Wait for the cross-file search to find matches (count shows "N in Mf").
+    await expect(page.locator('.find-bar-count')).toContainText('in', { timeout: 5000 });
+
+    // Enter a replacement and run Replace in All Files -> confirm.
+    await page.locator('input[placeholder="Replace..."]').fill('REPLACED');
+    await page.locator('button:has-text("Replace in All Files")').click();
+    await page.locator('.find-bar-confirm-label').waitFor({ timeout: 3000 });
+    await page.locator('.find-bar-btn.btn-primary').click();
+
+    // Both files on disk must be rewritten with the replacement.
+    await expect.poll(() => fs.readFileSync(fileA, 'utf-8'), { timeout: 5000 })
+      .toBe('# Doc A\n\nContains REPLACED here.\n');
+    await expect.poll(() => fs.readFileSync(fileB, 'utf-8'), { timeout: 5000 })
+      .toBe('# Doc B\n\nAlso REPLACED twice: REPLACED.\n');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2632,5 +2675,190 @@ test.describe('Line-then-block cursor motion', () => {
     await page.keyboard.press('ControlOrMeta+Shift+ArrowLeft');
     const selectedLeft = await page.evaluate(() => window.getSelection()!.toString().trim());
     expect(selectedLeft).toBe(longText);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Backtick wraps a selection in inline code
+// ---------------------------------------------------------------------------
+
+test.describe('Backtick wrap', () => {
+  test('pressing ` with a single-line selection wraps it in inline code', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'backtick.md');
+    fs.writeFileSync(tmpFile, 'Hello world here.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Hello world here', { timeout: 5000 });
+
+    // Triple-click selects the whole (single-line) paragraph; typing a backtick
+    // wraps that selection in inline code instead of replacing it.
+    await editor.locator('p', { hasText: 'Hello world here' }).click({ clickCount: 3 });
+    await expect.poll(() => page.evaluate(() => window.getSelection()!.toString().trim()))
+      .toBe('Hello world here.');
+    await page.keyboard.type('`');
+
+    // The selection is now inline code, and no literal backtick was inserted.
+    await expect(editor.locator('code')).toHaveCount(1);
+    await expect(editor.locator('code')).toHaveText('Hello world here.');
+    await expect(editor).not.toContainText('`');
+  });
+
+  test('pressing ` with no selection inserts a literal backtick', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'backtick2.md');
+    fs.writeFileSync(tmpFile, 'Plain.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Plain', { timeout: 5000 });
+
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type('`');
+
+    // A collapsed cursor is unaffected: the backtick is literal, no code mark.
+    await expect(editor).toContainText('Plain.`');
+    await expect(editor.locator('code')).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Copying from within a code fence yields plain text (no ``` gates)
+// ---------------------------------------------------------------------------
+
+test.describe('Code fence copy', () => {
+  test('copying content from inside a code block is plain text, not fenced', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'code.md');
+    fs.writeFileSync(tmpFile, '# Title\n\n```\nconst x = 1;\nconst y = 2;\n```\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('const x = 1;', { timeout: 5000 });
+
+    // Triple-click inside the code block selects its content (an interior selection).
+    await editor.locator('pre').click({ clickCount: 3 });
+    await page.keyboard.press('ControlOrMeta+c');
+
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    // No fence gates -- the raw code text is on the clipboard so it pastes back
+    // into the same (or any) code fence as plain text.
+    expect(clip).not.toContain('```');
+    expect(clip).toContain('const x = 1;');
+  });
+
+  test('pasting code copied from a fence into prose stays plain text, not a new code block', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'code2.md');
+    fs.writeFileSync(tmpFile, 'Intro line.\n\n```\nhello world\n```\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('hello world', { timeout: 5000 });
+
+    // Exactly one code block to start.
+    await expect(editor.locator('pre')).toHaveCount(1);
+
+    // Copy the interior of the code block...
+    await editor.locator('pre').click({ clickCount: 3 });
+    await page.keyboard.press('ControlOrMeta+c');
+
+    // ...then paste it into the prose paragraph above.
+    await editor.locator('p', { hasText: 'Intro line' }).click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' ');
+    await page.keyboard.press('ControlOrMeta+v');
+
+    // The paste landed as plain text -- still just the one original code block,
+    // and the prose paragraph now contains the pasted code text.
+    await expect(editor.locator('p', { hasText: 'Intro line. hello world' })).toBeVisible({ timeout: 3000 });
+    await expect(editor.locator('pre')).toHaveCount(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pasting an indented (Obsidian) mixed list stays a list, not a code fence
+// ---------------------------------------------------------------------------
+
+test.describe('Indented list paste', () => {
+  test('pasting a tab-indented mixed bullet/task list yields a list, not a code block', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'obsidian.md');
+    fs.writeFileSync(tmpFile, 'Start.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Start', { timeout: 5000 });
+
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    // Every line shares a leading tab (as when copying a nested Obsidian sub-tree);
+    // markdown-it would otherwise read the uniform indent as an indented code block.
+    await page.evaluate(() =>
+      navigator.clipboard.writeText('\t- item one\n\t- [ ] task two\n\t- item three'));
+    await page.keyboard.press('ControlOrMeta+v');
+
+    await expect(editor).toContainText('item one', { timeout: 3000 });
+    // It parsed as a real list -- no code block, and the task item kept its checkbox.
+    await expect(editor.locator('pre')).toHaveCount(0);
+    await expect(editor.locator('li')).toHaveCount(3);
+    await expect(editor.locator('li[data-checked="false"]')).toHaveCount(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A document never begins with a code fence
+// ---------------------------------------------------------------------------
+
+test.describe('Leading code fence guard', () => {
+  test('a file starting with a code block gets an empty paragraph above it', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'leadingcode.md');
+    fs.writeFileSync(tmpFile, '```\ncode line\n```\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('code line', { timeout: 5000 });
+
+    // The code block still renders, but a paragraph now sits above it so the
+    // cursor can be placed before the fence.
+    await expect(editor.locator('pre')).toHaveCount(1);
+    const firstTag = await editor.evaluate((el) => el.firstElementChild?.tagName);
+    expect(firstTag).toBe('P');
+    const firstText = await editor.evaluate((el) => el.firstElementChild?.textContent);
+    expect(firstText).toBe('');
   });
 });
