@@ -156,7 +156,17 @@ const config: ForgeConfig = {
     new FusesPlugin({
       version: FuseVersion.V1,
       [FuseV1Options.RunAsNode]: false,
-      [FuseV1Options.EnableCookieEncryption]: true,
+      // OFF deliberately. This fuse makes Chromium create a "MDE Safe Storage"
+      // keychain item, and macOS ties a keychain ACL to the app's code signature.
+      // Our signature is ad-hoc, whose designated requirement is `cdhash H"..."` --
+      // pinned to one exact binary. Every build has a different cdhash, so macOS
+      // sees an unrecognized app each release and prompts the user for their login
+      // keychain password; "Always Allow" only holds until the next build. MDE uses
+      // neither cookies nor safeStorage (nothing in src/ touches either), so this
+      // was buying us no protection and costing a password prompt per update.
+      // If we ever get a Developer ID cert, the DR becomes team-identifier based and
+      // stable across builds, and this can go back to true.
+      [FuseV1Options.EnableCookieEncryption]: false,
       [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
       [FuseV1Options.EnableNodeCliInspectArguments]: false,
       [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,

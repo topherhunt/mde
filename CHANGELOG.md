@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.5.0
+
+### Installation
+
+- **macOS no longer reports MDE as "damaged"**: Every previous macOS build shipped with a code signature that no longer matched the app bundle, so downloading MDE produced "MDE is damaged and can't be opened. You should move it to the Trash." -- with no **Open Anyway** button, because macOS reports a mismatched signature as *tampering* rather than as an unknown developer. Installing required a Terminal command (`xattr -d com.apple.quarantine`). The packaged app is now re-signed and verified at build time, so installing is the normal three-click **System Settings > Privacy & Security > Open Anyway** flow. MDE still isn't notarized, so that one-time approval is still required.
+- **No more keychain password prompt on macOS**: MDE asked for your login keychain password ("MDE wants to use your confidential information stored in MDE Safe Storage") on launch, and would have asked again after *every* update -- macOS ties that permission to an exact build, and each release is a different build. MDE never used the encrypted storage for anything, so it's disabled. If you already granted it, the leftover `MDE Safe Storage` entry can be deleted from Keychain Access.
+
+### Editor
+
+- **Folding never hides your cursor**: Any edit that would move the cursor into folded content now releases that fold automatically, instead of the line you're typing on silently vanishing. Tab-indenting the item below a folded item is the common case.
+- **Enter at the end of a folded item**: Creates a sibling below the whole folded subtree rather than a hidden first child. A folded item reads as childless, so the new line used to look like it went nowhere. Unfold first to get the old first-child behavior.
+- **Folds survive editing**: Fold state now travels with the list item or heading itself, so reordering (Cmd+Alt+Up/Down) or splitting an item no longer unfolds the real item and stamps a phantom `...` badge on an unrelated one.
+- **Fold headings**: Cmd+. now folds a heading as well as a list item, hiding every block down to the next heading of the same or larger rank. The hover caret works on headings too.
+- **Folding no longer marks a file dirty** -- or, worse, silently marks a file with unsaved edits as clean.
+- **Task lists -- Enter carries checked-ness**: Splitting a checked task mid-item leaves both halves checked, so continuing a completed thought no longer silently un-completes it. Splitting at the start or end always leaves the empty half unchecked.
+- **Task lists -- checkbox click**: Only a click actually inside the checkbox toggles it. Previously the entire first line of text (and every wrapped line below) was a toggle target, so clicking to place the cursor flipped the task instead.
+- **Backspace on an empty list item** deletes just that item and moves the cursor to the end of the item above, instead of outdenting it and splitting the list in two.
+- **Copying inside a list item** yields just the text -- no `- ` bullet or `[ ] ` checkbox, and no doubled markers from a nested item.
+- **A lone `~` is no longer escaped on save**: Prose like "approx ~5" reached disk as `approx \~5`. Only a doubled `~~` opens a strikethrough, so a single tilde needs no escape.
+- **Roomier paragraph spacing**: Paragraph top margin doubled, with the gap under headings deliberately unchanged.
+
+### Reliability
+
+- **No more phantom conflict banner**: The red "modified on disk" banner fired on files nothing but MDE had ever touched -- MDE was racing itself. A save whose on-disk bytes are identical to what we're writing is now treated as success, the expected hash is read synchronously rather than from a stale timer closure, and a save takes an in-flight lock that cancels any pending autosave. Edits typed *while* a save is in flight stay dirty instead of being falsely marked clean.
+- **`{LIST_SEPARATOR}` can no longer reach your files**: A bulleted list inside a ``` fence had an internal placeholder injected into it, which was then written straight back into your code sample on save. List syntax inside a fence is content, and is now left alone; the single load path also hard-fails loudly on any placeholder that leaks through.
+- **Import never touches the source file**: Converting `report.docx` no longer renames it to `report.bak.docx` and hides it from the sidebar. The source stays put, conversion writes `report.docx.md` beside it, and clicking an already-converted source offers to open that Markdown. "Convert again" always writes a new numbered copy (`report.docx.2.md`), so no code path can overwrite a converted file that may hold hand edits.
+- **DOCX/PDF import works in the shipped app**: Import previously failed with "Cannot find module" for every real user while working perfectly in dev, because the packaged app shipped an empty `node_modules`. The conversion libraries and their dependency trees are now copied into the build.
+- **Fixed the daily crash**: The "Maximum update depth exceeded" (React error #185) crash that hit roughly once a day under heavy use is gone -- the editor's options are no longer rebuilt on every render, which had let ProseMirror read back its own DOM selection as a new transaction and loop.
+- **Select-all + copy keeps everything**: Copying a whole document containing a table used to put *only* the table on the clipboard, dropping every heading, paragraph, and list.
+
+### Interface
+
+- **Tools > Word Count**: Word count, character count, and estimated page count (300 words/page), shown as `selection / whole document` -- or just the document figure when nothing is selected.
+- **Sticky sidebar project header**: The folder name and New File / New Folder / Collapse All buttons stay pinned at the top of a long file tree, with no transparent gap for rows to scroll through.
+- **CSS utilities actually exist**: `.small`, `.fw-bold` and `.text-muted` were used ~34 times across the app while defined nowhere, so all of them silently rendered as plain body text.
+
+### Development
+
+- E2E coverage expanded from 108 to 150 tests, including a packaged-artifact spec that inspects the built `app.asar` and verifies the macOS code signature -- two classes of breakage the normal suite structurally cannot catch, since it runs against the dev tree.
+- `docs/architecture-notes.md` now holds the reasoning behind each project rule; `CLAUDE.md` keeps the rules themselves plus an explicit "Invariants" section.
+
+---
+
 ## v0.4.0
 
 ### Editor

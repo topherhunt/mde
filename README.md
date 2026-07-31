@@ -4,7 +4,7 @@ A simple but sturdy WYSIWYG Markdown browser/editor for macOS and Windows. Writt
 
 Inspired by [Thomas Ptacek's MDV app](https://sockpuppet.org/blog/2026/05/12/emacsification/).
 
-> ❗ **Alpha (v0.1).** Stable and usable, but expect rough edges. Bug reports and feature requests welcome.
+> ❗ **Alpha (v0.5).** Stable and usable, but expect rough edges. Bug reports and feature requests welcome.
 
 ## Why MDE?
 
@@ -35,16 +35,17 @@ Download the latest build for your platform from the [releases page](https://git
 
 ### macOS (Apple Silicon)
 
-The app isn't code-signed, so macOS will block ("quarantine") it by default. On Sequoia, the right-click > Open workaround no longer works. Instead:
+**No Terminal command needed.** MDE isn't notarized by Apple (that requires a paid Apple Developer account), so macOS blocks it on first launch. Clearing that is three clicks:
 
-1. Move `MDE.app` to `/Applications`
-2. Run this command in Terminal:
+1. Open the `.dmg` and drag `MDE.app` to your **Applications** folder.
+2. Double-click **MDE**. macOS says it "could not verify" the app is free of malware. Click **Done** (*not* "Move to Trash").
+3. Open **System Settings > Privacy & Security**, scroll down to the **Security** section, and click **Open Anyway** next to the message about MDE. Confirm with Touch ID or your password, then click **Open Anyway** once more.
 
-```
-xattr -d com.apple.quarantine /Applications/MDE.app
-```
+That's it -- MDE opens normally from then on, and you never have to repeat it.
 
-You only need to do this once. After that, the app opens normally.
+> **Older instructions said to run `xattr -d com.apple.quarantine`. You don't need that anymore.** Builds before v0.5.0 shipped with a corrupted code signature, which made macOS report *tampering* ("MDE is damaged and can't be opened") instead of the ordinary unverified-developer warning -- and the damaged error has no Open Anyway button, leaving Terminal as the only way through. That's fixed as of v0.5.0. If you're stuck on an older build, just download the current release rather than running the command.
+
+Right-click > Open also no longer works on macOS Sequoia (15) or later; Apple removed that shortcut. System Settings is the way.
 
 ### Windows
 

@@ -343,6 +343,21 @@ Verified end state, on the app inside the shipped DMG: `valid on disk`, `satisfi
 
 This is NOT notarization. Reaching zero-friction launch still requires a $99/yr Apple Developer ID plus a notarization step, and macOS 15 Sequoia removed the old right-click > Open shortcut, so users must visit System Settings either way.
 
+### `EnableCookieEncryption` is off because we are ad-hoc signed
+
+The fuse makes Chromium create a `MDE Safe Storage` item in the user's login keychain. macOS ties a keychain ACL to the requesting app's code signature, and an ad-hoc signature's designated requirement is:
+
+```
+$ codesign -d -r- MDE.app
+# designated => cdhash H"acd502346cbc829350302745ddf47acda435e1d6"
+```
+
+That is pinned to one exact binary. Every build produces a different cdhash, so macOS sees an unrecognized app on each release and prompts for the login keychain password ("MDE wants to use your confidential information stored in MDE Safe Storage"). **Always Allow** only holds until the next build, so this would be a password prompt on every single update.
+
+Nothing in `src/` uses `safeStorage`, `encryptString`/`decryptString`, or cookies, so the fuse was protecting nothing and costing that prompt. It is off.
+
+This is a consequence of ad-hoc signing, not of the re-sign hook -- a Developer ID certificate would give a stable team-identifier-based designated requirement that survives rebuilds, at which point the fuse can safely go back to `true`.
+
 ### Renderer config
 
 Renderer webpack config does NOT use the `@vercel/webpack-asset-relocator-loader`. That loader breaks ESM imports from TipTap packages. It's only needed for native node modules in the main process.
