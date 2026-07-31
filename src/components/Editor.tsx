@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useLayoutEffect, useMemo } from 'react';
 import { useEditor, EditorContent, Editor as TipTapEditor, createNodeFromContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Highlight from '@tiptap/extension-highlight';
@@ -12,7 +12,7 @@ import { Markdown as MarkdownExt } from 'tiptap-markdown';
 import Text from '@tiptap/extension-text';
 import { Extension, InputRule, mergeAttributes } from '@tiptap/core';
 import { TextSelection, Plugin, PluginKey } from '@tiptap/pm/state';
-import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { Decoration, DecorationSet, EditorProps as PMEditorProps } from '@tiptap/pm/view';
 import { Fragment, DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { Tab } from '../types';
 import { splitLooseLists, cleanParsedListHtml } from '../utils/markdown';
@@ -35,12 +35,18 @@ const TextNode = Text.extend({
   },
 });
 
-// Convert a copied slice that contains table structure into tab-separated rows.
-// Returns null if the slice has no table node/row/cell (so the caller falls back to
-// markdown serialization). A single selected cell yields just its text -- no tabs/newlines.
+const TABLE_NODE_NAMES = ['table', 'tableRow', 'tableCell', 'tableHeader'];
+
+// Convert a copied slice into tab-separated rows -- but ONLY when the slice is
+// nothing BUT table structure (a cell selection, a row, or a whole table on its own).
+// Returns null otherwise, including for a mixed selection such as Cmd+A over a
+// document with prose AND a table: there the whole slice goes to the markdown
+// serializer instead, which renders the table as a Markdown table alongside
+// everything else. (Deciding on "contains a table anywhere" used to silently drop
+// every non-table block from the copied text.)
+// A single selected cell yields just its text -- no tabs/newlines.
 function tableSliceToTSV(content: Fragment): string | null {
   const rows: string[][] = [];
-  let foundTable = false;
 
   const collectRow = (rowNode: any) => {
     const cells: string[] = [];
@@ -48,21 +54,24 @@ function tableSliceToTSV(content: Fragment): string | null {
     rows.push(cells);
   };
 
+  let allTable = true;
+  content.forEach((node: any) => {
+    if (!TABLE_NODE_NAMES.includes(node.type.name)) allTable = false;
+  });
+  if (!allTable || content.childCount === 0) return null;
+
   content.forEach((node: any) => {
     const name = node.type.name;
     if (name === 'table') {
-      foundTable = true;
       node.forEach((row: any) => { if (row.type.name === 'tableRow') collectRow(row); });
     } else if (name === 'tableRow') {
-      foundTable = true;
       collectRow(node);
-    } else if (name === 'tableCell' || name === 'tableHeader') {
-      foundTable = true;
+    } else {
+      // tableCell / tableHeader
       rows.push([node.textContent]);
     }
   });
 
-  if (!foundTable) return null;
   return rows.map((r) => r.join('\t')).join('\n');
 }
 
@@ -1219,8 +1228,18 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
   // use-before-define reference to the `editor` const being created below.
   const editorRef = useRef<TipTapEditor | null>(null);
 
-  const editor = useEditor({
-    extensions: [
+  // `extensions` and `editorProps` MUST keep a stable identity across renders.
+  // useEditor runs an effect on EVERY render that diffs the options it was given
+  // against the live editor's options (ignoring only the on* callbacks); a fresh
+  // array/object literal always compares unequal, so it would call
+  // editor.setOptions() -> view.setProps() + view.updateState() on every single
+  // render. Besides being wasted work per keystroke, that re-syncs the DOM
+  // selection from React's commit phase, which can be read back by ProseMirror's
+  // DOM observer as a change and dispatched as a transaction -- transaction ->
+  // React render -> setOptions -> transaction ... until React aborts the render
+  // loop with "Maximum update depth exceeded" (error #185).
+  // Everything referenced below is module-level or a ref, so [] deps are correct.
+  const extensions = useMemo(() => [
       StarterKit.configure({
         codeBlock: false,
         text: false,
@@ -1281,8 +1300,9 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
         transformCopiedText: false,
         transformPastedText: true,
       }),
-    ],
-    editorProps: {
+  ], []);
+
+  const editorProps = useMemo<PMEditorProps>(() => ({
       // Obsidian (and most editors) put BOTH text/plain and text/html on the
       // clipboard. ProseMirror's rule is `asText = text && (plainText || inCode ||
       // !html)`, so whenever HTML is present it takes the HTML path and NEVER runs
@@ -1377,7 +1397,11 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
         });
         return div.innerHTML;
       },
-    },
+  }), []);
+
+  const editor = useEditor({
+    extensions,
+    editorProps,
     onTransaction: ({ transaction: t, editor: e }) => {
       if (loadedRef.current && t.getMeta('addToHistory') === false && t.docChanged) {
         cleanDocRef.current = JSON.stringify(e.state.doc.toJSON());

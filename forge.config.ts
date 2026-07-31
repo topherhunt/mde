@@ -9,11 +9,44 @@ import { WebpackPlugin } from '@electron-forge/plugin-webpack';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
-import { mainConfig } from './webpack.main.config';
+import * as fs from 'fs';
+import * as path from 'path';
+
+import { mainConfig, externalPackages } from './webpack.main.config';
 import { rendererConfig } from './webpack.renderer.config';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const pkg = require('./package.json');
+
+// Locate a package the way Node would: walk up from `fromDir` looking in each
+// node_modules, so nested (version-conflicting) installs resolve correctly.
+function resolvePackageDir(name: string, fromDir: string): string {
+  let dir = fromDir;
+  for (;;) {
+    const candidate = path.join(dir, 'node_modules', name);
+    if (fs.existsSync(path.join(candidate, 'package.json'))) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      throw new Error(`Cannot package: runtime dependency "${name}" is not installed (searched up from ${fromDir}). Run npm install.`);
+    }
+    dir = parent;
+  }
+}
+
+// Every directory needed to `require()` the externals at runtime: the packages
+// themselves plus their transitive production dependencies.
+function collectRuntimeDeps(seeds: string[], projectRoot: string): string[] {
+  const dirs = new Set<string>();
+  const walk = (name: string, fromDir: string) => {
+    const dir = resolvePackageDir(name, fromDir);
+    if (dirs.has(dir)) return;
+    dirs.add(dir);
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+    for (const dep of Object.keys(manifest.dependencies || {})) walk(dep, dir);
+  };
+  for (const seed of seeds) walk(seed, projectRoot);
+  return [...dirs];
+}
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -39,6 +72,22 @@ const config: ForgeConfig = {
     },
   },
   rebuildConfig: {},
+  hooks: {
+    // Copy the webpack `externals` (and their prod dep trees) into the packaged
+    // app's node_modules. The webpack plugin assumes everything is bundled and
+    // leaves node_modules empty inside app.asar, so `require('turndown')` from the
+    // main bundle fails at runtime in the packaged app -- while working in dev,
+    // where the project's own node_modules is right there. That asymmetry is why
+    // this can't be caught by the E2E suite (Playwright launches from the dev tree);
+    // it's verified by tests/packaged.spec.ts, which inspects the built app.asar.
+    packageAfterCopy: async (_forgeConfig, buildPath) => {
+      const projectRoot = __dirname;
+      for (const dir of collectRuntimeDeps(externalPackages, projectRoot)) {
+        const dest = path.join(buildPath, path.relative(projectRoot, dir));
+        fs.cpSync(dir, dest, { recursive: true, dereference: true });
+      }
+    },
+  },
   makers: [
     new MakerSquirrel({
       setupIcon: './icon.ico',

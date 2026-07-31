@@ -16,6 +16,19 @@ function gitCommit(): string {
   }
 }
 
+// Packages the main process `require`s at RUNTIME instead of bundling (see
+// `externals` below). Because they aren't bundled, they must be copied into the
+// packaged app's node_modules -- forge's webpack plugin ships an EMPTY node_modules
+// inside app.asar, so without that copy step every one of these throws
+// "Cannot find module" in the packaged app while working fine in dev.
+// forge.config.ts's packageAfterCopy hook reads this list; keep them in sync.
+export const externalPackages = [
+  'pdfjs-dist',
+  'mammoth',
+  'turndown',
+  'turndown-plugin-gfm',
+];
+
 export const mainConfig: Configuration = {
   /**
    * This is the main entry point for your application, it's the first file

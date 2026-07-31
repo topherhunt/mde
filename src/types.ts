@@ -88,6 +88,7 @@ export interface MdeAPI {
   listProjectFiles: (root: string) => Promise<string[]>;
   onQuickOpen: (callback: () => void) => () => void;
   onShowKeyboardShortcuts: (callback: () => void) => () => void;
+  onShowWordCount: (callback: () => void) => () => void;
   getPathForFile: (file: File) => string;
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   trashFile: (filePath: string) => Promise<void>;

@@ -135,6 +135,6 @@ On failure it uploads Playwright traces as a build artifact; download and inspec
 - Support right-click to convert to .docx or .pdf, w standard nice-looking formatting & colors (customizable)
   - PDF export -- does this require chrome/puppeteer? can it just use the built-in engine?
 - **Add Claude agent support.**
-- Support .csv files too. Plan this out.
+- Support viewing & simple editing of .csv files too.
 
 ### For Claude

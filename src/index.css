@@ -1271,6 +1271,23 @@ body {
   font-size: 0.9em;
 }
 
+.word-count-table {
+  border-collapse: collapse;
+  color: var(--text);
+}
+
+.word-count-table td {
+  padding: 3px 0;
+}
+
+/* Monospace + right-aligned so the "selection / total" pairs line up column-wise. */
+.word-count-value {
+  padding-left: 24px !important;
+  text-align: right;
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 .settings-row {
   display: flex;
   justify-content: space-between;

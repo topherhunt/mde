@@ -1,4 +1,4 @@
-import React, { useReducer, useEffect, useCallback, useRef, useState } from 'react';
+import React, { useReducer, useEffect, useCallback, useRef, useState, useMemo } from 'react';
 import { Tab } from '../types';
 import Sidebar from './Sidebar';
 import TabBar from './TabBar';
@@ -79,15 +79,24 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_ACTIVE_TAB':
       return { ...state, activeTabIndex: action.index };
 
-    case 'MARK_DIRTY':
+    case 'MARK_DIRTY': {
+      // Fired from the editor's onUpdate, i.e. on EVERY document change. Return the
+      // existing state untouched when nothing actually changes, so a keystroke in an
+      // already-dirty buffer doesn't re-render the whole app (and, with it, every
+      // Editor) for no reason.
+      const target = state.tabs.find(t => t.id === action.tabId);
+      if (!target) return state;
+      const tentative = action.dirty ? false : target.tentative;
+      if (target.dirty === action.dirty && target.tentative === tentative) return state;
       return {
         ...state,
         tabs: state.tabs.map(t =>
           t.id === action.tabId
-            ? { ...t, dirty: action.dirty, tentative: action.dirty ? false : t.tentative }
+            ? { ...t, dirty: action.dirty, tentative }
             : t
         ),
       };
+    }
 
     case 'PIN_TAB':
       return {
@@ -174,6 +183,7 @@ export default function App() {
   const [draggingOver, setDraggingOver] = useState(false);
   const dragCountRef = useRef(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [wordCountOpen, setWordCountOpen] = useState(false);
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [linkTrigger, setLinkTrigger] = useState(0);
   const [spellcheck, setSpellcheck] = useState(true);
@@ -618,6 +628,7 @@ export default function App() {
         if (ed) ed.chain().focus().toggleCodeBlock().run();
       }),
       window.mde.onShowKeyboardShortcuts(openKeyboardShortcuts),
+      window.mde.onShowWordCount(() => setWordCountOpen(true)),
       window.mde.onInsertLink(() => {
         const ed = editorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
         if (ed && (ed.isActive('link') || !ed.state.selection.empty)) {
@@ -956,6 +967,7 @@ export default function App() {
         />
       )}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} spellcheck={spellcheck} autosave={autosave} />}
+      {wordCountOpen && <WordCountDialog editor={activeEditor} onClose={() => setWordCountOpen(false)} />}
       {toast && (
         <div className={`toast ${toast.variant ? `toast-${toast.variant}` : ''} ${toast.hiding ? 'toast-out' : ''}`}>{toast.msg}</div>
       )}
@@ -1071,6 +1083,76 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
           )}
           {status === 'error' && (
             <div className="settings-error">{errorMsg}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const WORDS_PER_PAGE = 300;
+
+// Plain text of a doc range, with block boundaries as newlines so words in
+// adjacent blocks don't run together into one "word".
+function countsFor(doc: any, from: number, to: number) {
+  const text = doc.textBetween(from, to, '\n', ' ');
+  const words = text.split(/\s+/).filter(Boolean).length;
+  return { words, chars: text.length, pages: words / WORDS_PER_PAGE };
+}
+
+function WordCountDialog({ editor, onClose }: { editor: TipTapEditor | null; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  // Snapshot once on open -- the dialog steals focus, so the numbers must not
+  // move underneath the user while it's up.
+  const stats = useMemo(() => {
+    if (!editor) return null;
+    const { doc, selection } = editor.state;
+    return {
+      selection: countsFor(doc, selection.from, selection.to),
+      document: countsFor(doc, 0, doc.content.size),
+    };
+  }, [editor]);
+
+  const rows: [string, string][] = stats
+    ? [
+        ['Word count', `${stats.selection.words.toLocaleString()} / ${stats.document.words.toLocaleString()}`],
+        ['Character count', `${stats.selection.chars.toLocaleString()} / ${stats.document.chars.toLocaleString()}`],
+        ['Est. page count', `${stats.selection.pages.toFixed(1)} / ${stats.document.pages.toFixed(1)}`],
+      ]
+    : [];
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-dialog qa-word-count" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="fw-bold">Word Count</span>
+          <button className="toolbar-btn" onClick={onClose}>&times;</button>
+        </div>
+        <div className="modal-body">
+          {!stats ? (
+            <div className="text-muted">No document is open.</div>
+          ) : (
+            <>
+              <div className="text-muted fs-sm" style={{ marginBottom: '0.75rem' }}>Selection / whole document</div>
+              <table className="word-count-table">
+                <tbody>
+                  {rows.map(([label, value]) => (
+                    <tr key={label}>
+                      <td>{label}:</td>
+                      <td className="word-count-value">{value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="text-muted fs-sm" style={{ marginTop: '0.75rem' }}>
+                Pages estimated at {WORDS_PER_PAGE} words per page.
+              </div>
+            </>
           )}
         </div>
       </div>

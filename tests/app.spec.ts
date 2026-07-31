@@ -2256,6 +2256,172 @@ test.describe('Table cell copy', () => {
     expect(clip).toBe('one\ttwo\nthree\tfour');
 
   });
+
+  test('select-all copy on mixed content keeps the prose AND the table', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'mixed.md');
+    fs.writeFileSync(
+      tmpFile,
+      '# Big Heading\n\nIntro paragraph here.\n\n- first bullet\n- second bullet\n\n'
+      + '| A | B |\n| --- | --- |\n| one | two |\n\nClosing paragraph.\n'
+    );
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Closing paragraph', { timeout: 5000 });
+
+    await editor.click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ControlOrMeta+c');
+
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    // Everything selected must survive the copy -- the table used to be the only
+    // thing that made it onto the clipboard.
+    expect(clip).toContain('Big Heading');
+    expect(clip).toContain('Intro paragraph here.');
+    expect(clip).toContain('first bullet');
+    expect(clip).toContain('second bullet');
+    expect(clip).toContain('Closing paragraph.');
+    // ...and the table comes along as a real Markdown table, not "[table]".
+    expect(clip).toMatch(/\|\s*one\s*\|\s*two\s*\|/);
+    expect(clip).not.toContain('[table]');
+
+  });
+});
+
+// ---------------------------------------------------------------------------
+// React render-loop guard (minified React error #185)
+// ---------------------------------------------------------------------------
+
+test.describe('Editor render stability', () => {
+  // Editor's `extensions` / `editorProps` must keep a stable identity across
+  // renders: useEditor diffs them on EVERY render and calls editor.setOptions()
+  // -> view.setProps() + view.updateState() when they differ, which re-syncs the
+  // DOM selection from React's commit phase and can be read back as a transaction
+  // -> render -> setOptions -> ... until React aborts with "Maximum update depth
+  // exceeded" (#185).
+  //
+  // CAVEAT: this is a smoke guard, not a precise reproducer. The real-world crash
+  // was intermittent (roughly once a day under heavy use), so a passing run here
+  // does not prove the loop is absent -- it only catches a gross regression that
+  // throws during ordinary editing. The mechanism itself was verified separately
+  // with temporary setOptions instrumentation (10 calls per 10 keystrokes before
+  // the fix, 0 after); asserting that permanently would need a test-only global.
+  test('heavy editing raises no uncaught React errors', async () => {
+    ({ app, page } = await launchApp());
+
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'stress.md');
+    fs.writeFileSync(tmpFile, '# Stress\n\nSeed paragraph.\n\n- alpha\n- beta\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Seed paragraph', { timeout: 5000 });
+
+    await editor.locator('p', { hasText: 'Seed paragraph' }).click();
+    await page.keyboard.press('End');
+
+    // A burst of transactions: typing, mark toggles, undo/redo, selection moves --
+    // each one re-renders Toolbar/TableMenu/LinkPreview and dispatches MARK_DIRTY.
+    for (let i = 0; i < 12; i++) {
+      await page.keyboard.type(' word' + i, { delay: 0 });
+      await page.keyboard.press('ControlOrMeta+b');
+      await page.keyboard.press('ControlOrMeta+b');
+    }
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ArrowRight');
+    for (let i = 0; i < 5; i++) await page.keyboard.press('ControlOrMeta+z');
+
+    await expect(editor).toContainText('Stress');
+    expect(errors.filter(m => /Minified React error #185|Maximum update depth/.test(m))).toEqual([]);
+    expect(errors).toEqual([]);
+
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tools -> Word Count
+// ---------------------------------------------------------------------------
+
+test.describe('Word Count dialog', () => {
+  // 12 words, 3 of them on the first line.
+  const DOC = 'one two three\n\nfour five six seven eight nine ten eleven twelve\n';
+
+  test('reports selection and whole-document word, character, and page counts', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'words.md');
+    fs.writeFileSync(tmpFile, DOC);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('twelve', { timeout: 5000 });
+
+    // Select the first paragraph only ("one two three" -- 3 words, 13 chars).
+    await editor.locator('p', { hasText: 'one two three' }).click({ clickCount: 3 });
+
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('show-word-count');
+    });
+
+    const dialog = page.locator('.qa-word-count');
+    await expect(dialog).toBeVisible({ timeout: 3000 });
+
+    const values = dialog.locator('.word-count-value');
+    await expect(values.nth(0)).toHaveText('3 / 12');
+    // 13 chars selected; whole doc is both paragraphs joined by a newline.
+    await expect(values.nth(1)).toHaveText(`13 / ${DOC.trim().replace(/\n\n/g, '\n').length}`);
+    // 3/300 and 12/300 pages.
+    await expect(values.nth(2)).toHaveText('0.0 / 0.0');
+
+    await expect(dialog).toContainText('Word count:');
+    await expect(dialog).toContainText('Character count:');
+    await expect(dialog).toContainText('Est. page count:');
+
+    // Escape closes it.
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+
+  });
+
+  test('shows zero for the selection when nothing is selected', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'words2.md');
+    fs.writeFileSync(tmpFile, DOC);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('twelve', { timeout: 5000 });
+    await editor.click();
+
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('show-word-count');
+    });
+
+    const values = page.locator('.qa-word-count .word-count-value');
+    await expect(values.nth(0)).toHaveText('0 / 12', { timeout: 3000 });
+
+  });
 });
 
 // ---------------------------------------------------------------------------

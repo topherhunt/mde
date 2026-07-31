@@ -217,6 +217,12 @@ const api = {
     return () => ipcRenderer.removeListener('show-keyboard-shortcuts', handler);
   },
 
+  onShowWordCount: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('show-word-count', handler);
+    return () => ipcRenderer.removeListener('show-word-count', handler);
+  },
+
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 
   renameFile: (oldPath: string, newPath: string): Promise<void> =>

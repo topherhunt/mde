@@ -432,6 +432,18 @@ function buildMenu(): void {
       ],
     },
     {
+      label: 'Tools',
+      submenu: [
+        {
+          label: 'Word Count',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) win.webContents.send('show-word-count');
+          },
+        },
+      ],
+    },
+    {
       role: 'windowMenu',
     },
     {
