@@ -4,27 +4,6 @@ The dev (Topher) drops notes in here about change requests, questions, things to
 
 To do
 
-- [x] Bug I just hit, and it comes up once a day or so (with medium-heavy use of this app in different folders, with Claude frequently updating files that I'm viewing):
-
-```
-Uncaught Error: Minified React error #185; visit https://react.dev/errors/185 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
-    at Po (index.js:2:396248)
-    at Oo (index.js:2:395773)
-    at fa (index.js:2:428092)
-    at ca (index.js:2:427704)
-    at Qn.t (index.js:2:650985)
-    at index.js:2:720765
-    at Array.forEach (<anonymous>)
-    at Qn.emit (index.js:2:720752)
-    at Qn.dispatchTransaction (index.js:2:750000)
-    at pn.dispatch (index.js:2:1120121)
-```
-
-https://react.dev/errors/185 is `Maximum update depth exceeded. This can happen when a component repeatedly calls setState inside componentWillUpdate or componentDidUpdate. React limits the number of nested updates to prevent infinite loops.`
-
-- [x] If you have a big document that contains mixed markdown, you know, standard formatting with headers and bullets, and one or more tables mixed in, and you press Command A to select all, and you press Command C to copy, when you paste, it only pastes the table. It doesn't paste any of the other content. It should paste everything that was selected. That's really important. 
-- [x] Add Tools -> Word Count that opens a pop-up dialog that breaks down the word count, character count, and est page count (assuming 300 words / page) for the current selection and for the whole document. In format: Word count:     355 / 1728 etc.
-- [x] Converting from docX is broken, troubleshoot why.
 - [ ] Double margin above each paragraph. So adjacent paragraphs have more breathing room between them.
 - [ ] When your cursor is in the middle of a checked-off task and you press `enter`, the newly-created task should be checked too.
 - [ ] When your cursor is at the START of a checked task and you press `enter`, the UPPER line should be unchecked and the LOWER line should be checked (ie checked-ness should follow the text of the completed/checked task).
@@ -41,7 +20,7 @@ https://react.dev/errors/185 is `Maximum update depth exceeded. This can happen 
 - Support folding headings in addition to list items. All content down to the next same-or-larger-level heading is included in the fold.
 - When opening a .md file that contains a \`\`\` codefence with bulleted lists inside it, the `{LIST_SEPARATOR}` tag is being added even though it wasn't present in the original document written by claude (mde added it on load and then never cleaned it out). As a final post step you need to check to make sure all such tags are in fact stripped out and otherwise treated as a rendering error.
 - [ ] The sidebar file explorer's header row (folder name + action buttons) should be sticky at the top of the scroll; only the actual folders/files container below that should scroll.
-- [ ] 
+- \[ \]
 
 ### Wishlist / maybe
 

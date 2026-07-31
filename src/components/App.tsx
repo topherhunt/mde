@@ -191,6 +191,7 @@ export default function App() {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [importConfirm, setImportConfirm] = useState<string | null>(null);
+  const [importExisting, setImportExisting] = useState<{ filePath: string; mdPath: string } | null>(null);
   const [linkCreateTarget, setLinkCreateTarget] = useState<string | null>(null);
   const [linkBarVisible, setLinkBarVisible] = useState(false);
   const initialSidebarModeSetRef = useRef(false);
@@ -346,21 +347,41 @@ export default function App() {
     dispatch({ type: 'OPEN_TAB', tab });
   }, [state.tabs]);
 
-  const handleImportFile = useCallback((filePath: string) => {
-    setImportConfirm(filePath);
+  // Clicking a .docx/.pdf: if it has already been converted, the useful offer is to
+  // open that Markdown -- not to convert again. Only a source with no Markdown beside
+  // it gets the conversion prompt. The source file itself is never renamed or hidden.
+  const handleImportFile = useCallback(async (filePath: string) => {
+    const { mdPath, exists } = await window.mde.getImportTarget(filePath);
+    if (exists) {
+      setImportExisting({ filePath, mdPath });
+    } else {
+      setImportConfirm(filePath);
+    }
   }, []);
 
-  const confirmImport = useCallback(async () => {
-    if (!importConfirm) return;
-    setImportConfirm(null);
-    const result = await window.mde.convertImport(importConfirm);
+  const runConvert = useCallback(async (filePath: string, opts?: { newCopy?: boolean }) => {
+    const result = await window.mde.convertImport(filePath, opts);
     if ('error' in result) {
       showToast(result.error, 'danger');
     } else {
-      showToast('Converted to Markdown. Original saved as backup.');
+      showToast(`Converted to ${basename(result.mdPath)}.`);
       openFile(result.mdPath);
     }
-  }, [importConfirm, openFile, showToast]);
+  }, [openFile, showToast]);
+
+  const confirmImport = useCallback(async () => {
+    if (!importConfirm) return;
+    const filePath = importConfirm;
+    setImportConfirm(null);
+    await runConvert(filePath);
+  }, [importConfirm, runConvert]);
+
+  const reconvertImport = useCallback(async () => {
+    if (!importExisting) return;
+    const { filePath } = importExisting;
+    setImportExisting(null);
+    await runConvert(filePath, { newCopy: true });
+  }, [importExisting, runConvert]);
 
   const saveActiveTab = useCallback(async () => {
     if (!activeTab || !activeEditor) return;
@@ -921,8 +942,8 @@ export default function App() {
             {state.tabs.length === 0 && (
               <div className="empty-state">
                 <p>Open a file or drag a folder to get started</p>
-                <p className="fs-sm">or press <kbd>Cmd + O</kbd> to quick-search</p>
-                <p className="fs-sm">
+                <p className="small">or press <kbd>Cmd + O</kbd> to quick-search</p>
+                <p className="small">
                   <a className="empty-state-link" onClick={openKeyboardShortcuts}>Keyboard Shortcuts</a>
                 </p>
               </div>
@@ -943,6 +964,15 @@ export default function App() {
           filePath={importConfirm}
           onConfirm={confirmImport}
           onCancel={() => setImportConfirm(null)}
+        />
+      )}
+      {importExisting && (
+        <ImportExistsDialog
+          filePath={importExisting.filePath}
+          mdPath={importExisting.mdPath}
+          onOpen={() => { const p = importExisting.mdPath; setImportExisting(null); openFile(p); }}
+          onReconvert={reconvertImport}
+          onCancel={() => setImportExisting(null)}
         />
       )}
       {linkCreateTarget && (
@@ -1012,7 +1042,7 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
           <div className="settings-row">
             <div>
               <div className="fw-bold">Theme</div>
-              <div className="text-muted fs-sm">Choose light, dark, or match your system.</div>
+              <div className="small text-muted">Choose light, dark, or match your system.</div>
             </div>
             <select
               className="settings-select"
@@ -1028,7 +1058,7 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
           <div className="settings-row">
             <div>
               <div className="fw-bold">Spell check</div>
-              <div className="text-muted fs-sm">Show spelling errors with a red underline.</div>
+              <div className="small text-muted">Show spelling errors with a red underline.</div>
             </div>
             <label className="settings-toggle">
               <input
@@ -1043,7 +1073,7 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
           <div className="settings-row">
             <div>
               <div className="fw-bold">Auto-save</div>
-              <div className="text-muted fs-sm">Automatically save files after 1 second of inactivity.</div>
+              <div className="small text-muted">Automatically save files after 1 second of inactivity.</div>
             </div>
             <label className="settings-toggle">
               <input
@@ -1058,7 +1088,7 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
           <div className="settings-row">
             <div>
               <div className="fw-bold">Terminal launcher</div>
-              <div className="text-muted fs-sm">
+              <div className="small text-muted">
                 Install the <code>mde</code> command so you can open folders from your terminal.
               </div>
             </div>
@@ -1108,22 +1138,27 @@ function WordCountDialog({ editor, onClose }: { editor: TipTapEditor | null; onC
   }, [onClose]);
 
   // Snapshot once on open -- the dialog steals focus, so the numbers must not
-  // move underneath the user while it's up.
+  // move underneath the user while it's up. With no selection there is nothing to
+  // compare against, so each row shows the document figure alone (no "0 / " prefix).
   const stats = useMemo(() => {
     if (!editor) return null;
     const { doc, selection } = editor.state;
     return {
+      hasSelection: !selection.empty,
       selection: countsFor(doc, selection.from, selection.to),
       document: countsFor(doc, 0, doc.content.size),
     };
   }, [editor]);
 
   const rows: [string, string][] = stats
-    ? [
-        ['Word count', `${stats.selection.words.toLocaleString()} / ${stats.document.words.toLocaleString()}`],
-        ['Character count', `${stats.selection.chars.toLocaleString()} / ${stats.document.chars.toLocaleString()}`],
-        ['Est. page count', `${stats.selection.pages.toFixed(1)} / ${stats.document.pages.toFixed(1)}`],
-      ]
+    ? ([
+        ['Word count', stats.selection.words.toLocaleString(), stats.document.words.toLocaleString()],
+        ['Character count', stats.selection.chars.toLocaleString(), stats.document.chars.toLocaleString()],
+        ['Est. page count', stats.selection.pages.toFixed(1), stats.document.pages.toFixed(1)],
+      ] as [string, string, string][]).map(([label, sel, doc]) => [
+        label,
+        stats.hasSelection ? `${sel} / ${doc}` : doc,
+      ])
     : [];
 
   return (
@@ -1138,7 +1173,9 @@ function WordCountDialog({ editor, onClose }: { editor: TipTapEditor | null; onC
             <div className="text-muted">No document is open.</div>
           ) : (
             <>
-              <div className="text-muted fs-sm" style={{ marginBottom: '0.75rem' }}>Selection / whole document</div>
+              <div className="small text-muted" style={{ marginBottom: '0.75rem' }}>
+                {stats.hasSelection ? 'Selection / whole document' : 'Whole document'}
+              </div>
               <table className="word-count-table">
                 <tbody>
                   {rows.map(([label, value]) => (
@@ -1149,7 +1186,7 @@ function WordCountDialog({ editor, onClose }: { editor: TipTapEditor | null; onC
                   ))}
                 </tbody>
               </table>
-              <div className="text-muted fs-sm" style={{ marginTop: '0.75rem' }}>
+              <div className="small text-muted" style={{ marginTop: '0.75rem' }}>
                 Pages estimated at {WORDS_PER_PAGE} words per page.
               </div>
             </>
@@ -1220,10 +1257,10 @@ function CreateFileDialog({ filePath, onConfirm, onCancel }: { filePath: string;
           <span className="fw-bold">File doesn&rsquo;t exist</span>
         </div>
         <div className="modal-body">
-          <p className="text-muted fs-sm">
+          <p className="small text-muted">
             <code>{fileName}</code> doesn&rsquo;t exist yet. Create it and open it in a new tab?
           </p>
-          <p className="text-muted fs-sm" style={{ wordBreak: 'break-all' }}>{filePath}</p>
+          <p className="small text-muted" style={{ wordBreak: 'break-all' }}>{filePath}</p>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
             <button className="settings-btn" onClick={onCancel}>Cancel</button>
             <button className="settings-btn btn-primary" onClick={onConfirm}>Create &amp; Open</button>
@@ -1247,23 +1284,69 @@ function ImportConfirmDialog({ filePath, onConfirm, onCancel }: { filePath: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [onConfirm, onCancel]);
 
-  const backupName = fileName.replace(/(\.[^.]+)$/, '.bak$1');
-
   return (
     <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-dialog qa-import-confirm" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header" style={{ justifyContent: 'center' }}>
           <span className="fw-bold">Convert {ext} to Markdown</span>
         </div>
         <div className="modal-body">
-          <p className="text-muted fs-sm">
-            This will convert <code>{fileName}</code> to Markdown for editing.
-            The original will be kept as a backup (<code>{backupName}</code>).
-            Some formatting may be simplified.
+          <p className="small text-muted">
+            This will create <code>{fileName}.md</code> alongside it and open that for editing.
+            <code>{fileName}</code> is left untouched. Some formatting may be simplified.
           </p>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
             <button className="settings-btn" onClick={onCancel}>Cancel</button>
             <button className="settings-btn btn-primary" onClick={onConfirm}>Convert &amp; Open</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Shown when a .docx/.pdf already has a converted Markdown beside it. Opening that
+// Markdown is the primary action -- re-converting would either clobber edits or
+// leave the user guessing which file is current. "Convert again" is available but
+// de-emphasized (for a source that changed on disk since it was converted), and it
+// always writes a NEW numbered file rather than overwriting.
+function ImportExistsDialog({ filePath, mdPath, onOpen, onReconvert, onCancel }: {
+  filePath: string;
+  mdPath: string;
+  onOpen: () => void;
+  onReconvert: () => void;
+  onCancel: () => void;
+}) {
+  const fileName = basename(filePath) || filePath;
+  const mdName = basename(mdPath) || mdPath;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Enter') onOpen();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onOpen, onCancel]);
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-dialog qa-import-exists" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header" style={{ justifyContent: 'center' }}>
+          <span className="fw-bold">Already converted</span>
+        </div>
+        <div className="modal-body">
+          <p className="small text-muted">
+            <code>{fileName}</code> has already been converted &mdash; <code>{mdName}</code> is
+            sitting next to it. Open that instead?
+          </p>
+          <p className="small text-muted">
+            Converting again won&rsquo;t overwrite it; it writes a new numbered copy.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
+            <button className="settings-btn" onClick={onCancel}>Cancel</button>
+            <button className="settings-btn qa-reconvert" onClick={onReconvert}>Convert again</button>
+            <button className="settings-btn btn-primary qa-open-existing" onClick={onOpen}>Open {mdName}</button>
           </div>
         </div>
       </div>

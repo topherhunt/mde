@@ -191,8 +191,11 @@ const api = {
     return () => ipcRenderer.removeListener('autosave-changed', handler);
   },
 
-  convertImport: (filePath: string): Promise<{ mdPath: string } | { error: string }> =>
-    ipcRenderer.invoke('convert-import', filePath),
+  convertImport: (filePath: string, opts?: { newCopy?: boolean }): Promise<{ mdPath: string } | { error: string }> =>
+    ipcRenderer.invoke('convert-import', filePath, opts),
+
+  getImportTarget: (filePath: string): Promise<{ mdPath: string; exists: boolean }> =>
+    ipcRenderer.invoke('get-import-target', filePath),
 
   listProjectFiles: (root: string): Promise<string[]> =>
     ipcRenderer.invoke('list-project-files', root),

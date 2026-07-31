@@ -81,7 +81,8 @@ export interface MdeAPI {
   getAutosave: () => Promise<boolean>;
   setAutosave: (enabled: boolean) => Promise<void>;
   onAutosaveChanged: (callback: (enabled: boolean) => void) => () => void;
-  convertImport: (filePath: string) => Promise<{ mdPath: string } | { error: string }>;
+  convertImport: (filePath: string, opts?: { newCopy?: boolean }) => Promise<{ mdPath: string } | { error: string }>;
+  getImportTarget: (filePath: string) => Promise<{ mdPath: string; exists: boolean }>;
   watchProject: (root: string) => void;
   unwatchProject: (root: string) => void;
   onProjectFilesChanged: (callback: () => void) => () => void;

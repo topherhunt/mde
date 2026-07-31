@@ -128,7 +128,7 @@ export function DeleteConfirmDialog({ target, onConfirm, onCancel }: { target: F
           <span className="fw-bold">Delete {target.isDirectory ? 'folder' : 'file'}</span>
         </div>
         <div className="modal-body">
-          <p className="text-muted fs-sm">
+          <p className="small text-muted">
             Really delete <code>{target.name}</code>? It will be moved to the Trash.
           </p>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>

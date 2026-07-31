@@ -1186,7 +1186,9 @@ test.describe('Import conversion', () => {
     expect(fs.existsSync(result.mdPath)).toBe(true);
     const content = fs.readFileSync(result.mdPath, 'utf-8');
     expect(content.length).toBeGreaterThan(0);
-    expect(fs.existsSync(path.join(tmpDir, 'sample.bak.pdf'))).toBe(true);
+    // The source is left exactly where it was -- no rename, no backup, no hiding.
+    expect(fs.existsSync(pdfDst)).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'sample.bak.pdf'))).toBe(false);
 
   });
 
@@ -1208,8 +1210,89 @@ test.describe('Import conversion', () => {
     expect(fs.existsSync(result.mdPath)).toBe(true);
     const content = fs.readFileSync(result.mdPath, 'utf-8');
     expect(content.length).toBeGreaterThan(0);
-    expect(fs.existsSync(path.join(tmpDir, 'sample.bak.docx'))).toBe(true);
+    expect(fs.existsSync(docxDst)).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'sample.bak.docx'))).toBe(false);
 
+  });
+
+  test('the converted source stays visible in the sidebar', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'report.docx'), 'not really a docx');
+    fs.writeFileSync(path.join(tmpDir, 'report.docx.md'), '# Converted\n');
+
+    await app.evaluate(({ BrowserWindow }, root) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
+    }, tmpDir);
+
+    const names = page.locator('.sidebar .tree-name');
+    await expect(names.filter({ hasText: /^report\.docx\.md$/ })).toHaveCount(1, { timeout: 5000 });
+    // Previously the source would have been renamed to report.bak.docx and hidden from
+    // the listing entirely; now it stays put under its own name.
+    await expect(names.filter({ hasText: /^report\.docx$/ })).toHaveCount(1);
+  });
+
+  test('clicking an already-converted file offers to open the Markdown, not reconvert', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const docxSrc = fixturePath('sample-files.com-large-document.docx');
+    const docxDst = path.join(tmpDir, 'sample.docx');
+    fs.copyFileSync(docxSrc, docxDst);
+    fs.writeFileSync(path.join(tmpDir, 'sample.docx.md'), '# Already converted\n\nEdited by hand.\n');
+
+    await app.evaluate(({ BrowserWindow }, root) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
+    }, tmpDir);
+
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^sample\.docx$/ }).click();
+
+    const dialog = page.locator('.qa-import-exists');
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await expect(dialog).toContainText('Already converted');
+    // The convert-from-scratch dialog must NOT be the one shown.
+    await expect(page.locator('.qa-import-confirm')).toHaveCount(0);
+
+    await dialog.locator('.qa-open-existing').click();
+
+    // Opens the existing Markdown, with its hand edits intact -- nothing reconverted.
+    await expect(page.locator('.tiptap')).toContainText('Edited by hand', { timeout: 5000 });
+    expect(fs.readFileSync(path.join(tmpDir, 'sample.docx.md'), 'utf-8')).toContain('Edited by hand');
+    expect(fs.existsSync(path.join(tmpDir, 'sample.docx.2.md'))).toBe(false);
+  });
+
+  test('"Convert again" writes a numbered copy and never overwrites the existing Markdown', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const docxSrc = fixturePath('sample-files.com-large-document.docx');
+    const docxDst = path.join(tmpDir, 'sample.docx');
+    fs.copyFileSync(docxSrc, docxDst);
+    const existingMd = path.join(tmpDir, 'sample.docx.md');
+    fs.writeFileSync(existingMd, '# Already converted\n\nEdited by hand.\n');
+
+    await app.evaluate(({ BrowserWindow }, root) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
+    }, tmpDir);
+
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^sample\.docx$/ }).click();
+    await page.locator('.qa-import-exists .qa-reconvert').click();
+
+    const secondMd = path.join(tmpDir, 'sample.docx.2.md');
+    await expect.poll(() => fs.existsSync(secondMd), { timeout: 15000 }).toBe(true);
+
+    // The hand-edited original is untouched, and the new copy holds real converted text.
+    expect(fs.readFileSync(existingMd, 'utf-8')).toBe('# Already converted\n\nEdited by hand.\n');
+    expect(fs.readFileSync(secondMd, 'utf-8').length).toBeGreaterThan(100);
+    expect(fs.existsSync(docxDst)).toBe(true);
+
+    // A third conversion numbers upward rather than reusing .2.
+    const third: any = await page.evaluate(
+      (fp: string) => (window as any).mde.convertImport(fp, { newCopy: true }),
+      docxDst
+    );
+    expect(third.mdPath).toBe(path.join(tmpDir, 'sample.docx.3.md'));
   });
 });
 
@@ -2399,7 +2482,7 @@ test.describe('Word Count dialog', () => {
 
   });
 
-  test('shows zero for the selection when nothing is selected', async () => {
+  test('shows whole-document figures alone when nothing is selected', async () => {
     ({ app, page } = await launchApp());
 
     const tmpDir = makeTmpDir();
@@ -2418,8 +2501,13 @@ test.describe('Word Count dialog', () => {
       BrowserWindow.getAllWindows()[0].webContents.send('show-word-count');
     });
 
-    const values = page.locator('.qa-word-count .word-count-value');
-    await expect(values.nth(0)).toHaveText('0 / 12', { timeout: 3000 });
+    const dialog = page.locator('.qa-word-count');
+    const values = dialog.locator('.word-count-value');
+    // No "0 / " prefix -- just the document's own numbers.
+    await expect(values.nth(0)).toHaveText('12', { timeout: 3000 });
+    await expect(values.nth(2)).toHaveText('0.0');
+    await expect(dialog).toContainText('Whole document');
+    await expect(dialog).not.toContainText('Selection /');
 
   });
 });

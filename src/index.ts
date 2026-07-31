@@ -550,7 +550,6 @@ ipcMain.handle('list-directory', async (_event, dirPath: string) => {
 
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
-    if (isBackupFile(entry.name)) continue;
     const fullPath = path.join(dirPath, entry.name);
     result.push({ name: entry.name, path: fullPath, isDirectory: entry.isDirectory() });
   }
@@ -581,7 +580,6 @@ async function walkProjectFiles(root: string): Promise<string[]> {
     try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
     for (const entry of entries) {
       if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
-      if (isBackupFile(entry.name)) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         queue.push(full);
@@ -600,28 +598,56 @@ ipcMain.handle('list-project-files', async (_event, root: string) => {
 });
 
 const IMPORTABLE_EXTENSIONS = ['.docx', '.pdf'];
-const BACKUP_INFIX = '.bak';
-
-function isBackupFile(name: string): boolean {
-  return IMPORTABLE_EXTENSIONS.some(ext => name.endsWith(`${BACKUP_INFIX}${ext}`));
-}
 
 function isImportable(name: string): boolean {
   const lower = name.toLowerCase();
-  return IMPORTABLE_EXTENSIONS.some(ext => lower.endsWith(ext)) && !isBackupFile(lower);
+  return IMPORTABLE_EXTENSIONS.some(ext => lower.endsWith(ext));
 }
 
-ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdPath: string } | { error: string }> => {
+function pathExists(p: string): Promise<boolean> {
+  return fs.promises.access(p).then(() => true).catch(() => false);
+}
+
+// Where a conversion of `filePath` lands: `report.docx` -> `report.docx.md`. The
+// source extension stays in the name so provenance is obvious and a .docx and .pdf
+// sharing a base name can't collide. The source itself is never touched.
+function importTargetPath(filePath: string): string {
+  return `${filePath}.md`;
+}
+
+// `report.docx.2.md`, `report.docx.3.md`, ... -- the first name not yet taken.
+// Re-converting NEVER overwrites: the existing Markdown may hold edits, and
+// destroying those is exactly what the old "delete it first" refusal guarded against.
+async function nextFreeImportTarget(filePath: string): Promise<string> {
+  const base = importTargetPath(filePath);
+  if (!(await pathExists(base))) return base;
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${filePath}.${n}.md`;
+    if (!(await pathExists(candidate))) return candidate;
+  }
+  throw new Error(`Too many converted copies of ${path.basename(filePath)} already exist.`);
+}
+
+// Reports where a conversion would land and whether a Markdown version already sits
+// next to the source, so the renderer can choose the right dialog on click without
+// duplicating the naming rules.
+ipcMain.handle('get-import-target', async (_event, filePath: string): Promise<{ mdPath: string; exists: boolean }> => {
+  const mdPath = importTargetPath(filePath);
+  return { mdPath, exists: await pathExists(mdPath) };
+});
+
+// `newCopy: true` writes the next free numbered name instead of the default target,
+// for re-converting a source whose Markdown already exists.
+ipcMain.handle('convert-import', async (_event, filePath: string, opts?: { newCopy?: boolean }): Promise<{ mdPath: string } | { error: string }> => {
   const ext = path.extname(filePath).toLowerCase();
-  const baseName = path.basename(filePath, ext);
-  const dir = path.dirname(filePath);
-  const mdPath = path.join(dir, `${baseName}${ext}.md`);
-  const backupPath = path.join(dir, `${baseName}${BACKUP_INFIX}${ext}`);
 
   try {
-    const existingMd = await fs.promises.access(mdPath).then(() => true).catch(() => false);
-    if (existingMd) {
-      return { error: `${baseName}${ext}.md already exists. Delete or rename it first.` };
+    const mdPath = opts?.newCopy
+      ? await nextFreeImportTarget(filePath)
+      : importTargetPath(filePath);
+
+    if (!opts?.newCopy && (await pathExists(mdPath))) {
+      return { error: `${path.basename(mdPath)} already exists.` };
     }
 
     let markdown = '';
@@ -917,7 +943,6 @@ ipcMain.handle('convert-import', async (_event, filePath: string): Promise<{ mdP
       return { error: `Unsupported file type: ${ext}` };
     }
 
-    await fs.promises.rename(filePath, backupPath);
     await fs.promises.writeFile(mdPath, markdown, 'utf-8');
     return { mdPath };
   } catch (err: unknown) {

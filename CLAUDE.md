@@ -36,6 +36,7 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 - ProseMirror decorations (via Plugin with DecorationSet) are used for find-match highlighting and link-bar selection preservation. Always clean up decoration plugins on component unmount.
 - File sidebar auto-refreshes via recursive `fs.watch` on the project root (debounced 2s). On macOS this uses FSEvents (kernel-level, zero CPU idle cost).
 - PDF text extraction uses `pdfjs-dist/legacy/build/pdf.mjs` with the worker loaded into `globalThis.pdfjsWorker` (fake worker mode). Both `pdfjs-dist` and its worker are webpack externals -- they resolve from `node_modules` at runtime. Do NOT bundle them with webpack; the worker spawning mechanism breaks. Extraction uses position-based line grouping, multi-column layout detection (splits left/right columns when a >15% page-width gap is found), paragraph break detection (>1.5x median line height), and table detection (2+ aligned columns across 3+ consecutive lines).
+- Import never mutates the source. The old flow renamed `report.docx` to `report.bak.docx` and filtered `.bak.` files out of the sidebar and quick-open index -- a file the user could see one moment and not the next, under a name they never chose. Now the source stays exactly where it is, and the disambiguation happens at click time: `get-import-target` reports whether `<source>.md` exists, and if it does the renderer shows `ImportExistsDialog` (open the existing Markdown / convert again / cancel) instead of the first-time `ImportConfirmDialog`. `convert-import` takes `{ newCopy?: boolean }`; without it the handler refuses to write over an existing target, with it `nextFreeImportTarget()` walks `<source>.2.md`, `.3.md`, ... to the first free name. There is no code path that overwrites a converted Markdown -- it may contain hand edits.
 - DOCX conversion preprocesses mammoth's HTML before turndown: strips `<p>` inside cells, promotes first row `<td>` to `<th>` with `<thead>`/`<tbody>` wrapping, so turndown-plugin-gfm's table rule can convert them. All conversion libraries (mammoth, turndown, turndown-plugin-gfm, pdfjs-dist) are webpack externals in `webpack.main.config.ts`.
 - PDF text item joining uses gap-based spacing (>1px gap inserts space) rather than unconditional spaces, to handle PDFs with per-character text items (e.g. web-to-PDF renders).
 - PDF heading detection: compares each line's font height to the page's most frequent (body) height. Lines >1.4x body height become headings; distinct sizes map to H1/H2/H3/H4 in descending order.
@@ -99,7 +100,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-115 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+118 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 What exists:
 
@@ -126,9 +127,9 @@ What exists:
 - Copying table cells: a single cell copies just its text; multiple cells copy as tab-separated rows (pastes as plain text in editors, as a real table into Word via the HTML clipboard). Select-all over a mixed document copies everything -- prose, lists, AND the table as a Markdown table.
 - File conflict detection (hash-guarded save that can never clobber a stale file; silent reload with a blue "detected changes" proof banner; red conflict banner when the buffer is dirty). Watches the containing directory so it survives atomic saves.
 - Quick Open command palette (Cmd+O) with fuzzy search, file indexing (10s TTL cache)
-- DOCX/PDF import: converts to `.{ext}.md` on click (e.g. `report.pdf.md` -- preserves original extension), renames original to `.bak.{ext}`, backup files hidden from sidebar/quick-open. PDF extraction: position-based line grouping, multi-column layout detection, paragraph break detection, table detection. DOCX: mammoth + turndown with HTML table preprocessing for clean Markdown table output (zero HTML in output).
+- DOCX/PDF import: converts to `.{ext}.md` on click (e.g. `report.pdf.md` -- preserves original extension). The source file is never renamed, moved, or hidden. Clicking a source that already has its Markdown beside it opens an "Already converted" dialog (`.qa-import-exists`) offering to open that Markdown (primary) or convert again into a new numbered copy (`report.pdf.2.md`, `.3.md`, ...) -- conversion never overwrites. PDF extraction: position-based line grouping, multi-column layout detection, paragraph break detection, table detection. DOCX: mammoth + turndown with HTML table preprocessing for clean Markdown table output (zero HTML in output).
 - PDF export (via Electron printToPDF)
-- Tools -> Word Count: a modal (`.qa-word-count`) showing word count, character count, and estimated page count (300 words/page) as `selection / whole document`. Counts are snapshotted when the dialog opens. Escape or clicking the backdrop closes it. No keyboard shortcut -- menu only.
+- Tools -> Word Count: a modal (`.qa-word-count`) showing word count, character count, and estimated page count (300 words/page) as `selection / whole document` -- or, when nothing is selected, the document figure alone with no `0 / ` prefix. Counts are snapshotted when the dialog opens. Escape or clicking the backdrop closes it. No keyboard shortcut -- menu only.
 - Dark mode support (light / dark / system default, stored in user state file)
 - Settings dialog (Cmd+,) with theme selector, spellcheck toggle, auto-save toggle (1s debounce), terminal launcher installer
 - Terminal launcher: `mde .` opens a folder from the terminal (installed via Settings)
@@ -150,7 +151,11 @@ What exists:
 
 ## CSS conventions
 
-Utility classes are limited -- only `text-muted`, `fw-bold`, `fs-sm`, and a few others are defined. Do NOT assume Bootstrap utility classes like `d-flex`, `mt-3`, `gap-2` exist -- they are not included. Use inline styles or define component-specific classes when layout needs arise.
+**Utility-first, with a Bootstrap-shaped vocabulary. GROW the utility layer -- don't route around it.** Compose from utilities before writing a component-specific class, and when you need a common semantic style that doesn't exist yet, ADD it to the `--- Utilities ---` block near the top of `src/index.css` rather than reaching for an inline style or a one-off class. That block is intentionally small today; it is meant to grow.
+
+Naming and semantics follow **Bootstrap 5** so the vocabulary is guessable without reading the stylesheet. Use Bootstrap's actual class names -- `.small`, `.fw-bold` / `.fw-semibold` / `.fw-normal`, `.text-muted`, `.text-danger`, `.text-center`, `.d-flex`, `.gap-2`, `.mt-3`, `.align-items-center`, `.justify-content-between` -- and Bootstrap's spacing scale (`0`=0, `1`=.25rem, `2`=.5rem, `3`=1rem, `4`=1.5rem, `5`=3rem) and semantic color names (primary, secondary, success, danger, warning, info). Do NOT invent parallel names for things Bootstrap already names (`.text-gray` and `.fs-sm` were exactly that mistake, since removed). Semantic color utilities must resolve to the theme variables below, not literal hex -- e.g. `.text-danger { color: var(--danger-text); }`, `.text-primary { color: var(--accent); }` -- so they stay dark-mode correct.
+
+Currently defined: `.small` (0.875em), `.fw-bold` (600), `.text-muted` (`var(--text-muted)`). Everything else is fair game to add on first real need -- add it because a component needs it now, not speculatively.
 
 CSS variables for theming (defined in `:root`, `[data-theme="dark"]`, and `@media (prefers-color-scheme: dark)` blocks in `src/index.css`):
 
@@ -165,5 +170,6 @@ CSS variables for theming (defined in `:root`, `[data-theme="dark"]`, and `@medi
 When adding component styles:
 
 - Use CSS variables for theme compatibility. Always set `color` and `background` on inputs and buttons so they work in dark mode.
-- Component-specific classes are fine for anything with multi-property styling. Don't over-abstract.
-- Keep utility definitions in `src/index.css` if adding new ones.
+- Component-specific classes are still right for a genuine multi-property component with hover/state (`.settings-row`, `.fold-caret`). Utilities are for the recurring single-purpose bits -- spacing, size, weight, color, flex.
+- Keep ALL utility definitions in the one `--- Utilities ---` block in `src/index.css`, never scattered.
+- A utility class with no definition is invisible -- it silently renders as body text. If styling looks unapplied, check the class actually exists before debugging anything else. (`.text-muted`, `.fs-sm` and `.fw-bold` were used 34 times across the components while defined nowhere.)

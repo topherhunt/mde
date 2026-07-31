@@ -85,6 +85,22 @@ body {
   background: var(--bg);
 }
 
+/* --- Utilities ---
+   Bootstrap-style names and semantics. Compose these instead of re-declaring
+   font-size/color/weight on each component, and add new ones here as needs recur
+   (see the CSS conventions section of CLAUDE.md). */
+.small {
+  font-size: 0.875em;
+}
+
+.fw-bold {
+  font-weight: 600;
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
 /* --- App layout --- */
 .app {
   display: flex;
