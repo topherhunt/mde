@@ -22,12 +22,24 @@ import TableMenu from './TableMenu';
 // to &lt; &gt;, mangling prose like "Apples > oranges." on save.
 // With html:false, markdown-it already treats <ol> etc. as literal text on parse,
 // so we just need to output raw text without the escapeHTML step.
+// prosemirror-markdown's esc() backslash-escapes EVERY `~`, so prose like "approx ~5"
+// went to disk (and to the clipboard) as "approx \~5". Only a DOUBLED `~~` opens a
+// strikethrough in markdown-it, so a lone tilde needs no escape at all. A `\~` that sits
+// next to another `\~` is left alone: under-escaping there would silently turn literal
+// "~~text~~" into a strike on the next load, and over-escaping is the safe direction.
+const LONE_ESCAPED_TILDE = /(?<!\\~)\\~(?!\\~)/g;
+
 const TextNode = Text.extend({
   addStorage() {
     return {
       markdown: {
         serialize(state: any, node: any) {
+          // state.text() runs esc() internally, so undo its tilde escaping on just the
+          // span of output this call appended.
+          const start = state.out.length;
           state.text(node.text);
+          state.out = state.out.slice(0, start)
+            + state.out.slice(start).replace(LONE_ESCAPED_TILDE, '~');
         },
         parse: {},
       },
@@ -86,6 +98,16 @@ function selectionInsideCodeBlock(state: any): boolean {
   return !empty && $from.parent.type.spec.code && $from.sameParent($to);
 }
 
+// Depth of the innermost listItem the position sits inside, or 0 for none.
+function listItemDepth($pos: any): number {
+  for (let d = $pos.depth; d > 0; d--) {
+    if ($pos.node(d).type.name === 'listItem') return d;
+  }
+  return 0;
+}
+
+const insideListItem = ($pos: any): boolean => listItemDepth($pos) > 0;
+
 // When copying a single list item, strip the list wrapper so the clipboard gets
 // just the text, not "- text". Multi-item copies keep the list markers.
 const SmartClipboard = Extension.create({
@@ -137,11 +159,28 @@ const SmartClipboard = Extension.create({
             // (which reads the text/html representation ProseMirror writes alongside this one).
             const tsv = tableSliceToTSV(content);
             if (tsv !== null) return tsv;
+            // Text selected inside ONE list item copies as just that text -- no "- "
+            // bullet, no "[ ] " checkbox. A copied slice keeps every ancestor the
+            // selection sits under, so a nested task item used to serialize the
+            // ancestor item's marker AND its own, giving "- [ ] - [ ] the text".
+            // Inline formatting (bold, links, code) is still serialized.
+            const { $from, $to, empty } = editor.state.selection;
+            if (!empty && $from.sameParent($to) && $from.parent.isTextblock
+                && !$from.parent.type.spec.code && insideListItem($from)) {
+              const inline = $from.parent.cut($from.parentOffset, $to.parentOffset);
+              return serializer.serialize(Fragment.from(inline)).trim();
+            }
+            // Whole-item copies (a selection spanning the item's own boundaries, so the
+            // rule above doesn't apply) still shed the item's own marker: one list item
+            // is a line of text, not a list. Any sublist it carries keeps its markers.
             if (content.childCount === 1) {
               const child = content.firstChild!;
               if ((child.type.name === 'bulletList' || child.type.name === 'orderedList')
                   && child.childCount === 1) {
                 return serializer.serialize(child.firstChild!.content).trim();
+              }
+              if (child.type.name === 'listItem') {
+                return serializer.serialize(child.content).trim();
               }
             }
             return serializer.serialize(content);
@@ -151,6 +190,13 @@ const SmartClipboard = Extension.create({
     ];
   },
 });
+
+// Checkbox geometry, relative to the <li>'s top-left corner. Mirrors the
+// `li[data-checked]::before` rule in index.css (left: -18px; top: 5px; 14x14).
+const CHECKBOX_LEFT = -18;
+const CHECKBOX_TOP = 5;
+const CHECKBOX_SIZE = 14;
+const CHECKBOX_SLOP = 2;
 
 const UnifiedListItem = ListItem.extend({
   addAttributes() {
@@ -236,7 +282,18 @@ const UnifiedListItem = ListItem.extend({
             const li = target.closest('li[data-checked]');
             if (!li) return false;
             const liRect = li.getBoundingClientRect();
-            if (event.clientX > liRect.left + 4) return false;
+            // The checkbox is a ::before pseudo-element, so the click target is the <li>
+            // itself and we have to hit-test the box by hand. Only a click actually
+            // inside it (plus a couple of px of slop) toggles -- clicking the first
+            // character of the text, or anywhere on a wrapped second line, must place
+            // the cursor. Keep in sync with li[data-checked]::before in index.css.
+            const x = event.clientX - liRect.left;
+            const y = event.clientY - liRect.top;
+            const inBox = x >= CHECKBOX_LEFT - CHECKBOX_SLOP
+              && x <= CHECKBOX_LEFT + CHECKBOX_SIZE + CHECKBOX_SLOP
+              && y >= CHECKBOX_TOP - CHECKBOX_SLOP
+              && y <= CHECKBOX_TOP + CHECKBOX_SIZE + CHECKBOX_SLOP;
+            if (!inBox) return false;
             let liPos: number;
             try {
               liPos = view.posAtDOM(li, 0) - 1;
@@ -328,21 +385,73 @@ const UnifiedListItem = ListItem.extend({
           }
         }
 
+        // Checked-ness follows the TEXT. Splitting in the middle of a checked task
+        // leaves both halves checked; splitting at the very start pushes the text (and
+        // its check) down and leaves a fresh UNCHECKED item above it; splitting at the
+        // end keeps the text checked above and starts a new unchecked item below.
+        // In every case the half that ends up empty is the one that becomes unchecked.
+        const origChecked = $from.node(liDepth).attrs.checked;
+        const atStart = $from.parentOffset === 0;
+        const atEnd = $from.parentOffset === $from.parent.content.size;
+
         if (!editor.commands.splitListItem('listItem')) return false;
         if (isTask) {
           const { $from: $new } = editor.state.selection;
-          for (let d = $new.depth; d > 0; d--) {
-            if ($new.node(d).type.name === 'listItem') {
-              const pos = $new.before(d);
-              editor.view.dispatch(
-                editor.state.tr.setNodeMarkup(pos, undefined, {
-                  ...$new.node(d).attrs, checked: false,
-                })
-              );
-              break;
+          const d = listItemDepth($new);
+          if (d) {
+            // splitListItem leaves the cursor in the LOWER of the two items.
+            const lowerPos = $new.before(d);
+            const tr = editor.state.tr.setNodeMarkup(lowerPos, undefined, {
+              ...$new.node(d).attrs, checked: atEnd ? false : origChecked,
+            });
+            const index = $new.index(d - 1);
+            if (atStart && index > 0) {
+              const upper = $new.node(d - 1).child(index - 1);
+              tr.setNodeMarkup(lowerPos - upper.nodeSize, undefined, {
+                ...upper.attrs, checked: false,
+              });
             }
+            editor.view.dispatch(tr);
           }
         }
+        return true;
+      },
+    };
+  },
+});
+
+// Backspace on an EMPTY list item that has a previous sibling deletes just that item
+// and drops the cursor at the end of the item above. TipTap's own list keymap either
+// outdents (splitting the list in two) or, at top level, turns the PREVIOUS item into
+// a paragraph -- both wildly out of proportion to "remove this blank line".
+// Needs a higher priority than ListKit so its Backspace binding runs first: TipTap
+// sorts extensions by priority descending and runs their keymaps in that order.
+const ListItemBackspace = Extension.create({
+  name: 'listItemBackspace',
+  priority: 1000,
+  addKeyboardShortcuts() {
+    return {
+      Backspace: ({ editor }) => {
+        const { state } = editor;
+        const { selection } = state;
+        if (!selection.empty) return false;
+        const { $from } = selection;
+        const d = listItemDepth($from);
+        if (!d) return false;
+
+        const li = $from.node(d);
+        // Only a blank item with nothing hanging off it -- an item with a sublist would
+        // orphan its children, and a non-empty one has text the user still wants.
+        if (li.childCount !== 1 || li.firstChild!.content.size !== 0) return false;
+        // The first item of a list keeps the default behavior (outdent / lift out).
+        if ($from.index(d - 1) === 0) return false;
+
+        const liPos = $from.before(d);
+        const tr = state.tr.delete(liPos, liPos + li.nodeSize);
+        // liPos - 1 now sits just inside the end of the previous item; near(-1) walks
+        // back to the last text position in it (the deepest last child, if it nests).
+        tr.setSelection(TextSelection.near(tr.doc.resolve(liPos - 1), -1));
+        editor.view.dispatch(tr.scrollIntoView());
         return true;
       },
     };
@@ -1281,6 +1390,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
       }),
       CodeBlockWithCopy,
       UnifiedListItem,
+      ListItemBackspace,
       CmdEnterCycle,
       TabHandler,
       BacktickWrap,

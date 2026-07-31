@@ -641,8 +641,20 @@ body {
 
 .editor-content .tiptap p {
   line-height: 1.5;
-  margin-top: 0.4em;
+  margin-top: 0.8em;
   margin-bottom: 0.4em;
+}
+
+/* Headings already carry their own bottom margin, which was the right gap before the
+   top margin above was doubled -- keep the paragraph directly under one at the old
+   value so only paragraph-to-paragraph and list-to-paragraph gaps grow. */
+.editor-content .tiptap h1 + p,
+.editor-content .tiptap h2 + p,
+.editor-content .tiptap h3 + p,
+.editor-content .tiptap h4 + p,
+.editor-content .tiptap h5 + p,
+.editor-content .tiptap h6 + p {
+  margin-top: 0.4em;
 }
 
 .editor-content .tiptap a {

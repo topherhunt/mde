@@ -2,15 +2,8 @@
 
 The dev (Topher) drops notes in here about change requests, questions, things to look into, bugs, etc. and will periodically instruct Claude to go through and process these items.
 
-To do
+To do:
 
-- [ ] Double margin above each paragraph. So adjacent paragraphs have more breathing room between them.
-- [ ] When your cursor is in the middle of a checked-off task and you press `enter`, the newly-created task should be checked too.
-- [ ] When your cursor is at the START of a checked task and you press `enter`, the UPPER line should be unchecked and the LOWER line should be checked (ie checked-ness should follow the text of the completed/checked task).
-- [ ] When you have a task list item, clicking at the *start of the line* *of text* should not toggle checked status. You should need to click IN the checkbox. The toggle-hitbox extends too far to the right.
-- [ ] When I select the full text of a task and copy it, and then paste it into a plaintext environment like claude-code or VS Code, I get a double `- [ ]` like this: `- [ ] - [ ] "to be trued up at month end" seems unnecessary. I'd rather give them a precise, but generously conservative, number that makes room for all our metered usage, and not talk about any truing up.` - ideally the copy would create both an html version (with the task li) and a plaintext version (no li or `- [ ]` just the selected text itself) - so if I cmd + shift + V then it should just paste the text itself, no html or `- [ ]`.
-- [ ] If I copy text that contains a \~, then in the copied text, there's the escape character before it, like `\~`. That escape shouldn't be included in the copied text.
-- [ ] If you have a nested list of 3 items, and the middle item is empty and you press backspace while cursor is on it, it outdents (effectively splitting the list. It shouldn't do that; instead it should just delete that list item, moving cursor up to the end of previous item.
 - [ ] The red warning "This file was modified on disk. Your unsaved changes may conflict. Copy your work before reloading." isn't working properly. It often appears when I KNOW for fact that nothing else was modifying the target file, I just edited the file with no issue 2 minutes previously. It's important to keep the bulletproof overwrite-protection in place, but it seems too hair-trigger currently...?
   - It might have something to do with the race condition when I make edits at the same moment an autosave is triggered.
 - [ ] Folded lists act weird when you're reordering other list items to above/below a folded item or adding a new item before or after a folded item:

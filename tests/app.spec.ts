@@ -3225,3 +3225,229 @@ test.describe('Leading code fence guard', () => {
     expect(firstText).toBe('');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task list editing: Enter, checkbox hit area, backspace, clipboard
+// ---------------------------------------------------------------------------
+
+// Open a markdown file and wait for it to render. Returns the file path.
+async function openMarkdown(content: string, name = 'tasks.md'): Promise<string> {
+  const tmpFile = path.join(makeTmpDir(), name);
+  fs.writeFileSync(tmpFile, content);
+  await app.evaluate(({ BrowserWindow }, fp) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('open-file', fp);
+  }, tmpFile);
+  await expect(page.locator('.tiptap li, .tiptap p').first()).toBeVisible({ timeout: 5000 });
+  return tmpFile;
+}
+
+async function saveAndRead(tmpFile: string): Promise<string> {
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+  });
+  await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+  return fs.readFileSync(tmpFile, 'utf-8');
+}
+
+test.describe('Enter inside a task item', () => {
+  test('splitting a checked task in the middle leaves BOTH halves checked', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('- [x] alpha beta\n');
+
+    await page.locator('.tiptap li p').first().click();
+    await page.keyboard.press('ControlOrMeta+ArrowLeft');
+    for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
+    // Let ProseMirror observe the native arrow-key selection before the keymap runs.
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Enter');
+
+    expect(await saveAndRead(tmpFile)).toBe('- [x] alpha\n- [x]  beta\n');
+  });
+
+  test('Enter at the START of a checked task keeps the check with the text', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('- [x] alpha beta\n');
+
+    await page.locator('.tiptap li p').first().click();
+    await page.keyboard.press('ControlOrMeta+ArrowLeft');
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Enter');
+
+    // The blank line pushed above is a fresh UNCHECKED task; the completed text
+    // carries its checkmark down with it.
+    expect(await saveAndRead(tmpFile)).toBe('- [ ] \n- [x] alpha beta\n');
+  });
+
+  test('Enter at the END of a checked task starts a new UNCHECKED task', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('- [x] alpha beta\n');
+
+    await page.locator('.tiptap li p').first().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('next thing');
+
+    expect(await saveAndRead(tmpFile)).toBe('- [x] alpha beta\n- [ ] next thing\n');
+  });
+});
+
+test.describe('Checkbox click target', () => {
+  test('clicking the checkbox toggles it', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('- [ ] first task\n');
+
+    const li = page.locator('.tiptap li').first();
+    const box = (await li.boundingBox())!;
+    // The checkbox is drawn at left:-18px, top:5px, 14x14 (see index.css).
+    await page.mouse.click(box.x - 11, box.y + 12);
+
+    await expect(li).toHaveAttribute('data-checked', 'true', { timeout: 2000 });
+    expect(await saveAndRead(tmpFile)).toBe('- [x] first task\n');
+  });
+
+  test('clicking the first character of the text places the cursor, does not toggle', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('- [ ] first task\n');
+
+    const li = page.locator('.tiptap li').first();
+    const box = (await li.boundingBox())!;
+    // 2px into the text -- previously anything left of (li.left + 4px) toggled.
+    await page.mouse.click(box.x + 2, box.y + 12);
+    await page.waitForTimeout(150);
+    await page.keyboard.type('X');
+
+    await expect(li).toHaveAttribute('data-checked', 'false');
+    expect(await saveAndRead(tmpFile)).toBe('- [ ] Xfirst task\n');
+  });
+});
+
+test.describe('Backspace on an empty list item', () => {
+  test('an empty middle item is deleted, joining the cursor to the item above', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('- one\n- \n- three\n');
+
+    await page.locator('.tiptap > ul > li p').first().click();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Backspace');
+    await page.keyboard.type('!');
+
+    // The list is NOT split and "one" is NOT demoted to a paragraph.
+    expect(await saveAndRead(tmpFile)).toBe('- one!\n- three\n');
+  });
+
+  test('an empty middle item in a NESTED list stays nested', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('- parent\n  - one\n  - \n  - three\n');
+
+    await page.locator('.tiptap li li p').first().click();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Backspace');
+    await page.keyboard.type('!');
+
+    expect(await saveAndRead(tmpFile)).toBe('- parent\n  - one!\n  - three\n');
+  });
+
+  test('backspace in the FIRST item still outdents rather than deleting it', async () => {
+    ({ app, page } = await launchApp());
+    await openMarkdown('- parent\n  - one\n  - three\n');
+
+    // Empty the first sub-item by selecting its text and deleting it.
+    await page.locator('.tiptap li li p').first().click();
+    await page.keyboard.press('ControlOrMeta+ArrowLeft');
+    await page.keyboard.press('Shift+ControlOrMeta+ArrowRight');
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Backspace');
+    await expect(page.locator('.tiptap li li')).toHaveCount(2);
+
+    await page.keyboard.press('Backspace');
+
+    // Lifted out of the sublist, not removed -- there is no item above it to join to,
+    // so all three items survive and only one is still nested.
+    await expect(page.locator('.tiptap li')).toHaveCount(3);
+    await expect(page.locator('.tiptap li li')).toHaveCount(1);
+  });
+});
+
+test.describe('Copying a task item', () => {
+  test('copying the text of a nested task yields the text alone, no "- [ ]" markers', async () => {
+    ({ app, page } = await launchApp());
+    await openMarkdown('- [ ] parent task\n  - [x] nested **bold** task\n');
+
+    await page.locator('.tiptap li li p').first().click({ clickCount: 3 });
+    await page.keyboard.press('ControlOrMeta+c');
+
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    // Was "- [ ] - [x] nested **bold** task": the slice carries the ancestor item too,
+    // so both its marker and the nested one were serialized onto the same line.
+    expect(clip).toBe('nested **bold** task');
+  });
+
+  test('copying more than one task still keeps the list markers', async () => {
+    ({ app, page } = await launchApp());
+    await openMarkdown('- [ ] one\n- [x] two\n');
+
+    await page.locator('.tiptap').click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ControlOrMeta+c');
+
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip).toContain('- [ ] one');
+    expect(clip).toContain('- [x] two');
+  });
+});
+
+test.describe('Tilde escaping', () => {
+  test('a lone ~ is neither escaped on save nor on copy', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('approx ~5 items\n');
+
+    await page.locator('.tiptap p').first().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type(' here');
+
+    expect(await saveAndRead(tmpFile)).toBe('approx ~5 items here\n');
+
+    await page.locator('.tiptap p').first().click({ clickCount: 3 });
+    await page.keyboard.press('ControlOrMeta+c');
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip).toBe('approx ~5 items here');
+  });
+
+  test('a literal ~~ stays escaped so it does not become a strikethrough', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('literal \\~\\~notstruck\\~\\~ and ~~struck~~ here\n');
+
+    // Round-trips: the escaped pair is text, the unescaped pair is a strike mark.
+    await expect(page.locator('.tiptap s')).toHaveText('struck');
+    await expect(page.locator('.tiptap p').first()).toContainText('~~notstruck~~');
+
+    await page.locator('.tiptap p').first().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type('!');
+
+    expect(await saveAndRead(tmpFile)).toBe('literal \\~\\~notstruck\\~\\~ and ~~struck~~ here!\n');
+  });
+});
+
+test.describe('Paragraph spacing', () => {
+  test('paragraph-to-paragraph gap is double the gap under a heading', async () => {
+    ({ app, page } = await launchApp());
+    await openMarkdown('# Title\n\nUnder heading.\n\nSecond paragraph.\n\n- a list item\n\nAfter the list.\n');
+
+    const margins = await page.evaluate(() => {
+      const paras = Array.from(document.querySelectorAll('.tiptap > p')) as HTMLElement[];
+      const top = (el: HTMLElement) => parseFloat(getComputedStyle(el).marginTop);
+      return {
+        underHeading: top(paras[0]),
+        betweenParas: top(paras[1]),
+        afterList: top(paras[2]),
+      };
+    });
+
+    expect(margins.betweenParas).toBeCloseTo(margins.underHeading * 2, 1);
+    expect(margins.afterList).toBeCloseTo(margins.betweenParas, 1);
+  });
+});
