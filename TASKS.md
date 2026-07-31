@@ -4,7 +4,7 @@ The dev (Topher) drops notes in here about change requests, questions, things to
 
 To do:
 
-- 
+- Support plaintext viewing & editing of plaintext files (.txt, .json, .gitignore, and other known-plaintext filenames/patterns)
 
 ### Wishlist / maybe
 

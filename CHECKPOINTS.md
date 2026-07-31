@@ -100,12 +100,70 @@ Automatic, with manual available, and never a required message.
 
 The feature exists for people who will not remember to checkpoint. If it is manual-only, the moment it matters most (Claude just rewrote thirty files) is precisely the moment nobody was thinking about version control.
 
-But not on a timer either. A history of identical ten-minute snapshots gives you nothing to aim a rollback at. Checkpoint on **meaningful boundaries**:
+**What goes in: everything, always.** There is no subset and no selection, ever. That is principle 2.
 
-1. **External changes settle.** MDE already watches the project root recursively and debounces to 2s (`watch-project` in `src/index.ts:1061`). Extend that: after a burst of external writes goes quiet for ~30s, checkpoint. This is the "Claude just finished doing a thing" signal, and it is most of the feature's value on its own.
-2. **Immediately before any restore.** Restore then becomes structurally lossless.
-3. **On folder close or app quit**, if anything is uncommitted.
-4. **Slow heartbeat** (30-60 min, only when something changed) as a backstop for edits made inside MDE.
+### The cadence rule
+
+There is one:
+
+> If it has been more than 10 minutes since the last checkpoint, and there are uncommitted changes, wait for a quiet period, then checkpoint everything.
+
+That yields exactly two guarantees, which is the whole spec:
+
+- **Checkpoint rate is bounded at roughly one per 10 minutes**, no matter who is writing or how much.
+- **Every boundary is a quiet moment**, so a checkpoint never captures a half-finished agent operation.
+
+The rule is deliberately source-agnostic. An earlier draft used a short settle window for external writes and a longer one for MDE's own edits, on the theory that agent output deserves eager capture and human typing does not. That collapses on the mixed case: you edit a paragraph in MDE, save it, and Claude then rewrites the same file. Which window applies? Answering it requires a conditional inside the rule, and a rule with a conditional inside it is one nobody can predict. Uniform beats locally optimal.
+
+**Accepted cost:** two distinct work sessions inside the same 10-minute window merge into a single checkpoint. Claude finishes a burst at T+2, starts another at T+9 that runs to T+25, and you get one checkpoint containing both, with no way to restore to the state between them. That is a real loss of granularity and it is worth paying. Bursts that close together are usually one logical task anyway, and the manual button covers "give me a restore point right now, before it tries the next thing."
+
+If the granularity turns out wrong in practice, the interval is the single knob, and it eventually becomes a friendly Settings choice ("save checkpoints: frequently / normally / rarely" mapping to 3 / 10 / 30 minutes). Not in v1.
+
+**Explicitly rejected: urgency escalation on volume** (checkpoint sooner when more files or more lines changed). It is not merely unnecessary complexity, it points the wrong way. A checkpoint is valuable only as a coherent restore target, and volume says nothing about coherence; quiet does. Worse, escalating on volume means splitting large bursts, and mid-burst states are the worst possible restore targets: Claude halfway through a rename across twelve files gives you a folder matching no intention anyone ever had. The rule would fire hardest exactly where its output is least useful. It also fails the reason-about test, since "why did it checkpoint there" would have an answer involving arithmetic against a tuned function.
+
+**Explicitly rejected: using the Git index as a debounce buffer** (stage on change, commit later with the stage-time author date). The mechanism works. `git add` really does write blobs to the object database, and the author date is settable. The problem is what it costs: if the app is force-quit between stage and commit, real content sits in `.git/objects`, referenced by the index, present in no commit, invisible to the UI, and unreachable by any action the UI offers. Recovering it needs Git plumbing knowledge that this user does not have. The only thing staging buys over an in-memory `lastCommitAt` variable is durability into a state we cannot explain or escape. See "the index is transient" below.
+
+### Detection: poll status, gate on the watcher
+
+Change detection derives from `statusMatrix`, not from watcher events.
+
+The reason is correctness, not taste. **`statusMatrix` already excludes gitignored files, and watcher events do not.** If the settle window were driven by watcher events, any frequently-rewritten ignored file would reset it forever: `.obsidian/workspace.json` while Obsidian is open, Dropbox or iCloud sync traffic, a build watcher touching `node_modules`. Real changes would then sit uncommitted indefinitely while the badge showed them, with no visible cause. That failure is silent and environment-dependent, which is the worst combination to debug from a user's bug report. Deriving from status deletes it rather than mitigating it.
+
+The two mechanisms are good at different things. The watcher is cheap but unreliable (missed events, null filenames, platform quirks). Status is expensive but authoritative. So the watcher is demoted to a **dirty-flag gate** and nothing more:
+
+```
+watcher fires (any file, no filtering) -> sawChange = true
+```
+
+That is its entire job. No debounce timer, no gitignore check, no `.git` filtering, no null-filename handling, because a false positive now costs exactly one wasted status call. Filtering the watcher by gitignore drops from a correctness requirement to an optional optimization.
+
+The loop:
+
+```
+if (now - lastCommitAt < 10min)
+    sleep until lastCommitAt + 10min          // zero cost, and this is most of the time
+
+// eligible
+every 60s:
+    if (!sawChange) continue                  // no status call when nothing is happening
+    sawChange = false
+    const status = statusMatrix()
+    if (status is empty) continue             // guard: never commit nothing
+    const sig = signature(status)
+    if (sig === lastSig) -> CHECKPOINT
+    lastSig = sig
+```
+
+The poll interval doubles as the settle window, so 60s of no net change *is* the quiet signal and there is no second timer. One constant instead of two. Comparing net change is also slightly better than watcher-based quiet: a file written and then reverted correctly counts as nothing having happened.
+
+**The signature trap.** `statusMatrix`'s workdir field is a coarse enum (absent / same as HEAD / different), **not** a content hash. So if Claude writes `chapter-4.md` at T and writes *different* content to the same file at T+30s, both polls produce the identical row `[chapter-4.md, 1, 2, 1]`, the quiet detector sees matching signatures, and it commits mid-burst. That is precisely the outcome the settle window exists to prevent. Fix: the status result already names the non-clean files, and there are usually few, so `stat` just those and fold `mtime` and `size` into the signature. Fast path preserved, hole closed.
+
+### The two rules that are not cadence
+
+These are safety, not pacing, and they survive independently of everything above:
+
+- **Immediately before any restore.** This is what makes restore lossless, which is principle 1. Without it, restoring over uncommitted work destroys that work and the append-only guarantee collapses.
+- **On folder close and app quit**, if anything is uncommitted. This matters *more* under the 10-minute rule, not less, because that rule can legitimately leave up to ten minutes of work uncaptured. Quit-time capture gets the tail.
 
 Manual **Save checkpoint** stays for the "I am about to try something risky" moment, which is exactly when a person actually wants to name something.
 
@@ -137,7 +195,7 @@ Icon: `bi-clock-history`. Not `bi-git` and not a branch icon. A branch icon says
 
 States: gray when there is no repo or the repo is read-only; normal with a red badge showing the changed-file count when there are uncommitted changes; normal and unbadged when everything is checkpointed.
 
-The badge needs the change count even when the panel is closed, so status runs in the main process on the debounced watcher event and is cached.
+The badge needs the change count even when the panel is closed. It reuses the same cached status the auto-checkpoint poller computes rather than running its own, so opening the panel is free and there is exactly one place that knows what has changed.
 
 ### The panel
 
@@ -297,13 +355,15 @@ Types go in `src/types.ts` alongside the existing shared types, and the bridge m
 
 **isomorphic-git has no `add -A`.** You must walk `statusMatrix` yourself and call `add` for modified and new files and `remove` for deleted ones. This is the single most likely place to silently drop deletions from a checkpoint.
 
-**Verify `statusMatrix` honors `.gitignore`.** It should apply ignore rules to untracked files, but confirm it, and if ignored files leak through, filter with `isIgnored`.
+**The index is transient.** Populate it, commit, done, inside one operation. It is never left dirty between operations. Anything else creates a third state alongside the working tree and HEAD, which is the exact concept this feature exists to hide, and it produces content that survives a crash while being invisible to the UI. It also breaks Claude Code if it happens to run `git status` in the same folder, and invites `index.lock` contention.
 
-**The recursive watcher will see `.git/` writes.** `watch-project` (`src/index.ts:1064`) currently discards the changed filename entirely and notifies on any event. Committing writes to `.git/`, which fires the watcher, which could trigger another checkpoint: an infinite loop. Filter changed paths under `.git/` out of the trigger before any of this ships. This is a prerequisite, not a detail.
+**Verify `statusMatrix` honors `.gitignore`.** This is load-bearing, not a nicety: the whole detection design depends on ignored files never appearing in a status result. It should apply ignore rules to untracked files, but confirm it early, and if ignored files leak through, filter with `isIgnored` before anything downstream sees the result.
+
+**The `.git/` write loop is structurally prevented, not filtered.** Committing writes to `.git/`, the recursive watcher sees it, and `sawChange` goes true. That costs one status call, which returns empty, so nothing happens. `lastCommitAt` was also just updated, so the poller is not even eligible. Two independent reasons it cannot loop, and neither requires the watcher to know what a path is. (Separately, `project-files-changed` still fires the sidebar refresh on `.git/` churn. That is pre-existing and harmless, but our own commits make it more frequent, so filtering it is a reasonable optional cleanup. Decide it deliberately: that event has another consumer with different needs.)
 
 **Whole-tree restore is the fiddliest operation.** Walk the tree at the target commit, write every blob to the working directory, and then delete files that exist now but did not exist then. Forgetting the deletion half yields a union of both states, which is worse than either.
 
-**Status must never run on the render path.** Main process, debounced, cached, pushed to the renderer as an event. If it turns out slow on real folders, move it to a `utilityProcess` rather than optimizing in place.
+**Status must never run on the render path.** One computation in the main process, gated by `sawChange`, cached, and pushed to the renderer as an event. The poller, the badge, and the changed-files panel all read that one cached result. If it turns out slow on real folders, move it to a `utilityProcess` rather than optimizing in place.
 
 ## Testing
 
@@ -321,14 +381,21 @@ Coverage to write alongside each phase:
 - Restore-file writes old content and leaves a new checkpoint on top.
 - Restore-all deletes files that did not exist at the target commit.
 - Restore into a dirty open tab raises the existing red conflict banner.
-- Auto-checkpoint fires after external changes settle, and does **not** fire in a loop from its own `.git` writes.
+- Auto-checkpoint does **not** fire while less than the interval has passed since the last one.
+- Auto-checkpoint fires once eligible, changes are pending, and the signature is unchanged across two polls.
+- Auto-checkpoint does **not** fire mid-burst: rewrite the same file with *different* content between two polls and assert no commit. This is the coarse-enum trap above and it is the test most likely to catch a regression.
+- Churn in a gitignored file neither triggers a checkpoint nor stalls one that is due.
+- A commit does not cause a second checkpoint from its own `.git/` writes.
+- Quit with pending changes captures them.
 - Diff output for an added paragraph, a deleted paragraph, and a word-level edit.
+
+The interval and poll constants must be injectable so tests do not wait ten minutes. Read them from an override the test harness can set, alongside the existing `--test-headless` flag handling.
 
 ## Build order
 
 Each phase ends somewhere shippable.
 
-**Phase 0: watcher fix.** Filter `.git/` out of `watch-project`. Prerequisite for everything else.
+**Phase 0: watcher gate.** Give `watch-project` (`src/index.ts:1061`) a `sawChange` flag the main process can read and clear. No filtering and no debounce changes, since the poller does the real work. ~20 lines.
 
 **Phase 1: read-only plumbing.** `src/git/repo.ts` and `status.ts`, the four attach states, the tab with its badge, and the changed-files list. No writes at all. Already useful: the user can see what Claude touched. ~400 lines.
 
@@ -336,7 +403,7 @@ Each phase ends somewhere shippable.
 
 **Phase 3: manual checkpoints and history.** The button, deterministic message generation, the history list, per-commit file lists. This is the first genuinely complete slice. ~350 lines.
 
-**Phase 4: auto-checkpoints.** The settle-detector on the existing watcher, quit and close triggers, the heartbeat, and the auto/manual distinction in the list. Small and high-value. ~150 lines.
+**Phase 4: auto-checkpoints.** The eligibility gate, the 60s status poll, the signature comparison including `mtime`/`size` of changed files, the quit and close triggers, and the auto/manual distinction in the list. Two constants and roughly fifteen lines of logic, plus the tests that pin it down. Small and high-value. ~150 lines.
 
 **Phase 5: diff view, line-level.** The read-only diff tab, jsdiff line diffing, wired from both the changed-files list and commit details. ~300 lines.
 
@@ -358,4 +425,5 @@ Roughly 2,200 lines plus tests. Phase 7 is close to half the perceived quality o
 - Should the diff view be a tab or an overlay? Tab reuses existing machinery; overlay is easier to dismiss.
 - Does an auto-checkpoint deserve a toast, or is that noise? Leaning toward a toast for the first one in a session only.
 - What does the panel show for a foreign repo with 40,000 commits? Needs pagination in `vc-history` from the start, hence the `before` parameter.
-- Is a 30s settle window right for the auto-trigger? Probably needs tuning against a real Claude Code session.
+- Are 10 minutes and 60 seconds the right two constants? Needs tuning against a real Claude Code session, but nothing is load-bearing here. Even a 30-minute cadence would beat what these users have today, which is nothing, so there is a lot of slack.
+- How expensive is `statusMatrix` on a realistic folder (a few hundred Markdown files, plus whatever else is lying around)? Measure before assuming the `sawChange` gate is enough.

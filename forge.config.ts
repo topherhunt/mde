@@ -11,6 +11,7 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 
 import { mainConfig, externalPackages } from './webpack.main.config';
 import { rendererConfig } from './webpack.renderer.config';
@@ -85,6 +86,38 @@ const config: ForgeConfig = {
       for (const dir of collectRuntimeDeps(externalPackages, projectRoot)) {
         const dest = path.join(buildPath, path.relative(projectRoot, dir));
         fs.cpSync(dir, dest, { recursive: true, dereference: true });
+      }
+    },
+
+    // Repair the macOS ad-hoc code signature, then PROVE it is valid.
+    //
+    // FusesPlugin ad-hoc signs the bundle during `packageAfterCopy` (it must --
+    // flipping fuses rewrites the Mach-O, and arm64 refuses to run unsigned code).
+    // But packager then keeps working on the bundle: it renames the helper apps
+    // (`Electron Helper.app` -> `MDE Helper.app`) and rewrites Info.plist to inject
+    // the ElectronAsarIntegrity hash our EnableEmbeddedAsarIntegrityValidation fuse
+    // needs. The signature is left describing a bundle that no longer exists, and
+    // `codesign --verify` reports "invalid Info.plist (plist or signature have been
+    // modified)". See electron/forge#3757 -- closed as not planned, so it is ours.
+    //
+    // This matters far more than it looks. A missing signature just makes Gatekeeper
+    // say "unidentified developer", and the user can still click Open Anyway in
+    // System Settings. A BROKEN signature makes it say "MDE is damaged and can't be
+    // opened. You should move it to the Trash." -- with no override button at all,
+    // because macOS is reporting tampering, not unknown provenance. The only way out
+    // is `xattr -dr com.apple.quarantine`, which is not a thing we can ask users to do.
+    //
+    // Runs for `make`, `package`, and `pretest` alike, since postPackage is part of
+    // the package step. Guarded on darwin: `codesign` does not exist on the Windows
+    // runner, which builds via the same `npm run release`.
+    postPackage: async (_forgeConfig, { platform, outputPaths }) => {
+      if (platform !== 'darwin') return;
+      for (const outputPath of outputPaths) {
+        const appPath = path.join(outputPath, 'MDE.app');
+        execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' });
+        // Fail the build loudly rather than shipping a "damaged" app. Without this
+        // the breakage is invisible until it reaches a user's Downloads folder.
+        execFileSync('codesign', ['--verify', '--deep', '--strict', appPath], { stdio: 'inherit' });
       }
     },
   },

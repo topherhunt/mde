@@ -3,6 +3,7 @@ import * as asar from '@electron/asar';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { execFileSync, spawnSync } from 'child_process';
 
 // ---------------------------------------------------------------------------
 // Packaged-app guard: the webpack `externals` must be require-able from app.asar
@@ -107,5 +108,46 @@ test.describe('Packaged app runtime dependencies', () => {
       const resolved = require.resolve(spec, { paths: [extractDir] });
       expect(fs.statSync(resolved).size).toBeGreaterThan(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gatekeeper guard: the packaged .app's code signature must be internally valid
+//
+// The other class of bug that only exists in the artifact. A BROKEN signature is
+// worse than no signature: macOS reports it as tampering ("MDE is damaged and
+// can't be opened. You should move it to the Trash.") with no Open Anyway button,
+// leaving `xattr -dr com.apple.quarantine` as the only escape. forge.config.ts's
+// postPackage hook re-signs to prevent this; these tests are what notice if the
+// hook stops working or is removed.
+// ---------------------------------------------------------------------------
+
+test.describe('Packaged app code signature', () => {
+  test.skip(process.platform !== 'darwin', 'codesign is macOS-only');
+
+  // <out>/MDE-darwin-arm64/MDE.app -- two levels up from Contents/Resources/app.asar.
+  const appPath = () => path.resolve(findPackagedAsar(), '..', '..', '..');
+
+  test('the .app bundle passes strict signature verification', () => {
+    // Throws (failing the test) with codesign's own stderr on an invalid signature,
+    // e.g. "invalid Info.plist (plist or signature have been modified)".
+    expect(() => {
+      execFileSync('codesign', ['--verify', '--deep', '--strict', appPath()], { stdio: 'pipe' });
+    }).not.toThrow();
+  });
+
+  test('the signature seals Info.plist, so the ElectronAsarIntegrity hash is covered', () => {
+    // The specific failure mode of electron/forge#3757: signing happens before
+    // packager rewrites Info.plist, so the plist ends up outside the seal and
+    // codesign reports `Info.plist=not bound`. --verify catches this today, but
+    // assert it directly so the diagnosis is in the test output, not just a
+    // generic verification failure.
+    // codesign -dvvv writes its report to STDERR, not stdout.
+    const result = spawnSync('codesign', ['-dvvv', appPath()], { encoding: 'utf8' });
+    expect(result.error, 'could not run codesign').toBeUndefined();
+    const report = result.stderr;
+    expect(report, 'codesign -dvvv produced no report').toContain('CodeDirectory');
+    expect(report).not.toContain('Info.plist=not bound');
+    expect(report).toMatch(/Info\.plist entries=\d+/);
   });
 });
