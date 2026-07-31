@@ -185,7 +185,10 @@ body {
 .sidebar-content {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 0;
+  /* No padding at the TOP: this is the scrollport for the sticky .tree-root-header, and
+     any top padding here becomes a transparent band above the pinned header that rows
+     visibly scroll through. */
+  padding: 0 0 4px;
 }
 
 .sidebar-empty {

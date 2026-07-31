@@ -4,10 +4,7 @@ The dev (Topher) drops notes in here about change requests, questions, things to
 
 To do:
 
-- [x] The sidebar file explorer's header row (folder name + action buttons) should be sticky at the top of the scroll; only the actual folders/files container below that should scroll.
-- [ ] The File Explorer sidebar sticky header looks good, but there's a bit of a transparent gap above it, so the scrolling file/folder name text bleeds through above it, kind of behind it as it scrolls up, in a gap of ~3 pixels high. Eliminate that gap please. 
-- [ ] If you have a list with a folded item that contains sub-items, which are hidden obviously, and then you have your cursor on the list item that's the next sibling after the folded one, and you press tab, it moves it into the... It makes it another child of the folded list. This is a case where we should auto-unfold that list because we've just moved the current item into the sublist, so it forces it to unfold so that it doesn't just seem to have disappeared. 
-- [ ] Similarly, if you have a folded list and you place your cursor At the end of the text of that folded list, and then you press enter, it creates an initial child within the folded list, but it doesn't expand the folded list. What I think would be ideal, even though it's a bit counterintuitive and maybe a bit complex, but please advise me on how complex you think it'll be and whether you think it's worth it. If you have a folded list and you place the cursor at the end of the text of that folded list item, in other words, the cursor is right before the fold icon, and you press enter, it just creates a sibling below the folded content, like after the folded content. So the cursor just jumps over all of that folded stuff and creates a sibling of the folded item. Same as if it had no folded content and no sub-items at all. But note that if you unfold, if you place the cursor in the same place at the end of the folded list item and then you unfold and then you press enter, it should create a first child within the list item. Does this make sense? 
+- 
 
 ### Wishlist / maybe
 

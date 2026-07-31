@@ -2266,6 +2266,68 @@ test.describe('Fold stability', () => {
     await expect(editor.getByText('Child item')).not.toBeVisible();
   });
 
+  test('Tab on the item below a folded item unfolds it instead of hiding the cursor', async () => {
+    const { editor } = await openFoldedList('- Parent item\n    - Child item\n- Below\n');
+
+    // Indenting "Below" makes it a child of the folded item -- it would vanish mid-edit.
+    await editor.locator('li', { hasText: 'Below' }).locator('> p').first().click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(200);
+
+    // The fold released, so both the pre-existing child and the newly indented item show.
+    await expect(editor.locator('li.folded')).toHaveCount(0);
+    await expect(editor.locator('.fold-badge')).toHaveCount(0);
+    await expect(editor.getByText('Child item')).toBeVisible();
+    await expect(editor.getByText('Below')).toBeVisible();
+
+    const top = page.locator('.tiptap > ul > li');
+    await expect(top).toHaveCount(1);
+    await expect(top.nth(0).locator('> ul > li')).toHaveCount(2);
+  });
+
+  test('Enter at the end of a folded item creates a sibling below the folded subtree', async () => {
+    const { editor } = await openFoldedList('- Parent item\n    - Child item\n- Below\n');
+
+    await editor.locator('li', { hasText: 'Parent item' }).locator('> p').first().click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('New sibling');
+    await page.waitForTimeout(200);
+
+    // The new item is a top-level sibling sitting between the folded item and "Below" --
+    // NOT a first child inside the hidden sublist.
+    const top = page.locator('.tiptap > ul > li');
+    await expect(top).toHaveCount(3);
+    await expect(top.nth(0)).toContainText('Parent item');
+    await expect(top.nth(1)).toHaveText('New sibling');
+    await expect(top.nth(2)).toContainText('Below');
+    // And the fold survived untouched.
+    await expect(editor.locator('.fold-badge')).toHaveCount(1);
+    await expect(editor.getByText('Child item')).not.toBeVisible();
+  });
+
+  test('Enter at the end of an UNFOLDED parent item still creates a first child', async () => {
+    const { editor } = await openFoldedList('- Parent item\n    - Child item\n- Below\n');
+
+    await editor.locator('li', { hasText: 'Parent item' }).locator('> p').first().click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('ControlOrMeta+.'); // unfold
+    await expect(editor.locator('li.folded')).toHaveCount(0);
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('New child');
+    await page.waitForTimeout(200);
+
+    const top = page.locator('.tiptap > ul > li');
+    await expect(top).toHaveCount(2);
+    const children = top.nth(0).locator('> ul > li');
+    await expect(children).toHaveCount(2);
+    await expect(children.nth(0)).toHaveText('New child');
+    await expect(children.nth(1)).toContainText('Child item');
+  });
+
   test('folding does not mark a clean buffer dirty', async () => {
     await openFoldedList('- Parent item\n    - Child item\n- Below\n');
 
@@ -3792,5 +3854,30 @@ test.describe('Sidebar layout', () => {
     expect(offsets.scrolled).toBeGreaterThan(0); // the list really did scroll
     expect(offsets.after).toBeLessThanOrEqual(offsets.before + 1); // header did not scroll away
     await expect(header).toBeVisible();
+  });
+
+  test('the pinned header sits flush with the top of the scroll area, with no gap above it', async () => {
+    // The scrollport's own padding-top became a transparent band ABOVE the pinned header
+    // that file rows visibly scrolled through.
+    ({ app, page } = await launchApp());
+    const tmpDir = makeTmpDir();
+    for (let i = 0; i < 60; i++) {
+      fs.writeFileSync(path.join(tmpDir, `file-${String(i).padStart(2, '0')}.md`), `# ${i}\n`);
+    }
+    await app.evaluate(({ BrowserWindow }, root) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
+    }, tmpDir);
+
+    await expect(page.locator('.tree-root-header')).toBeVisible({ timeout: 5000 });
+
+    const gap = await page.evaluate(async () => {
+      const scroller = document.querySelector('.sidebar-content') as HTMLElement;
+      const head = document.querySelector('.tree-root-header') as HTMLElement;
+      scroller.scrollTop = 300;
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      return head.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    });
+
+    expect(gap).toBe(0);
   });
 });

@@ -338,9 +338,24 @@ const UnifiedListItem = ListItem.extend({
           const atParaEnd = $from.pos === $from.end(liDepth + 1);
 
           if (atParaEnd) {
+            const schema = state.schema;
+            // A FOLDED item acts as if it had no children at all: the cursor is sitting
+            // right before the "..." badge, so Enter puts a SIBLING below the whole folded
+            // subtree rather than a first child inside content the user can't see.
+            // Unfold first and the branch below runs instead, giving the first child back.
+            if (li.attrs.folded) {
+              const newItem = schema.nodes.listItem.create(
+                { checked: isTask ? false : null },
+                schema.nodes.paragraph.create()
+              );
+              const insertPos = $from.after(liDepth);
+              const tr = state.tr.insert(insertPos, newItem);
+              tr.setSelection(TextSelection.create(tr.doc, insertPos + 2));
+              editor.view.dispatch(tr);
+              return true;
+            }
             const para = li.firstChild!;
             const sublistStart = $from.before(liDepth) + 1 + para.nodeSize;
-            const schema = state.schema;
             const newItem = schema.nodes.listItem.create(
               { checked: isTask ? false : null },
               schema.nodes.paragraph.create()
@@ -1046,6 +1061,20 @@ function isFoldable(doc: any, node: any, pos: number): boolean {
   return false;
 }
 
+// The document span a folded node hides -- its sublist, or the blocks under a heading.
+// The node's own first line (the one that stays visible) is never part of it.
+function hiddenRange(doc: any, node: any, pos: number): { from: number; to: number } | null {
+  if (node.type.name === 'heading') return headingFoldRange(doc, pos);
+  if (node.type.name === 'listItem' && listItemHasSublist(node)) {
+    return { from: pos + 1 + (node.firstChild?.nodeSize ?? 0), to: pos + node.nodeSize };
+  }
+  return null;
+}
+
+function selectionInside(selection: any, range: { from: number; to: number }): boolean {
+  return selection.from < range.to && selection.to > range.from;
+}
+
 // Fold flags live ON the nodes (a `folded` attribute), not in a plugin-held Set of
 // document positions. Positions are only meaningful for the doc that produced them:
 // moving a list item (Cmd+Alt+Up) or splitting one (Enter at the start of a folded item)
@@ -1080,11 +1109,8 @@ function setFolded(view: any, pos: number, folded: boolean): boolean {
     // selection in a display:none block. (Reachable via the caret, which folds whatever
     // is under the pointer without moving the cursor first.) Park it on the folded line.
     const isHeading = node.type.name === 'heading';
-    const hidden = isHeading
-      ? headingFoldRange(view.state.doc, pos)
-      : { from: pos + 1 + (node.firstChild?.nodeSize ?? 0), to: pos + node.nodeSize };
-    const { from, to } = view.state.selection;
-    if (hidden && from < hidden.to && to > hidden.from) {
+    const hidden = hiddenRange(view.state.doc, node, pos);
+    if (hidden && selectionInside(view.state.selection, hidden)) {
       const line = isHeading ? node : node.firstChild;
       const end = pos + (isHeading ? 1 : 2) + (line?.content.size ?? 0);
       tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size))));
@@ -1306,16 +1332,23 @@ const CodeFolding = Extension.create({
             return { collapsed: collectFolded(tr.doc), hover: hoverMeta ?? null };
           },
         },
-        // A node can stop being foldable while it's folded (its sublist gets deleted, or
-        // the blocks under a heading are removed). Clear the stale flag so no invisible
-        // fold state lingers on it.
+        // Two ways a fold flag goes stale, both cleared here:
+        // (1) The node stops being foldable (its sublist gets deleted, or the blocks under
+        //     a heading are removed) -- no invisible fold state should linger on it.
+        // (2) The cursor ends up INSIDE the hidden range. Tab on the item below a folded
+        //     one sinks it into that folded sublist, so the line the user is typing on
+        //     would just disappear. Unfold instead: whatever the cursor is in stays visible.
         appendTransaction(transactions, _oldState, newState) {
-          if (!transactions.some(t => t.docChanged)) return null;
+          if (!transactions.some(t => t.docChanged || t.selectionSet)) return null;
           const { collapsed } = foldKey.getState(newState);
           let tr = null;
           for (const pos of collapsed) {
             const node = newState.doc.nodeAt(pos);
-            if (!node || isFoldable(newState.doc, node, pos)) continue;
+            if (!node) continue;
+            if (isFoldable(newState.doc, node, pos)) {
+              const hidden = hiddenRange(newState.doc, node, pos);
+              if (!hidden || !selectionInside(newState.selection, hidden)) continue;
+            }
             tr = tr || newState.tr;
             // Attribute-only markup changes preserve node size, so earlier edits in this
             // same transaction never invalidate the positions still to come.
