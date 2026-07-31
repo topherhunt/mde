@@ -201,6 +201,13 @@ body {
 }
 
 .tree-root-header {
+  /* Pinned to the top of .sidebar-content's scrollport so the project name and its
+     New File / New Folder / Collapse All buttons stay reachable in a long tree.
+     Needs an opaque background -- rows scroll underneath it. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -811,13 +818,19 @@ body {
   outline-offset: 2px;
 }
 
-/* --- Code folding (Cmd+. on list items with children) --- */
+/* --- Code folding (Cmd+. on a list item with children, or on a heading) --- */
 .editor-content .tiptap li.folded > ul,
 .editor-content .tiptap li.folded > ol {
   display: none;
 }
 
-.editor-content .tiptap li.folded {
+/* A heading's section isn't nested inside it, so the blocks under a folded heading
+   are hidden one by one (decorated with .fold-hidden) rather than by one wrapper. */
+.editor-content .tiptap .fold-hidden {
+  display: none;
+}
+
+.editor-content .tiptap .folded {
   position: relative;
 }
 
@@ -854,7 +867,7 @@ body {
 
 /* Gray "fold this" caret shown on hover over a foldable (but not folded) list item.
    Positioned where the blue folded caret sits; clicking it folds the item. */
-.editor-content .tiptap li.fold-hoverable {
+.editor-content .tiptap .fold-hoverable {
   position: relative;
 }
 
@@ -874,6 +887,18 @@ body {
 
 .editor-content .tiptap .fold-caret:hover {
   opacity: 1;
+}
+
+/* A top-level heading has no indent to hang a caret in -- at the gutter offset the list
+   items use it would land on the sidebar. So a heading's caret sits inline after its
+   text, in the same spot the "..." badge takes once the section is folded. */
+.editor-content .tiptap .fold-caret-inline {
+  position: relative;
+  left: auto;
+  top: auto;
+  display: inline-block;
+  margin-left: 0.4rem;
+  vertical-align: middle;
 }
 
 .editor-content .tiptap li[data-checked].fold-hoverable .fold-caret {

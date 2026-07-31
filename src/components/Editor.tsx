@@ -15,7 +15,7 @@ import { TextSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, EditorProps as PMEditorProps } from '@tiptap/pm/view';
 import { Fragment, DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { Tab } from '../types';
-import { splitLooseLists, cleanParsedListHtml } from '../utils/markdown';
+import { markdownToHtml } from '../utils/markdown';
 import TableMenu from './TableMenu';
 
 // Override tiptap-markdown's text serializer which blindly converts all < and >
@@ -997,10 +997,18 @@ const JoinAdjacentLists = Extension.create({
   },
 });
 
+// Dirty tracking compares this, not the raw doc JSON: `folded` is view state stored on
+// the node, so folding must not make a clean buffer look edited (nor an edited one clean).
+export function docSignature(doc: any): string {
+  return JSON.stringify(doc.toJSON(), (key, value) => (key === 'folded' ? undefined : value));
+}
+
 export const foldKey = new PluginKey('codeFolding');
-const TOGGLE_FOLD = 'toggleFold';
+// Tags every transaction that changes a `folded` attribute. Two consumers care: the
+// fold-state persistence hook in this file, and the dirty-tracking baseline (a fold
+// must never mark a clean buffer dirty, nor a dirty buffer clean).
+export const FOLD_CHANGE = 'foldChange';
 const SET_FOLD_HOVER = 'setFoldHover';
-export const RESTORE_FOLDS = 'restoreFolds';
 
 // Platform-aware modifier label for shortcut hints in tooltips.
 const MOD_LABEL = (typeof window !== 'undefined' && window.mde?.platform === 'darwin') ? 'Cmd' : 'Ctrl';
@@ -1008,6 +1016,111 @@ const MOD_LABEL = (typeof window !== 'undefined' && window.mde?.platform === 'da
 function listItemHasSublist(node: any): boolean {
   return node.childCount > 1 &&
     (node.lastChild.type.name === 'bulletList' || node.lastChild.type.name === 'orderedList');
+}
+
+// The span of top-level blocks a folded heading hides: everything after it up to the
+// next heading of the same or larger rank (## stops at ## and #, not at ###). Returns
+// null when the heading has nothing under it -- i.e. it isn't foldable.
+function headingFoldRange(doc: any, pos: number): { from: number; to: number } | null {
+  const heading = doc.nodeAt(pos);
+  if (!heading || heading.type.name !== 'heading') return null;
+  const $pos = doc.resolve(pos);
+  if ($pos.depth !== 0) return null; // only top-level headings fold
+  const level = heading.attrs.level;
+  const from = pos + heading.nodeSize;
+  let to = from;
+  for (let i = $pos.index(0) + 1; i < doc.childCount; i++) {
+    const child = doc.child(i);
+    if (child.type.name === 'heading' && child.attrs.level <= level) break;
+    to += child.nodeSize;
+  }
+  return to > from ? { from, to } : null;
+}
+
+// A node is foldable only while it actually has something to hide. Deleting a folded
+// item's sublist (or the content under a folded heading) makes its `folded` attr stale;
+// the plugin's appendTransaction clears those.
+function isFoldable(doc: any, node: any, pos: number): boolean {
+  if (node.type.name === 'listItem') return listItemHasSublist(node);
+  if (node.type.name === 'heading') return headingFoldRange(doc, pos) !== null;
+  return false;
+}
+
+// Fold flags live ON the nodes (a `folded` attribute), not in a plugin-held Set of
+// document positions. Positions are only meaningful for the doc that produced them:
+// moving a list item (Cmd+Alt+Up) or splitting one (Enter at the start of a folded item)
+// rewrites the surrounding range, and a mapped position then points at whatever node
+// happens to sit there -- which is how a folded item silently unfolded and its "..."
+// badge reappeared on an unrelated sibling. An attribute travels with its node through
+// every transform. This walk just re-derives the position cache the decorations use.
+function collectFolded(doc: any): Set<number> {
+  const folded = new Set<number>();
+  doc.descendants((node: any, pos: number) => {
+    if (node.type.name === 'heading') {
+      if (node.attrs.folded) folded.add(pos);
+      return false;
+    }
+    if (node.type.name === 'listItem') {
+      if (node.attrs.folded) folded.add(pos);
+      return true;
+    }
+    return !node.isTextblock; // no fold flags live inside inline content
+  });
+  return folded;
+}
+
+// Set (or flip) the fold flag on one node. Not added to history: folding is a view
+// concern, so undo should step through the user's edits, not their folds.
+function setFolded(view: any, pos: number, folded: boolean): boolean {
+  const node = view.state.doc.nodeAt(pos);
+  if (!node) return false;
+  const tr = view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, folded });
+  if (folded) {
+    // Never leave the cursor inside content we just hid -- ProseMirror can't put a
+    // selection in a display:none block. (Reachable via the caret, which folds whatever
+    // is under the pointer without moving the cursor first.) Park it on the folded line.
+    const isHeading = node.type.name === 'heading';
+    const hidden = isHeading
+      ? headingFoldRange(view.state.doc, pos)
+      : { from: pos + 1 + (node.firstChild?.nodeSize ?? 0), to: pos + node.nodeSize };
+    const { from, to } = view.state.selection;
+    if (hidden && from < hidden.to && to > hidden.from) {
+      const line = isHeading ? node : node.firstChild;
+      const end = pos + (isHeading ? 1 : 2) + (line?.content.size ?? 0);
+      tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size))));
+    }
+  }
+  tr.setMeta(FOLD_CHANGE, true);
+  tr.setMeta('addToHistory', false);
+  view.dispatch(tr);
+  return true;
+}
+
+function toggleFold(view: any, pos: number): boolean {
+  const node = view.state.doc.nodeAt(pos);
+  return node ? setFolded(view, pos, !node.attrs.folded) : false;
+}
+
+// Positions of every currently folded node -- the shape App.tsx persists.
+export function getFoldedPositions(editor: any): Set<number> {
+  const fold = foldKey.getState(editor.state);
+  return fold ? fold.collapsed : new Set<number>();
+}
+
+// Restore a persisted fold set after a file load or external reload.
+export function applyFoldPositions(editor: any, positions: number[]): void {
+  if (!positions.length) return;
+  const { tr } = editor.state;
+  for (const pos of positions) {
+    const node = tr.doc.nodeAt(pos);
+    if (node && isFoldable(tr.doc, node, pos)) {
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, folded: true });
+    }
+  }
+  if (!tr.steps.length) return;
+  tr.setMeta(FOLD_CHANGE, true);
+  tr.setMeta('addToHistory', false);
+  editor.view.dispatch(tr);
 }
 
 // Fold state persistence uses markdown line numbers to identify folded items.
@@ -1032,31 +1145,53 @@ function stripInlineMarkdown(text: string): string {
     .trim();
 }
 
+type FoldTarget = { kind: 'listItem' | 'heading'; text: string };
+
+const LIST_MARKER_RE = /^([ \t]*)([-*+]|\d+[.)]) /;
+const HEADING_MARKER_RE = /^(#{1,6}) +/;
+const TASK_MARKER_RE = /^\[[ xX]\] +/;
+
+// What a markdown source line contributes to fold matching, or null when the line is
+// neither a heading nor a list item. The task checkbox is part of the marker, not the
+// text -- the editor node's textContent doesn't include it.
+function foldableLineTarget(line: string): FoldTarget | null {
+  const h = line.match(HEADING_MARKER_RE);
+  if (h) return { kind: 'heading', text: stripInlineMarkdown(line.slice(h[0].length)) };
+  const m = line.match(LIST_MARKER_RE);
+  if (m) return { kind: 'listItem', text: stripInlineMarkdown(line.slice(m[0].length).replace(TASK_MARKER_RE, '')) };
+  return null;
+}
+
+// The same identity, read off a document node.
+function foldableNodeTarget(node: any): FoldTarget | null {
+  if (node.type.name === 'heading') return { kind: 'heading', text: node.textContent.trim() };
+  if (node.type.name === 'listItem') {
+    const para = node.firstChild;
+    return para ? { kind: 'listItem', text: para.textContent.trim() } : null;
+  }
+  return null;
+}
+
 // Convert folded doc positions to markdown line numbers by serializing
-// the document and matching each folded item's text to its line.
+// the document and matching each folded node's text to its line.
 // Compares plain text (formatting stripped) so bold/italic/etc. don't break matching.
 export function foldPosToLineNumbers(editor: any, positions: Set<number>): number[] {
   if (!positions.size) return [];
   const md: string = editor.storage.markdown.getMarkdown();
   const lines = md.split('\n');
-  const markerRe = /^([ \t]*)([-*+]|\d+[.)]) /;
   const lineNumbers: number[] = [];
 
   for (const pos of positions) {
     const node = editor.state.doc.nodeAt(pos);
-    if (!node || node.type.name !== 'listItem') continue;
-    const para = node.firstChild;
-    if (!para) continue;
-    const text = para.textContent.trim();
+    const target = node ? foldableNodeTarget(node) : null;
+    if (!target) continue;
 
     for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(markerRe);
-      if (m) {
-        const lineText = stripInlineMarkdown(lines[i].substring(m[0].length));
-        if (lineText === text && !lineNumbers.includes(i + 1)) {
-          lineNumbers.push(i + 1); // 1-based
-          break;
-        }
+      if (lineNumbers.includes(i + 1)) continue;
+      const line = foldableLineTarget(lines[i]);
+      if (line && line.kind === target.kind && line.text === target.text) {
+        lineNumbers.push(i + 1); // 1-based
+        break;
       }
     }
   }
@@ -1064,41 +1199,76 @@ export function foldPosToLineNumbers(editor: any, positions: Set<number>): numbe
 }
 
 // Convert persisted markdown line numbers back to doc positions on load.
-// Walks the markdown to find list items at those lines, then matches them
-// to listItem nodes in the parsed document by their text content.
+// Walks the markdown to find the foldable line at each number, then matches it
+// to a node in the parsed document by kind + text content.
 // Compares plain text (formatting stripped) so bold/italic/etc. don't break matching.
 export function lineNumbersToFoldPositions(doc: any, markdown: string, lineNumbers: number[]): number[] {
   if (!lineNumbers.length) return [];
   const lines = markdown.split('\n');
-  const markerRe = /^([ \t]*)([-*+]|\d+[.)]) /;
-  const targetTexts = new Set<string>();
+  const targets: FoldTarget[] = [];
 
   for (const ln of lineNumbers) {
-    const line = lines[ln - 1]; // 1-based to 0-based
-    if (!line) continue;
-    const m = line.match(markerRe);
-    if (m) {
-      targetTexts.add(stripInlineMarkdown(line.substring(m[0].length)));
-    }
+    const target = foldableLineTarget(lines[ln - 1] ?? ''); // 1-based to 0-based
+    if (target) targets.push(target);
   }
+  if (!targets.length) return [];
 
   const positions: number[] = [];
-  const matched = new Set<string>();
-  doc.descendants((node: any, pos: number) => {
-    if (node.type.name !== 'listItem') return true;
-    const hasSublist = node.childCount > 1 &&
-      (node.lastChild.type.name === 'bulletList' || node.lastChild.type.name === 'orderedList');
-    if (!hasSublist) return true;
-    const para = node.firstChild;
-    if (!para) return true;
-    const text = para.textContent.trim();
-    if (targetTexts.has(text) && !matched.has(text)) {
+  const used = new Set<number>();
+  const match = (node: any, pos: number) => {
+    if (!isFoldable(doc, node, pos)) return;
+    const cand = foldableNodeTarget(node);
+    if (!cand) return;
+    const idx = targets.findIndex((t, i) => !used.has(i) && t.kind === cand.kind && t.text === cand.text);
+    if (idx >= 0) {
+      used.add(idx);
       positions.push(pos);
-      matched.add(text);
     }
-    return true;
+  };
+
+  doc.descendants((node: any, pos: number) => {
+    if (node.type.name === 'heading') {
+      match(node, pos);
+      return false;
+    }
+    if (node.type.name === 'listItem') {
+      match(node, pos);
+      return true;
+    }
+    return !node.isTextblock;
   });
   return positions;
+}
+
+// Whether a node is folded is stored ON the node. `rendered: false` keeps it out of the
+// DOM and the HTML round-trip entirely -- it's editor state, not document content, so it
+// never reaches the clipboard or a saved file. `keepOnSplit` stays at its default (true):
+// splitting a folded item hands the flag to the half that KEEPS the sublist (the lower
+// one), and the appendTransaction below clears it from the empty half that no longer has
+// anything to hide. That's what makes Enter at the start of a folded item leave the fold
+// intact instead of moving the "..." badge onto a new empty sibling.
+const FoldAttribute = Extension.create({
+  name: 'foldAttribute',
+  addGlobalAttributes() {
+    return [{
+      types: ['listItem', 'heading'],
+      attributes: { folded: { default: false, rendered: false } },
+    }];
+  },
+});
+
+// The position of the foldable node the cursor sits in: the innermost list item whose
+// own paragraph holds the cursor, or the heading it's inside. Null when neither.
+function foldTargetAtCursor(state: any): number | null {
+  const { $from } = state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    if ($from.node(d).type.name !== 'listItem') continue;
+    // Only the item the cursor is directly in -- not an ancestor whose child list it's in.
+    if ($from.depth !== d + 1 || $from.parent.type.name !== 'paragraph') return null;
+    return $from.before(d);
+  }
+  if ($from.parent.type.name === 'heading') return $from.before($from.depth);
+  return null;
 }
 
 const CodeFolding = Extension.create({
@@ -1106,22 +1276,14 @@ const CodeFolding = Extension.create({
   addKeyboardShortcuts() {
     return {
       'Mod-.': ({ editor }) => {
-        const { state } = editor;
-        const { $from } = state.selection;
-        // Find the innermost listItem the cursor is directly in (paragraph child)
-        for (let d = $from.depth; d > 0; d--) {
-          const node = $from.node(d);
-          if (node.type.name !== 'listItem') continue;
-          // Only fold if cursor is in this item's own paragraph, not in a child list
-          if ($from.depth !== d + 1 || $from.parent.type.name !== 'paragraph') break;
-          const hasSublist = node.childCount > 1 &&
-            (node.lastChild!.type.name === 'bulletList' || node.lastChild!.type.name === 'orderedList');
-          if (!hasSublist) return true;
-          const pos = $from.before(d);
-          editor.view.dispatch(state.tr.setMeta(TOGGLE_FOLD, pos));
-          return true;
-        }
-        return false;
+        const pos = foldTargetAtCursor(editor.state);
+        if (pos === null) return false;
+        const node = editor.state.doc.nodeAt(pos);
+        // Consume the keystroke even when there's nothing to fold, so it never
+        // propagates to the browser from inside a childless item or a bare heading.
+        if (!node || !isFoldable(editor.state.doc, node, pos)) return true;
+        toggleFold(editor.view, pos);
+        return true;
       },
     };
   },
@@ -1130,37 +1292,39 @@ const CodeFolding = Extension.create({
       new Plugin({
         key: foldKey,
         state: {
-          init() { return { collapsed: new Set<number>(), hover: null as number | null }; },
+          init(_config, state) { return { collapsed: collectFolded(state.doc), hover: null as number | null }; },
           apply(tr, value) {
-            const restorePositions = tr.getMeta(RESTORE_FOLDS) as number[] | undefined;
-            if (restorePositions) {
-              return { collapsed: new Set(restorePositions), hover: null };
-            }
-            const togglePos = tr.getMeta(TOGGLE_FOLD);
-            if (togglePos !== undefined) {
-              const next = new Set(value.collapsed);
-              if (next.has(togglePos)) next.delete(togglePos);
-              else next.add(togglePos);
-              return { collapsed: next, hover: null };
-            }
             // Hover position for the click-to-fold caret. Doesn't touch fold state.
             const hoverMeta = tr.getMeta(SET_FOLD_HOVER) as number | null | undefined;
-            if (hoverMeta !== undefined) {
+            if (!tr.docChanged) {
+              if (hoverMeta === undefined || hoverMeta === value.hover) return value;
               return { ...value, hover: hoverMeta };
             }
-            if (!tr.docChanged) return value;
-            const next = new Set<number>();
-            for (const oldPos of value.collapsed) {
-              const mapped = tr.mapping.map(oldPos);
-              try {
-                const $pos = tr.doc.resolve(mapped);
-                if ($pos.nodeAfter && $pos.nodeAfter.type.name === 'listItem') {
-                  next.add(mapped);
-                }
-              } catch { /* position no longer valid */ }
-            }
-            return { collapsed: next, hover: null };
+            // The doc changed, so the fold flags -- which live on the nodes -- are the
+            // only truth about what's folded. Re-read them instead of mapping positions.
+            // The hover caret's coordinates are stale after an edit, so it's dropped.
+            return { collapsed: collectFolded(tr.doc), hover: hoverMeta ?? null };
           },
+        },
+        // A node can stop being foldable while it's folded (its sublist gets deleted, or
+        // the blocks under a heading are removed). Clear the stale flag so no invisible
+        // fold state lingers on it.
+        appendTransaction(transactions, _oldState, newState) {
+          if (!transactions.some(t => t.docChanged)) return null;
+          const { collapsed } = foldKey.getState(newState);
+          let tr = null;
+          for (const pos of collapsed) {
+            const node = newState.doc.nodeAt(pos);
+            if (!node || isFoldable(newState.doc, node, pos)) continue;
+            tr = tr || newState.tr;
+            // Attribute-only markup changes preserve node size, so earlier edits in this
+            // same transaction never invalidate the positions still to come.
+            tr.setNodeMarkup(pos, undefined, { ...node.attrs, folded: false });
+          }
+          if (!tr) return null;
+          tr.setMeta(FOLD_CHANGE, true);
+          tr.setMeta('addToHistory', false);
+          return tr;
         },
         props: {
           handleDOMEvents: {
@@ -1170,29 +1334,25 @@ const CodeFolding = Extension.create({
               // Click on "..." badge widget
               if (target.classList.contains('fold-badge')) {
                 event.preventDefault();
-                const li = target.closest('li.folded');
-                if (li) {
-                  const pos = view.posAtDOM(li, 0) - 1;
-                  view.dispatch(view.state.tr.setMeta(TOGGLE_FOLD, pos));
-                }
+                const el = target.closest('.folded');
+                if (el) toggleFold(view, view.posAtDOM(el, 0) - 1);
                 return true;
               }
-              // Click in left padding area of folded li (where the caret is)
-              const li = target.closest('li.folded');
-              if (li) {
-                const liRect = li.getBoundingClientRect();
-                if (event.clientX < liRect.left) {
+              // Click in the left padding area of a folded node (where the caret is)
+              const el = target.closest('.folded');
+              if (el) {
+                const rect = el.getBoundingClientRect();
+                if (event.clientX < rect.left) {
                   event.preventDefault();
-                  const pos = view.posAtDOM(li, 0) - 1;
-                  view.dispatch(view.state.tr.setMeta(TOGGLE_FOLD, pos));
+                  toggleFold(view, view.posAtDOM(el, 0) - 1);
                   return true;
                 }
               }
               return false;
             },
-            // Track which foldable (not-yet-folded) list item the mouse is over so we
-            // can show a gray "fold this" caret to its left. Only the innermost item
-            // under the cursor is marked -- never its parents or children.
+            // Track which foldable (not-yet-folded) node the mouse is over so we can show
+            // a gray "fold this" caret to its left. Only the innermost list item under
+            // the cursor is marked -- never its parents or children.
             mousemove(view, event) {
               const fold = foldKey.getState(view.state);
               // While the pointer is on the caret itself, keep it shown -- recomputing here
@@ -1210,12 +1370,19 @@ const CodeFolding = Extension.create({
                 if (coords) {
                   const $pos = view.state.doc.resolve(coords.pos);
                   // Only the innermost list item under the pointer -- never its parents.
+                  let candidate: number | null = null;
                   for (let d = $pos.depth; d >= 1; d--) {
                     if ($pos.node(d).type.name === 'listItem') {
-                      const p = $pos.before(d);
-                      if (listItemHasSublist($pos.node(d)) && !fold.collapsed.has(p)) pos = p;
+                      candidate = $pos.before(d);
                       break;
                     }
+                  }
+                  if (candidate === null && $pos.parent.type.name === 'heading') {
+                    candidate = $pos.before($pos.depth);
+                  }
+                  if (candidate !== null && !fold.collapsed.has(candidate)) {
+                    const node = view.state.doc.nodeAt(candidate);
+                    if (node && isFoldable(view.state.doc, node, candidate)) pos = candidate;
                   }
                 }
               } catch { /* ignore */ }
@@ -1235,45 +1402,64 @@ const CodeFolding = Extension.create({
           decorations(state) {
             const { collapsed, hover } = foldKey.getState(state);
             const decos: Decoration[] = [];
+            const badge = (at: number) => {
+              decos.push(Decoration.widget(at, () => {
+                const span = document.createElement('span');
+                span.className = 'fold-badge';
+                span.textContent = '...';
+                return span;
+              }, { side: 1 }));
+            };
             for (const pos of collapsed) {
-              try {
-                const node = state.doc.nodeAt(pos);
-                if (!node || node.type.name !== 'listItem') continue;
+              const node = state.doc.nodeAt(pos);
+              if (!node) continue;
+              if (node.type.name === 'listItem') {
+                if (!listItemHasSublist(node)) continue;
                 decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'folded' }));
                 // "..." badge at end of the first paragraph's content
                 const para = node.firstChild;
-                if (para) {
-                  const badgePos = pos + 1 + para.nodeSize - 1;
-                  decos.push(Decoration.widget(badgePos, () => {
-                    const span = document.createElement('span');
-                    span.className = 'fold-badge';
-                    span.textContent = '...';
-                    return span;
-                  }, { side: 1 }));
+                if (para) badge(pos + 1 + para.nodeSize - 1);
+              } else if (node.type.name === 'heading') {
+                const range = headingFoldRange(state.doc, pos);
+                if (!range) continue;
+                decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'folded' }));
+                badge(pos + node.nodeSize - 1);
+                // A heading's content isn't nested inside it, so hide each block after it
+                // individually rather than by collapsing one wrapper.
+                let at = range.from;
+                while (at < range.to) {
+                  const child = state.doc.nodeAt(at);
+                  if (!child) break;
+                  decos.push(Decoration.node(at, at + child.nodeSize, { class: 'fold-hidden' }));
+                  at += child.nodeSize;
                 }
-              } catch { /* ignore */ }
+              }
             }
-            // Gray click-to-fold caret on the hovered (foldable, not-folded) item.
+            // Gray click-to-fold caret on the hovered (foldable, not-folded) node.
             if (hover !== null && !collapsed.has(hover)) {
-              try {
-                const node = state.doc.nodeAt(hover);
-                if (node && node.type.name === 'listItem' && listItemHasSublist(node)) {
-                  const hoverPos = hover;
-                  decos.push(Decoration.node(hoverPos, hoverPos + node.nodeSize, { class: 'fold-hoverable' }));
-                  decos.push(Decoration.widget(hoverPos + 1, (view) => {
-                    const span = document.createElement('span');
-                    span.className = 'fold-caret';
-                    span.setAttribute('data-tooltip', `Fold sub-list (${MOD_LABEL} + .)`);
-                    span.addEventListener('mousedown', (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      // TOGGLE_FOLD also clears the hover state, removing this caret.
-                      view.dispatch(view.state.tr.setMeta(TOGGLE_FOLD, hoverPos));
-                    });
-                    return span;
-                  }, { side: -1, key: `fold-caret-${hoverPos}` }));
-                }
-              } catch { /* ignore */ }
+              const node = state.doc.nodeAt(hover);
+              if (node && isFoldable(state.doc, node, hover)) {
+                const hoverPos = hover;
+                const isHeading = node.type.name === 'heading';
+                // A list item has the list's indent to its left to hang the caret in. A
+                // top-level heading has no such gutter (it would land on the sidebar), so
+                // its caret goes inline after the text -- exactly where the "..." badge
+                // will appear once it's folded.
+                const at = isHeading ? hoverPos + node.nodeSize - 1 : hoverPos + 1;
+                decos.push(Decoration.node(hoverPos, hoverPos + node.nodeSize, { class: 'fold-hoverable' }));
+                decos.push(Decoration.widget(at, (view) => {
+                  const span = document.createElement('span');
+                  span.className = isHeading ? 'fold-caret fold-caret-inline' : 'fold-caret';
+                  span.setAttribute('data-tooltip', `Fold ${isHeading ? 'section' : 'sub-list'} (${MOD_LABEL} + .)`);
+                  span.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // The resulting doc change also clears the hover, removing this caret.
+                    toggleFold(view, hoverPos);
+                  });
+                  return span;
+                }, { side: isHeading ? 1 : -1, key: `fold-caret-${hoverPos}` }));
+              }
             }
             if (!decos.length) return DecorationSet.empty;
             return DecorationSet.create(state.doc, decos);
@@ -1399,6 +1585,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
       MoveBlock,
       LineBoundaryNav,
       JoinAdjacentLists,
+      FoldAttribute,
       CodeFolding,
       Placeholder.configure({
         placeholder: 'Start writing...',
@@ -1436,8 +1623,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
         if (!firstNonBlank || !/^[ \t]*([-*+]|\d+[.)])\s/.test(firstNonBlank)) return false;
 
         const md = escapeBulletNumbers(dedented);
-        // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
-        const html = cleanParsedListHtml(editorRef.current!.storage.markdown.parser.parse(splitLooseLists(md)));
+        const html = markdownToHtml(editorRef.current!, md);
         const container = document.createElement('div');
         container.innerHTML = html;
         // preserveWhitespace must be FALSE (matching the file-load path): markdown-it
@@ -1513,22 +1699,20 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
     extensions,
     editorProps,
     onTransaction: ({ transaction: t, editor: e }) => {
-      if (loadedRef.current && t.getMeta('addToHistory') === false && t.docChanged) {
-        cleanDocRef.current = JSON.stringify(e.state.doc.toJSON());
+      // A fold changes the document (the flag is a node attribute) but not the FILE, so it
+      // must never re-baseline the clean snapshot -- doing so would mark a buffer with
+      // unsaved edits as clean. docSignature ignores the flag, so nothing needs re-reading.
+      if (loadedRef.current && t.getMeta('addToHistory') === false && t.docChanged && !t.getMeta(FOLD_CHANGE)) {
+        cleanDocRef.current = docSignature(e.state.doc);
       }
       // Persist fold state when it changes
-      if (t.getMeta(TOGGLE_FOLD) !== undefined || t.getMeta(RESTORE_FOLDS)) {
-        if (tab.filePath) {
-          const { collapsed } = foldKey.getState(e.state);
-          const lineNumbers = foldPosToLineNumbers(e, collapsed);
-          window.mde.setFoldState(tab.filePath, lineNumbers);
-        }
+      if (t.getMeta(FOLD_CHANGE) && tab.filePath) {
+        window.mde.setFoldState(tab.filePath, foldPosToLineNumbers(e, getFoldedPositions(e)));
       }
     },
     onUpdate: ({ editor: e }) => {
       if (loadedRef.current) {
-        const current = JSON.stringify(e.state.doc.toJSON());
-        onDirtyChange(current !== cleanDocRef.current);
+        onDirtyChange(docSignature(e.state.doc) !== cleanDocRef.current);
       }
     },
   });
@@ -1544,7 +1728,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
   const prevDirtyRef = useRef(tab.dirty);
   useEffect(() => {
     if (prevDirtyRef.current && !tab.dirty && editor) {
-      cleanDocRef.current = JSON.stringify(editor.state.doc.toJSON());
+      cleanDocRef.current = docSignature(editor.state.doc);
     }
     prevDirtyRef.current = tab.dirty;
   }, [tab.dirty, editor]);
@@ -1558,15 +1742,14 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
     if (!editor || loadedRef.current) return;
 
     if (tab.initialContent) {
-      // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
-      const html = cleanParsedListHtml(editor.storage.markdown.parser.parse(splitLooseLists(tab.initialContent)));
+      const html = markdownToHtml(editor, tab.initialContent);
       const doc = createNodeFromContent(html, editor.schema, { slice: false });
       const { tr } = editor.state;
       tr.replaceWith(0, tr.doc.content.size, (doc as any).content);
       tr.setMeta('addToHistory', false);
       editor.view.dispatch(tr);
       editor.commands.setTextSelection(0);
-      cleanDocRef.current = JSON.stringify(editor.state.doc.toJSON());
+      cleanDocRef.current = docSignature(editor.state.doc);
       loadedRef.current = true;
       return;
     }
@@ -1574,27 +1757,20 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
     if (!tab.filePath) return;
 
     window.mde.readFile(tab.filePath).then(async content => {
-      // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
-      const html = cleanParsedListHtml(editor.storage.markdown.parser.parse(splitLooseLists(content)));
+      const html = markdownToHtml(editor, content);
       const doc = createNodeFromContent(html, editor.schema, { slice: false });
       const { tr } = editor.state;
       tr.replaceWith(0, tr.doc.content.size, (doc as any).content);
       tr.setMeta('addToHistory', false);
       editor.view.dispatch(tr);
       editor.commands.setTextSelection(0);
-      cleanDocRef.current = JSON.stringify(editor.state.doc.toJSON());
+      cleanDocRef.current = docSignature(editor.state.doc);
       loadedRef.current = true;
 
       // Restore persisted fold state (line numbers -> doc positions)
       const savedLines = await window.mde.getFoldState(tab.filePath!);
       if (savedLines.length) {
-        const positions = lineNumbersToFoldPositions(editor.state.doc, content, savedLines);
-        if (positions.length) {
-          const foldTr = editor.state.tr;
-          foldTr.setMeta(RESTORE_FOLDS, positions);
-          foldTr.setMeta('addToHistory', false);
-          editor.view.dispatch(foldTr);
-        }
+        applyFoldPositions(editor, lineNumbersToFoldPositions(editor.state.doc, content, savedLines));
       }
     });
   }, [editor, tab.filePath]);

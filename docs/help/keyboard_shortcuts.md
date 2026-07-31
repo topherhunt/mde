@@ -40,7 +40,7 @@
 | Cmd + Enter | Cycle: Bullet / Unchecked Task / Checked Task |
 | Cmd + Alt + Up | Move Block Up |
 | Cmd + Alt + Down | Move Block Down |
-| Cmd + . | Toggle Fold (list items with children) |
+| Cmd + . | Toggle Fold (list item with children, or heading section) |
 | Cmd + Left / Right | To start/end of wrapped line, then of the paragraph or list item |
 | Cmd + Click | Follow a link (open a relative file in a new tab, or a URL in the browser) |
 | Tab | Indent List Item |

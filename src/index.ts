@@ -499,7 +499,15 @@ ipcMain.handle(
         currentHash = null; // file missing on disk -> allow (re)creating it
       }
       if (currentHash !== null && currentHash !== expectedHash) {
-        return { ok: false, conflict: true, mtimeMs: null, hash: currentHash };
+        // The file already holds exactly the bytes we were asked to write -- two of our own
+        // saves raced, or something else wrote identical content. Writing would be a no-op,
+        // so nothing can be lost: adopt the hash instead of crying conflict. (This does NOT
+        // weaken the guard; a real divergence still has a different hash.)
+        if (currentHash !== hashContent(content)) {
+          return { ok: false, conflict: true, mtimeMs: null, hash: currentHash };
+        }
+        const stats = await fs.promises.stat(filePath);
+        return { ok: true, conflict: false, mtimeMs: stats.mtimeMs, hash: currentHash };
       }
     }
     await fs.promises.writeFile(filePath, content, 'utf-8');

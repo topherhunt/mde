@@ -3,7 +3,7 @@ import { Tab } from '../types';
 import Sidebar from './Sidebar';
 import TabBar from './TabBar';
 import Toolbar from './Toolbar';
-import Editor, { foldKey, RESTORE_FOLDS, foldPosToLineNumbers, lineNumbersToFoldPositions } from './Editor';
+import Editor, { getFoldedPositions, applyFoldPositions, foldPosToLineNumbers, lineNumbersToFoldPositions } from './Editor';
 import ConflictBanner from './ConflictBanner';
 import FindBar from './FindBar';
 import LinkBar from './LinkBar';
@@ -224,6 +224,29 @@ export default function App() {
 
   const activeTab = state.tabs[state.activeTabIndex] || null;
 
+  // The hash we last read from / wrote to each path, recorded SYNCHRONOUSLY. `tab.diskHash`
+  // holds the same value, but it only becomes visible once React commits the dispatch --
+  // and a callback created before that commit (a queued autosave, an in-flight
+  // `file-changed` event) would otherwise quote a pre-save hash and get its own write
+  // refused as a "conflict" with a file only we ever touched.
+  const diskHashRef = useRef(new Map<string, string | null>());
+  const recordDiskHash = useCallback((filePath: string, hash: string | null) => {
+    diskHashRef.current.set(filePath, hash);
+  }, []);
+  const knownDiskHash = useCallback((filePath: string, fallback: string | null) => (
+    diskHashRef.current.has(filePath) ? diskHashRef.current.get(filePath)! : fallback
+  ), []);
+
+  // Latest tab list, readable from callbacks that were created in an earlier render.
+  const tabsRef = useRef(state.tabs);
+  tabsRef.current = state.tabs;
+  // Only one write per buffer may be in flight; a second would quote the first's
+  // pre-write hash.
+  const savingRef = useRef(false);
+  // Lets saveActiveTab re-arm autosave without depending on triggerAutosave (which is
+  // defined below it, in terms of it).
+  const triggerAutosaveRef = useRef<() => void>(() => {});
+
   useEffect(() => {
     const editor = activeTab ? editorsRef.current.get(activeTab.id) || null : null;
     setActiveEditor(editor);
@@ -275,6 +298,7 @@ export default function App() {
       conflict: false,
       tentative,
     };
+    recordDiskHash(filePath, diskHash);
     dispatch({ type: 'OPEN_TAB', tab });
     window.mde.watchFile(filePath);
   }, [state.tabs]);
@@ -386,6 +410,13 @@ export default function App() {
   const saveActiveTab = useCallback(async () => {
     if (!activeTab || !activeEditor) return;
     if (activeTab.conflict) return;
+    if (savingRef.current) return;
+
+    // A queued autosave would fire mid-write with this save's pre-write hash.
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
 
     let filePath = activeTab.filePath;
     if (!filePath) {
@@ -395,24 +426,35 @@ export default function App() {
 
     const { Markdown } = await import('../utils/markdown');
     const markdown = Markdown.serialize(activeEditor);
+    // What we are about to put on disk. Anything typed after this point is NOT in it.
+    const docAtWrite = activeEditor.state.doc;
 
     // DATA-SAFETY GUARD (do not bypass): overwrite only if the file still hashes to what we
     // last synced; else writeFileIfUnchanged refuses and we show the conflict banner. null = new path.
     const isSamePath = activeTab.filePath === filePath;
-    const expectedHash = isSamePath ? activeTab.diskHash : null;
+    const expectedHash = isSamePath ? knownDiskHash(filePath, activeTab.diskHash) : null;
 
     if (activeTab.filePath) {
       window.mde.unwatchFile(activeTab.filePath);
     }
-    const result = await window.mde.writeFileIfUnchanged(filePath, markdown, expectedHash);
+    savingRef.current = true;
+    let result;
+    try {
+      result = await window.mde.writeFileIfUnchanged(filePath, markdown, expectedHash);
+    } finally {
+      savingRef.current = false;
+    }
 
     if (result.conflict) {
       // Re-watch the file we refused to overwrite so we keep tracking it.
       window.mde.watchFile(filePath);
+      // Deliberately do NOT adopt the on-disk hash here: it belongs to a version the user
+      // has not seen, and treating it as our baseline would let the next save clobber it.
       dispatch({ type: 'MARK_CONFLICT', tabId: activeTab.id, conflict: true });
       return;
     }
 
+    recordDiskHash(filePath, result.hash);
     if (!isSamePath) {
       dispatch({
         type: 'UPDATE_TAB_PATH',
@@ -425,18 +467,31 @@ export default function App() {
     } else {
       dispatch({ type: 'UPDATE_TAB_MTIME', tabId: activeTab.id, mtime: result.mtimeMs, hash: result.hash });
     }
-    dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
+    // Edits made while the write was in flight are not in the file -- keeping the tab
+    // clean would silently drop them (the editor re-baselines its clean snapshot on the
+    // dirty->clean edge). Leave it dirty and re-arm autosave for the remainder.
+    if (activeEditor.state.doc === docAtWrite) {
+      dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
+    } else {
+      triggerAutosaveRef.current();
+    }
     window.mde.watchFile(filePath);
-  }, [activeTab, activeEditor]);
+  }, [activeTab, activeEditor, knownDiskHash, recordDiskHash]);
 
   const triggerAutosave = useCallback(() => {
     if (!autosave) return;
+    const tabId = activeTab?.id;
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     autosaveTimerRef.current = setTimeout(() => {
       autosaveTimerRef.current = null;
+      // Cmd+S during the debounce already flushed this buffer; saving again would quote
+      // the hash from before that save and be refused as a conflict with our own write.
+      const tab = tabsRef.current.find(t => t.id === tabId);
+      if (!tab || !tab.dirty || tab.conflict) return;
       saveActiveTab();
     }, 1000);
-  }, [autosave, saveActiveTab]);
+  }, [autosave, saveActiveTab, activeTab?.id]);
+  triggerAutosaveRef.current = triggerAutosave;
 
   const saveActiveTabAs = useCallback(async () => {
     if (!activeTab || !activeEditor) return;
@@ -449,6 +504,7 @@ export default function App() {
     // Save As writes to a user-chosen path (possibly overwriting a different file on
     // purpose), so we force the write and adopt the new file's hash as our baseline.
     const result = await window.mde.writeFileIfUnchanged(filePath, markdown, null);
+    recordDiskHash(filePath, result.hash);
 
     dispatch({
       type: 'UPDATE_TAB_PATH',
@@ -467,8 +523,7 @@ export default function App() {
     if (!activeTab || !activeEditor || !activeTab.filePath) return;
 
     // Save fold state before reload (line numbers, not positions)
-    const { collapsed } = foldKey.getState(activeEditor.state);
-    const savedFoldLines = foldPosToLineNumbers(activeEditor, collapsed);
+    const savedFoldLines = foldPosToLineNumbers(activeEditor, getFoldedPositions(activeEditor));
 
     const content = await window.mde.readFile(activeTab.filePath);
     const [stats, diskHash] = await Promise.all([
@@ -480,15 +535,10 @@ export default function App() {
 
     // Restore fold state after reload
     if (savedFoldLines.length) {
-      const positions = lineNumbersToFoldPositions(activeEditor.state.doc, content, savedFoldLines);
-      if (positions.length) {
-        const tr = activeEditor.state.tr;
-        tr.setMeta(RESTORE_FOLDS, positions);
-        tr.setMeta('addToHistory', false);
-        activeEditor.view.dispatch(tr);
-      }
+      applyFoldPositions(activeEditor, lineNumbersToFoldPositions(activeEditor.state.doc, content, savedFoldLines));
     }
 
+    recordDiskHash(activeTab.filePath, diskHash);
     dispatch({ type: 'UPDATE_TAB_MTIME', tabId: activeTab.id, mtime: stats?.mtimeMs ?? null, hash: diskHash });
     dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
     dispatch({ type: 'MARK_CONFLICT', tabId: activeTab.id, conflict: false });
@@ -540,6 +590,7 @@ export default function App() {
       window.mde.getFileStats(newPath),
       window.mde.hashFile(newPath),
     ]);
+    recordDiskHash(newPath, hash);
     dispatch({
       type: 'UPDATE_TAB_PATH',
       tabId: tab.id,
@@ -549,7 +600,7 @@ export default function App() {
       hash,
     });
     window.mde.watchFile(newPath);
-  }, [state.tabs]);
+  }, [state.tabs, recordDiskHash]);
 
   const confirmTabRename = useCallback(async (newName: string) => {
     const target = tabRenameTarget;
@@ -564,6 +615,7 @@ export default function App() {
         window.mde.getFileStats(newPath),
         window.mde.hashFile(newPath),
       ]);
+      recordDiskHash(newPath, hash);
       dispatch({
         type: 'UPDATE_TAB_PATH',
         tabId: tab.id,
@@ -659,7 +711,10 @@ export default function App() {
         }
       }),
       window.mde.onFileChanged(async (filePath) => {
-        const tab = state.tabs.find(t => t.filePath === filePath);
+        // Read the tab from the ref, not this closure: the event can arrive before React
+        // has committed the dispatch from our own save, and a stale `dirty`/`diskHash`
+        // pair is exactly what raises a phantom conflict.
+        const tab = tabsRef.current.find(t => t.filePath === filePath);
         if (!tab) return;
 
         // Detect real changes by content hash, not mtime -- so spurious watcher fires
@@ -669,16 +724,17 @@ export default function App() {
           window.mde.hashFile(filePath),
         ]);
         if (!stats || diskHash === null) return;
-        if (diskHash === tab.diskHash) return; // nothing actually changed on disk
+        if (diskHash === knownDiskHash(filePath, tab.diskHash)) return; // nothing actually changed on disk
+        const current = tabsRef.current.find(t => t.id === tab.id);
+        if (!current) return;
 
-        if (tab.dirty) {
+        if (current.dirty) {
           dispatch({ type: 'MARK_CONFLICT', tabId: tab.id, conflict: true });
         } else {
           const editor = editorsRef.current.get(tab.id);
           if (editor) {
             // Save fold state before silent reload
-            const { collapsed } = foldKey.getState(editor.state);
-            const savedFoldLines = foldPosToLineNumbers(editor, collapsed);
+            const savedFoldLines = foldPosToLineNumbers(editor, getFoldedPositions(editor));
 
             const content = await window.mde.readFile(filePath);
             const { Markdown } = await import('../utils/markdown');
@@ -686,15 +742,10 @@ export default function App() {
 
             // Restore fold state after silent reload
             if (savedFoldLines.length) {
-              const positions = lineNumbersToFoldPositions(editor.state.doc, content, savedFoldLines);
-              if (positions.length) {
-                const tr = editor.state.tr;
-                tr.setMeta(RESTORE_FOLDS, positions);
-                tr.setMeta('addToHistory', false);
-                editor.view.dispatch(tr);
-              }
+              applyFoldPositions(editor, lineNumbersToFoldPositions(editor.state.doc, content, savedFoldLines));
             }
           }
+          recordDiskHash(filePath, diskHash);
           dispatch({ type: 'UPDATE_TAB_MTIME', tabId: tab.id, mtime: stats.mtimeMs, hash: diskHash });
           // Positive proof to the user that live detection is working: a thin blue banner
           // naming the reloaded file, shown for 5s.

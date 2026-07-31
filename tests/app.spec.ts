@@ -2181,6 +2181,229 @@ test.describe('Click-based code folding', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Fold stability across edits (fold flags live on the nodes, not on positions)
+// ---------------------------------------------------------------------------
+
+test.describe('Fold stability', () => {
+  // Opens a doc where "Parent item" (with a child) is folded, plus siblings around it.
+  async function openFoldedList(body: string) {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'folds.md');
+    fs.writeFileSync(tmpFile, body);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Parent item', { timeout: 5000 });
+
+    // Fold "Parent item" with Cmd+.
+    await editor.locator('li', { hasText: 'Parent item' }).locator('> p').first().click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('ControlOrMeta+.');
+    await expect(editor.locator('li.folded')).toContainText('Parent item');
+    await expect(editor.locator('.fold-badge')).toHaveCount(1);
+
+    return { editor, tmpFile };
+  }
+
+  test('a folded item stays folded when the sibling below it is moved above it', async () => {
+    const { editor } = await openFoldedList('- Above\n- Parent item\n    - Child item\n- Below\n');
+
+    // Cursor in the sibling BELOW the folded item, then move it up past the folded item.
+    await editor.locator('li', { hasText: 'Below' }).locator('> p').first().click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('ControlOrMeta+Alt+ArrowUp');
+    await page.waitForTimeout(200);
+
+    // The folded item moved down one slot but is still folded -- and the badge did NOT
+    // jump onto the item that moved.
+    const items = page.locator('.tiptap > ul > li');
+    await expect(items.nth(1)).toContainText('Below');
+    await expect(items.nth(2)).toContainText('Parent item');
+    await expect(editor.locator('.fold-badge')).toHaveCount(1);
+    await expect(editor.locator('li.folded')).toContainText('Parent item');
+    await expect(editor.getByText('Child item')).not.toBeVisible();
+  });
+
+  test('a folded item stays folded when the sibling above it is moved below it', async () => {
+    const { editor } = await openFoldedList('- Above\n- Parent item\n    - Child item\n- Below\n');
+
+    // Cursor in the item ABOVE the folded item, then move it down past the folded item.
+    await editor.locator('li', { hasText: 'Above' }).locator('> p').first().click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('ControlOrMeta+Alt+ArrowDown');
+    await page.waitForTimeout(200);
+
+    const items = page.locator('.tiptap > ul > li');
+    await expect(items.nth(0)).toContainText('Parent item');
+    await expect(items.nth(1)).toContainText('Above');
+    // Exactly one badge, and it is on the item that owns the hidden child.
+    await expect(editor.locator('.fold-badge')).toHaveCount(1);
+    await expect(editor.locator('li.folded')).toContainText('Parent item');
+    await expect(editor.getByText('Child item')).not.toBeVisible();
+  });
+
+  test('Enter at the start of a folded item keeps the fold on the text, not the new item', async () => {
+    const { editor } = await openFoldedList('- Parent item\n    - Child item\n- Below\n');
+
+    // Put the cursor at the very start of the folded item and split it.
+    await editor.locator('li', { hasText: 'Parent item' }).locator('> p').first().click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+
+    const items = page.locator('.tiptap > ul > li');
+    await expect(items.nth(0)).toHaveText('');
+    await expect(items.nth(1)).toContainText('Parent item');
+    // The fold followed the text down; the new empty item above carries no badge.
+    await expect(editor.locator('.fold-badge')).toHaveCount(1);
+    await expect(editor.locator('li.folded')).toContainText('Parent item');
+    await expect(editor.getByText('Child item')).not.toBeVisible();
+  });
+
+  test('folding does not mark a clean buffer dirty', async () => {
+    await openFoldedList('- Parent item\n    - Child item\n- Below\n');
+
+    // The fold flag is a node attribute, so it changes the doc -- but not the file.
+    await page.waitForTimeout(300);
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Heading folding
+// ---------------------------------------------------------------------------
+
+test.describe('Heading folding', () => {
+  const DOC = [
+    '# Title',
+    '',
+    'Intro text.',
+    '',
+    '## Section A',
+    '',
+    'Body of A.',
+    '',
+    '### Subsection A1',
+    '',
+    'Body of A1.',
+    '',
+    '## Section B',
+    '',
+    'Body of B.',
+    '',
+  ].join('\n');
+
+  async function openDoc() {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'headings.md');
+    fs.writeFileSync(tmpFile, DOC);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Body of A', { timeout: 5000 });
+    return { editor, tmpFile };
+  }
+
+  test('Cmd+. on a heading hides everything down to the next same-level heading', async () => {
+    const { editor } = await openDoc();
+
+    await editor.locator('h2', { hasText: 'Section A' }).click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('ControlOrMeta+.');
+    await page.waitForTimeout(200);
+
+    // Everything under "Section A" -- including its deeper subsection -- is hidden.
+    await expect(editor.locator('h2.folded')).toContainText('Section A');
+    await expect(editor.getByText('Body of A.', { exact: true })).not.toBeVisible();
+    await expect(editor.getByText('Subsection A1')).not.toBeVisible();
+    await expect(editor.getByText('Body of A1.')).not.toBeVisible();
+    // The next same-level heading and its body are untouched.
+    await expect(editor.locator('h2', { hasText: 'Section B' })).toBeVisible();
+    await expect(editor.getByText('Body of B.')).toBeVisible();
+    // ...and so is everything above it.
+    await expect(editor.getByText('Intro text.')).toBeVisible();
+  });
+
+  test('clicking the badge unfolds a folded heading', async () => {
+    const { editor } = await openDoc();
+
+    await editor.locator('h2', { hasText: 'Section A' }).click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('ControlOrMeta+.');
+    await expect(editor.locator('.fold-badge')).toHaveCount(1);
+
+    await editor.locator('.fold-badge').click();
+    await page.waitForTimeout(200);
+
+    await expect(editor.locator('.fold-badge')).toHaveCount(0);
+    await expect(editor.getByText('Body of A.', { exact: true })).toBeVisible();
+    await expect(editor.getByText('Subsection A1')).toBeVisible();
+  });
+
+  test('a folded heading round-trips its hidden content back to disk unchanged', async () => {
+    const { editor, tmpFile } = await openDoc();
+
+    await editor.locator('h2', { hasText: 'Section A' }).click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('ControlOrMeta+.');
+    await page.waitForTimeout(200);
+
+    // Type into the still-visible top heading, then save.
+    await editor.locator('h1').click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('End');
+    await page.keyboard.type('!');
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+    });
+    await page.waitForTimeout(500);
+
+    // Hidden is a rendering state, not a content state: nothing was dropped.
+    expect(fs.readFileSync(tmpFile, 'utf8')).toBe(DOC.replace('# Title', '# Title!'));
+  });
+
+  test('hovering a heading shows a fold caret that folds its section on click', async () => {
+    const { editor } = await openDoc();
+
+    await editor.locator('h2', { hasText: 'Section B' }).hover();
+    const caret = page.locator('.fold-caret');
+    await expect(caret).toBeVisible({ timeout: 3000 });
+    expect(await caret.getAttribute('data-tooltip')).toContain('section');
+
+    await caret.click();
+    await expect(editor.locator('h2.folded')).toContainText('Section B');
+    await expect(editor.getByText('Body of B.')).not.toBeVisible();
+  });
+
+  test('a subsection folds only down to the next heading of its own level', async () => {
+    const { editor } = await openDoc();
+
+    await editor.locator('h3', { hasText: 'Subsection A1' }).click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('ControlOrMeta+.');
+    await page.waitForTimeout(200);
+
+    await expect(editor.getByText('Body of A1.')).not.toBeVisible();
+    // The ### fold stops at the following ## -- it does not swallow the next section.
+    await expect(editor.locator('h2', { hasText: 'Section B' })).toBeVisible();
+    await expect(editor.getByText('Body of B.')).toBeVisible();
+    // ...and the ## above it keeps its own body visible.
+    await expect(editor.getByText('Body of A.', { exact: true })).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Toolbar tooltips
 // ---------------------------------------------------------------------------
 
@@ -3449,5 +3672,125 @@ test.describe('Paragraph spacing', () => {
 
     expect(margins.betweenParas).toBeCloseTo(margins.underHeading * 2, 1);
     expect(margins.afterList).toBeCloseTo(margins.betweenParas, 1);
+  });
+});
+
+test.describe('Save guard against our own writes', () => {
+  test('a write whose content already matches the file is not a conflict', async () => {
+    // The guard exists to stop us clobbering a version the user has not seen. When the
+    // bytes on disk are IDENTICAL to what we were about to write, there is nothing to
+    // lose, so a stale hash must not raise a phantom conflict.
+    ({ app, page } = await launchApp());
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'guard.md');
+    fs.writeFileSync(tmpFile, '# Same\n');
+
+    const same = await page.evaluate(
+      (fp) => window.mde.writeFileIfUnchanged(fp, '# Same\n', 'stalehash'),
+      tmpFile
+    );
+    expect(same.conflict).toBe(false);
+    expect(fs.readFileSync(tmpFile, 'utf-8')).toBe('# Same\n');
+
+    // ...but a genuine divergence still refuses the write.
+    const diverged = await page.evaluate(
+      (fp) => window.mde.writeFileIfUnchanged(fp, '# Clobbered\n', 'stalehash'),
+      tmpFile
+    );
+    expect(diverged.conflict).toBe(true);
+    expect(fs.readFileSync(tmpFile, 'utf-8')).toBe('# Same\n');
+  });
+
+  test('an autosave queued before a manual save writes instead of raising a conflict', async () => {
+    // The reported hair-trigger: Cmd+S while an autosave is pending. The queued timer
+    // held a pre-save snapshot of the tab, so it quoted the hash from before our own
+    // save and the guard refused it -- a red banner on a file nothing else touched.
+    ({ app, page } = await launchApp());
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'autosave.md');
+    fs.writeFileSync(tmpFile, 'start\n');
+
+    const wasOn = await page.evaluate(() => window.mde.getAutosave());
+    try {
+      await page.evaluate(() => window.mde.setAutosave(true));
+      await app.evaluate(({ BrowserWindow }, fp) => {
+        BrowserWindow.getAllWindows()[0].webContents.send('open-file', fp);
+      }, tmpFile);
+      const editor = page.locator('.tiptap');
+      await expect(editor).toContainText('start', { timeout: 5000 });
+
+      await editor.click();
+      await page.keyboard.press('ControlOrMeta+ArrowRight');
+      await page.keyboard.type(' one');
+      // Manual save while the autosave debounce is still running.
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+      });
+      await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+      // More typing, so the autosave that follows has genuinely new content to write.
+      await page.keyboard.type(' two');
+      await expect(page.locator('.tab-dirty-dot')).toHaveCount(1);
+
+      // The autosave (1s debounce) must land, not conflict.
+      await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+      await expect(page.locator('.conflict-banner')).toHaveCount(0);
+      expect(fs.readFileSync(tmpFile, 'utf-8')).toBe('start one two\n');
+    } finally {
+      await page.evaluate((on) => window.mde.setAutosave(on), wasOn);
+    }
+  });
+});
+
+test.describe('Code fences are not list structure', () => {
+  test('a list inside a code fence does not get a {LIST_SEPARATOR} placeholder', async () => {
+    // splitLooseLists inserts a placeholder to break loose lists apart. Inside a fence
+    // that text is the user's code sample -- it showed up in the editor and was written
+    // straight back to their file on save.
+    ({ app, page } = await launchApp());
+    const source = '# Doc\n\n```\n- one\n\n- two\n```\n\n- real one\n\n- real two\n';
+    const tmpFile = await openMarkdown(source, 'fenced.md');
+
+    await expect(page.locator('.tiptap pre')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.tiptap')).not.toContainText('LIST_SEPARATOR');
+    // The loose list OUTSIDE the fence still splits into two lists.
+    await expect(page.locator('.tiptap > ul')).toHaveCount(2);
+
+    await page.locator('.tiptap h1').click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type('!');
+    expect(await saveAndRead(tmpFile)).toBe(source.replace('# Doc', '# Doc!'));
+  });
+});
+
+test.describe('Sidebar layout', () => {
+  test('the project header stays pinned while the file list scrolls', async () => {
+    ({ app, page } = await launchApp());
+    const tmpDir = makeTmpDir();
+    for (let i = 0; i < 60; i++) {
+      fs.writeFileSync(path.join(tmpDir, `file-${String(i).padStart(2, '0')}.md`), `# ${i}\n`);
+    }
+    await app.evaluate(({ BrowserWindow }, root) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
+    }, tmpDir);
+
+    const header = page.locator('.tree-root-header');
+    await expect(header).toBeVisible({ timeout: 5000 });
+
+    const offsets = await page.evaluate(async () => {
+      const scroller = document.querySelector('.sidebar-content') as HTMLElement;
+      const head = document.querySelector('.tree-root-header') as HTMLElement;
+      const before = head.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTop = 300;
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      return {
+        scrolled: scroller.scrollTop,
+        after: head.getBoundingClientRect().top - scroller.getBoundingClientRect().top,
+        before,
+      };
+    });
+
+    expect(offsets.scrolled).toBeGreaterThan(0); // the list really did scroll
+    expect(offsets.after).toBeLessThanOrEqual(offsets.before + 1); // header did not scroll away
+    await expect(header).toBeVisible();
   });
 });
