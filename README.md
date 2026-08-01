@@ -4,7 +4,7 @@ A simple but sturdy WYSIWYG Markdown browser/editor for macOS and Windows. Writt
 
 Inspired by [Thomas Ptacek's MDV app](https://sockpuppet.org/blog/2026/05/12/emacsification/).
 
-> ❗ **Alpha (v0.5).** Stable and usable, but expect rough edges. Bug reports and feature requests welcome.
+> ❗ **Alpha.** Stable and usable, but expect rough edges. Bug reports and feature requests welcome.
 
 ## Why MDE?
 
