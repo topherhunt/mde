@@ -2,6 +2,23 @@ import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme } from 'e
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import { resolveState, initRepo, adoptRepo, findParentRepo } from './git/repo';
+import { computeStatus } from './git/status';
+import { preflight, seedIgnoreFile } from './git/guards';
+import { createCheckpoint } from './git/checkpoint';
+import { listCheckpoints, checkpointFiles, diffFile } from './git/history';
+import { restoreFile, restoreAll } from './git/restore';
+import {
+  configureCheckpointer,
+  initCheckpointer,
+  watchRoot,
+  unwatchRoot,
+  markChange,
+  noteCheckpoint,
+  flushRoot,
+  flushAll,
+} from './git/checkpointer';
+import { VcCheckpointResult } from './types';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -78,6 +95,22 @@ interface WindowState {
 const windowStates = new Map<BrowserWindow, WindowState>();
 
 const isTest = process.argv.includes('--test-headless');
+
+// Tests cannot wait ten minutes for a checkpoint. `--vc-eligibility-ms=N` and
+// `--vc-poll-ms=N` collapse the whole cadence into milliseconds; both are absent in
+// normal runs, leaving the defaults in checkpointer.ts untouched.
+function numericArg(name: string): number | undefined {
+  const prefix = `--${name}=`;
+  const arg = process.argv.find(a => a.startsWith(prefix));
+  if (!arg) return undefined;
+  const value = Number(arg.slice(prefix.length));
+  return Number.isFinite(value) ? value : undefined;
+}
+
+configureCheckpointer({
+  eligibilityMs: numericArg('vc-eligibility-ms'),
+  pollMs: numericArg('vc-poll-ms'),
+});
 
 const stateFilePath = path.join(app.getPath('userData'), 'mde-state.json');
 
@@ -1062,6 +1095,10 @@ ipcMain.on('watch-project', (_event, root: string) => {
   if (projectWatchers.has(root)) return;
   try {
     const watcher = fs.watch(root, { recursive: true }, () => {
+      // The checkpointer's dirty-flag gate. Deliberately unfiltered and undebounced: a
+      // false positive costs one wasted status call, and statusMatrix is the authority on
+      // what actually changed. See src/git/checkpointer.ts.
+      markChange(root);
       const existing = projectWatchTimers.get(root);
       if (existing) clearTimeout(existing);
       projectWatchTimers.set(root, setTimeout(() => {
@@ -1075,6 +1112,7 @@ ipcMain.on('watch-project', (_event, root: string) => {
       }, 2000));
     });
     projectWatchers.set(root, watcher);
+    watchRoot(root);
   } catch {}
 });
 
@@ -1083,6 +1121,160 @@ ipcMain.on('unwatch-project', (_event, root: string) => {
   if (watcher) { watcher.close(); projectWatchers.delete(root); }
   const timer = projectWatchTimers.get(root);
   if (timer) { clearTimeout(timer); projectWatchTimers.delete(root); }
+  // Capture the tail before letting go of the folder: the 10-minute rule can legitimately
+  // leave up to ten minutes of work uncheckpointed, and closing is the last chance.
+  void flushRoot(root).finally(() => unwatchRoot(root));
+});
+
+// --- Version history (checkpoints). See CHECKPOINTS.md. ---
+//
+// Every mutating handler re-resolves the attach state first and refuses unless the folder
+// is 'managed'. The renderer already hides those controls, but the check lives here too:
+// a repo can grow a remote or a second branch at any moment, and the answer must come from
+// disk at the moment of the write, not from whatever the panel last rendered.
+
+function broadcast(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(channel, payload);
+  }
+}
+
+initCheckpointer({
+  onStatus: (root, files) => broadcast('vc-status', { root, files }),
+  onCheckpoint: (root, sha, subject) => broadcast('vc-checkpoint', { root, sha, subject }),
+});
+
+async function requireManaged(root: string): Promise<string | null> {
+  const state = await resolveState(root);
+  if (state.attach === 'managed') return null;
+  return state.reason || 'MDE is not managing version history for this folder.';
+}
+
+ipcMain.handle('vc-get-state', async (_event, root: string) => {
+  return resolveState(root);
+});
+
+ipcMain.handle('vc-get-status', async (_event, root: string) => {
+  try {
+    const { files } = await computeStatus(root);
+    return { files, count: files.length };
+  } catch {
+    return { files: [], count: 0 };
+  }
+});
+
+ipcMain.handle('vc-preflight', async (_event, root: string) => {
+  return preflight(root);
+});
+
+ipcMain.handle('vc-init', async (_event, root: string) => {
+  try {
+    // Re-checked here rather than trusting the preflight the dialog ran: this is the one
+    // guardrail that blocks outright, so it must hold at the moment of the write.
+    const parent = findParentRepo(root);
+    if (parent) {
+      return { ok: false, error: `This folder is inside another folder that already has version history (${parent}).` };
+    }
+    const pre = preflight(root);
+    await initRepo(root);
+    seedIgnoreFile(root, pre.childRepos);
+    // First checkpoint captures the folder as it is today, so there is always something to
+    // go back to -- an empty history is a version-control system that has not started yet.
+    const result = await createCheckpoint(root, 'manual', { message: 'Started tracking changes' });
+    noteCheckpoint(root);
+    watchRoot(root);
+    if (result) broadcast('vc-checkpoint', { root, sha: result.sha, subject: result.subject });
+    broadcast('vc-status', { root, files: [] });
+    return { ok: true };
+  } catch (error: any) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('vc-adopt', async (_event, root: string) => {
+  try {
+    await adoptRepo(root);
+    noteCheckpoint(root);
+    watchRoot(root);
+    return { ok: true };
+  } catch (error: any) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('vc-checkpoint', async (_event, root: string, message?: string): Promise<VcCheckpointResult> => {
+  const blocked = await requireManaged(root);
+  if (blocked) return { ok: false, sha: null, error: blocked };
+  try {
+    const result = await createCheckpoint(root, 'manual', { message });
+    noteCheckpoint(root);
+    if (!result) return { ok: true, sha: null };
+    broadcast('vc-status', { root, files: [] });
+    broadcast('vc-checkpoint', { root, sha: result.sha, subject: result.subject });
+    return { ok: true, sha: result.sha, subject: result.subject, filesChanged: result.filesChanged };
+  } catch (error: any) {
+    return { ok: false, sha: null, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('vc-history', async (_event, root: string, opts?: { limit?: number; before?: string }) => {
+  return listCheckpoints(root, opts || {});
+});
+
+ipcMain.handle('vc-checkpoint-files', async (_event, root: string, sha: string) => {
+  try {
+    return await checkpointFiles(root, sha);
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('vc-diff', async (_event, root: string, filePath: string, sha?: string) => {
+  try {
+    return await diffFile(root, filePath, sha);
+  } catch {
+    return { path: filePath, before: null, after: null, binary: false };
+  }
+});
+
+ipcMain.handle('vc-restore-file', async (_event, root: string, sha: string, filePath: string) => {
+  const blocked = await requireManaged(root);
+  if (blocked) {
+    return { ok: false, newSha: null, filesWritten: 0, filesDeleted: 0, safetySha: null, error: blocked };
+  }
+  try {
+    const result = await restoreFile(root, sha, filePath);
+    noteCheckpoint(root);
+    broadcast('vc-status', { root, files: [] });
+    if (result.newSha) broadcast('vc-checkpoint', { root, sha: result.newSha, subject: `Restored ${filePath}` });
+    return result;
+  } catch (error: any) {
+    return {
+      ok: false, newSha: null, filesWritten: 0, filesDeleted: 0, safetySha: null,
+      error: error?.message || String(error),
+    };
+  }
+});
+
+ipcMain.handle('vc-restore-all', async (_event, root: string, sha: string) => {
+  const blocked = await requireManaged(root);
+  if (blocked) {
+    return { ok: false, newSha: null, filesWritten: 0, filesDeleted: 0, safetySha: null, error: blocked };
+  }
+  try {
+    const result = await restoreAll(root, sha);
+    noteCheckpoint(root);
+    broadcast('vc-status', { root, files: [] });
+    if (result.newSha) {
+      broadcast('vc-checkpoint', { root, sha: result.newSha, subject: 'Restored everything to an earlier checkpoint' });
+    }
+    return result;
+  } catch (error: any) {
+    return {
+      ok: false, newSha: null, filesWritten: 0, filesDeleted: 0, safetySha: null,
+      error: error?.message || String(error),
+    };
+  }
 });
 
 ipcMain.on('close-window', (event) => {
@@ -1362,6 +1554,9 @@ app.on('before-quit', (event) => {
         }
       } catch {}
     }
+    // The last chance to capture work: the 10-minute rule can leave that much uncommitted.
+    // Bounded so a slow or wedged repo can never make the app refuse to quit.
+    await Promise.race([flushAll(), new Promise(resolve => setTimeout(resolve, 3000))]);
     isQuitting = true;
     app.quit();
   })();

@@ -1,6 +1,6 @@
 # Checkpoints: version history for MDE
 
-Status: **proposal**. Nothing here is built yet.
+Status: **built and shipped** (2026-08-01). This document is now half design rationale and half as-built record. Where the implementation departed from the original proposal, the departure is called out inline under a **BUILT** heading; everything else was built as written. Code lives in `src/git/`, `src/components/VersionPanel.tsx`, `src/components/DiffView.tsx`, and `src/utils/prosediff.ts`; 21 E2E tests in `tests/version-control.spec.ts`.
 
 ## What this is
 
@@ -140,23 +140,72 @@ That is its entire job. No debounce timer, no gitignore check, no `.git` filteri
 The loop:
 
 ```
-if (now - lastCommitAt < 10min)
-    sleep until lastCommitAt + 10min          // zero cost, and this is most of the time
-
-// eligible
 every 60s:
-    if (!sawChange) continue                  // no status call when nothing is happening
+    if (!sawChange && lastSig === null) continue   // no status call when nothing is happening
     sawChange = false
     const status = statusMatrix()
-    if (status is empty) continue             // guard: never commit nothing
+    publish(status)                           // keeps the tab badge live
+    if (status is empty) { lastSig = null; continue }   // guard: never commit nothing
     const sig = signature(status)
-    if (sig === lastSig) -> CHECKPOINT
+    const eligible = now - lastCommitAt >= 10min
+    if (eligible && sig === lastSig) -> CHECKPOINT
     lastSig = sig
 ```
 
+Note that eligibility gates **the commit**, not the poll. An earlier draft slept through the whole 10-minute window to avoid the status calls entirely, which is wrong: the tab badge would then be up to ten minutes stale, and a badge that lies about whether anything has changed is worse than the handful of status calls it saves. Skipping polls inside the window saves at most ten runs of ~60ms; live badge freshness is worth far more. The `sawChange` gate already delivers the zero-cost idle case, which is the property that actually mattered.
+
 The poll interval doubles as the settle window, so 60s of no net change *is* the quiet signal and there is no second timer. One constant instead of two. Comparing net change is also slightly better than watcher-based quiet: a file written and then reverted correctly counts as nothing having happened.
 
+**BUILT: the gate is `!sawChange && lastSig === null`, not `!sawChange`.** Gating on the watcher alone deadlocks the single most common case in the entire feature: one burst of edits, then silence. The burst sets `sawChange`, the first tick consumes it and records a signature, and with no further filesystem events *no later tick ever runs* -- so the settle window never completes, the 10-minute rule never fires, and the changes sit uncommitted until the next unrelated edit or app quit. `lastSig !== null` means "the previous tick saw uncommitted changes", which is exactly the condition under which we must keep polling regardless of the watcher. The empty-status branch resets it to `null`, so the idle case is still zero status calls. (This was caught by reading the loop, before any test exercised it.)
+
 **The signature trap.** `statusMatrix`'s workdir field is a coarse enum (absent / same as HEAD / different), **not** a content hash. So if Claude writes `chapter-4.md` at T and writes *different* content to the same file at T+30s, both polls produce the identical row `[chapter-4.md, 1, 2, 1]`, the quiet detector sees matching signatures, and it commits mid-burst. That is precisely the outcome the settle window exists to prevent. Fix: the status result already names the non-clean files, and there are usually few, so `stat` just those and fold `mtime` and `size` into the signature. Fast path preserved, hole closed.
+
+### Cost and pacing
+
+For a few hundred Markdown files this is effectively free: a few hundred `stat` calls plus SHA-1 over a few megabytes, on the order of 50-150ms, and only when `sawChange` is set. Four cases break that assumption, and one of them is likely rather than exotic.
+
+**File count, not file size, is the main driver.** Every file costs a stat and possibly a read. Gitignored files are excluded from the *result*, but the walker still traverses directories to discover that.
+
+**MEASURED (2026-08-01).** Both questions were probed empirically before building:
+
+- Ignored files never leak into a `statusMatrix` result. `junk/`, `*.log`, and `.DS_Store` were all correctly absent. The correctness assumption the detection design rests on holds.
+- isomorphic-git **descends into ignored directories rather than pruning them**, so cost does scale with ignored file count. But it only enumerates, it does not stat or hash them, so the marginal cost is ~0.8 microseconds per ignored file.
+- On this very repo (33,311 entries under a gitignored `node_modules`, 60 reported rows): **52-74ms per run.** A real user's Markdown folder has no `node_modules` at all.
+
+So the concern was real in kind and small in magnitude. No pruning workaround is needed; the self-calibrating interval below covers whatever pathological case shows up in the wild.
+
+**Cloud-synced folders.** The likeliest hazard for this audience. A novelist keeping her book folder in Dropbox, iCloud Drive, or OneDrive is the default case, not an edge case. Under iCloud's "optimize storage" or Dropbox smart sync, files are dematerialized placeholders: `stat` is slower than local, and *reading* one forces a download. A status walk that hashes contents could pull gigabytes over the user's network. That is not slow, it is actively harmful.
+
+**Large binaries.** A 500MB video means hashing 500MB per tick on any stat-cache miss. The size guardrail catches this at init, but init runs once and people drop things into folders later.
+
+**Whether the index stat cache hits.** Git avoids re-hashing by comparing stored stat data against the file. isomorphic-git maintains an index and probably does something similar, but the details are unverified. If it misses, every tick re-hashes the whole tree.
+
+**BUILT: it hits, and that is the problem -- isomorphic-git has no racy-clean rule.** Its `compareStats` reuses the cached hash when mtime *second*, ctime second, size, inode, and mode all still match. mtime granularity is one second. So a write that lands in the same second as the `git.add` that recorded those stats, with the same byte count, is **invisible -- permanently**, until something else happens to touch that file. Real Git closes this with the racy-clean rule (re-check any entry whose mtime is not strictly older than the index). isomorphic-git does not implement it.
+
+For a feature whose entire promise is "nothing is ever lost", this is the worst available failure: the panel tells the user everything is saved while a file quietly is not. It is also not hypothetical -- a two-word edit to a line ("version one" to "version two") keeps the size identical, and an agent rewriting a file a fraction of a second after a checkpoint is the normal case, not a contrived one.
+
+The fix is two halves, and both are required:
+
+- **`computeStatus` passes `refresh: false`**, making status read-only with respect to the index. With the default, `statusMatrix` writes fresh stats for every file it hashes -- so a status that merely *happened* to run in the same second as a write would poison the cache, with nothing following it to undo the damage. Now `git.add` is the only thing in the system that ever writes stats into the index.
+- **`createCheckpoint` calls `deraceIndex` immediately after committing.** For each just-committed file whose mtime second equals the current second, it rewrites the index entry via `updateIndex` with an explicit oid, which stores zeroed stats. Zeroed stats can never compare equal to a real file, so the next status hashes it for real.
+
+Together those close the loop: every write of stats into the index is immediately re-checked by the one call that can afford to. The check is precisely scoped -- only entries whose mtime second is *right now* can collide, and once the clock ticks over any further write necessarily lands in a later second -- so it touches a handful of entries per checkpoint at most and nothing at all the rest of the time.
+
+Note that "just delete `.git/index` between checkpoints" is **not** an available fix. `git.commit` builds its tree from the index, so the index must stay *complete* even though it is never left *dirty*; each checkpoint adds only the changed files on top of what is already there. "Transient" means no uncommitted content, not empty.
+
+There is a dedicated regression test for this ("a same-size rewrite in the same second as a checkpoint is still detected"), and it is the one most likely to catch a regression here, since every symptom of the bug is silence.
+
+**The fix is to measure rather than guess.** Time each `statusMatrix` run and pace off the result:
+
+```
+interval = max(60s, lastStatusDuration * 100)
+```
+
+A 100ms folder polls every 60s. A 3-second folder polls every 5 minutes. A pathological one backs itself off. Duty cycle stays under 1% on any folder, with no advance knowledge of the user's disk, sync setup, or file count, and no tuning constant to get wrong.
+
+If a run ever exceeds ~200ms, move it to a `utilityProcess`. Blocking the main process does not stop the renderer painting, but it does stall IPC, so a save can visibly stutter.
+
+**Caveat on the gate.** `sawChange` gives zero cost when the folder is quiet, but constant sync traffic keeps it permanently true, so we poll every tick regardless. That is exactly where the gitignore filtering demoted above earns its keep. It is not needed for correctness, but on a Dropbox folder it is the difference between polling when the user writes and polling forever.
 
 ### The two rules that are not cadence
 
@@ -248,6 +297,8 @@ Opens in the main editor area rather than the sidebar, since it needs the width.
 
 Ship a line-level diff first (phase 5) and the prose renderer after (phase 7). The line-level version is genuinely useful and unblocks restore.
 
+**BUILT: a modal overlay, not a tab.** This resolves the first open question at the bottom of this document, and the reasoning changed once the panel existed. A diff is something you glance at and dismiss, usually several in a row while scanning what an agent did; a tab is something you *keep*. Opening one tab per file inspected would bury the documents the user is actually working on within a minute. The overlay gets the same full width, closes on Escape or a backdrop click, and leaves the tab bar alone. It also keeps restore where the diff is -- the **Put this version back** button lives in the diff footer, so "look at it, then undo it" is one uninterrupted gesture instead of a trip back to the sidebar.
+
 ### Restore
 
 Two granularities, both append-only:
@@ -259,9 +310,23 @@ Both auto-checkpoint the current state first, then write, then checkpoint the re
 
 Restore writes files directly from the main process. It deliberately does **not** go through `write-file-if-unchanged`, which is the guard for renderer buffers. The existing conflict machinery then does the right thing for free: the directory watchers fire, the renderer recomputes hashes, clean tabs silently reload with the blue proof banner, and dirty tabs raise the red conflict banner. That is exactly the desired behavior and it is already built.
 
+### Opt-in, and the how-it-works recap
+
+**Checkpointing is never turned on for a folder without the user asking for it.** Opening a folder with no repo must not silently create one. Two reasons: writing a `.git/` into someone's Dropbox folder unannounced is a surprising side effect of "open folder", and a feature the user did not choose is a feature they will not know they have when they need it.
+
+So the no-repo state is a real, designed screen rather than an error:
+
+- The tab icon is **dimmed** (`.sidebar-tab-dim`), with no badge. It is visibly present but visibly inactive, which is the invitation.
+- Clicking it opens the panel with a plain-language explanation -- "Checkpoints are off for this folder", then what turning them on would do, in terms of the user's own work rather than Git's -- and one primary button, **Turn on checkpoints**.
+- That button runs preflight (the guardrails below), shows what it found, and on confirm does the whole setup in one step: seed `.gitignore`, `init`, write the marker, and make an **initial checkpoint** of everything already in the folder, titled "Started tracking changes". The user goes from a dimmed tab to a working history in two clicks, with a baseline to restore to.
+
+**The recap.** A `?` button (`bi-question-circle`) sits in the panel header and toggles a **How checkpoints work** card. It covers the five things a person actually needs: what a checkpoint is and that they happen automatically, what the Changes list and the tab number mean, that clicking a file shows exactly what changed with added words green and removed words red, how to put a single file or the whole folder back from History, and that nothing is ever thrown away because restoring appends. The last two items are hidden in read-only (foreign) repos, where they would be lies.
+
+The card **opens itself once**, immediately after first setup, and is dismissable and re-openable from the `?` forever after. Discovery is the whole problem here: a help affordance nobody clicks is the same as no help. Showing it exactly once, at the moment the user has just opted in and is looking at the panel, costs one dismissal and buys the explanation landing with the person who needs it. It does not reappear on later folders.
+
 ### Init flow
 
-Triggered from the gray tab. Runs the guardrail checks below, shows what it found, seeds `.gitignore`, inits, writes the marker, and makes an initial checkpoint of everything present.
+Triggered from the dimmed tab. Runs the guardrail checks below, shows what it found, seeds `.gitignore`, inits, writes the marker, and makes an initial checkpoint of everything present.
 
 ## Guardrails
 
@@ -286,6 +351,8 @@ node_modules/
 ```
 
 Plus any nested repos found.
+
+**Cloud-synced folders.** Detect Dropbox / iCloud Drive / OneDrive / Google Drive paths at init (path heuristics are enough: `~/Library/Mobile Documents/`, `~/Dropbox`, `~/OneDrive`, and the `.icloud` placeholder extension). Do not block, but warn plainly: version history reads every file to detect changes, and on a synced folder with storage optimization enabled that can pull files back down from the cloud. Offer to continue anyway. See "Cost and pacing" for why this matters more than it sounds.
 
 **Author identity.** Git requires an author on every commit and a non-technical user has none configured. Default to `MDE <mde@localhost>`, overridable in Settings. isomorphic-git's `commit` throws without it, so this is not optional.
 
@@ -329,6 +396,8 @@ src/utils/
   prosediff.ts   markdown-aware word-level diff (phase 7)
 ```
 
+**BUILT** as written for `src/git/` (plus `checkpointer.ts`, the poll loop, which the sketch above omitted). The component split was not worth it: `CheckpointButton` and `InitRepoDialog` are ~40-line pieces that exist only inside the panel and share its state, so they are local components inside `VersionPanel.tsx` (`HelpCard`, `ChangesSection`, `HistorySection`, `CheckpointRow`, `InitDialog`, `RestoreAllDialog`) rather than files.
+
 ### IPC surface
 
 Following the existing conventions in `src/index.ts` and `src/preload.ts`:
@@ -361,6 +430,8 @@ Types go in `src/types.ts` alongside the existing shared types, and the bridge m
 
 **The `.git/` write loop is structurally prevented, not filtered.** Committing writes to `.git/`, the recursive watcher sees it, and `sawChange` goes true. That costs one status call, which returns empty, so nothing happens. `lastCommitAt` was also just updated, so the poller is not even eligible. Two independent reasons it cannot loop, and neither requires the watcher to know what a path is. (Separately, `project-files-changed` still fires the sidebar refresh on `.git/` churn. That is pre-existing and harmless, but our own commits make it more frequent, so filtering it is a reasonable optional cleanup. Decide it deliberately: that event has another consumer with different needs.)
 
+**BUILT: never return `null` from an isomorphic-git `walk` map.** Its `_walk` treats `null` as *prune* (`if (parent !== null) { ...recurse... }`), not as "no result". Returning it for the `'.'` root entry -- the obvious way to skip the root -- silently prunes the entire walk, and `checkpointFiles` reports zero files for every checkpoint with no error anywhere. `undefined` is the value that means "not a result"; the default reducer filters those out. The same applies to directory entries, which must return `undefined` so the walker recurses into them.
+
 **Whole-tree restore is the fiddliest operation.** Walk the tree at the target commit, write every blob to the working directory, and then delete files that exist now but did not exist then. Forgetting the deletion half yields a union of both states, which is worse than either.
 
 **Status must never run on the render path.** One computation in the main process, gated by `sawChange`, cached, and pushed to the renderer as an event. The poller, the badge, and the changed-files panel all read that one cached result. If it turns out slow on real folders, move it to a `utilityProcess` rather than optimizing in place.
@@ -371,25 +442,30 @@ Playwright in Electron, headless, in `tests/`, following the existing convention
 
 Tests must not depend on the system Git being installed or configured, which isomorphic-git gives us for free.
 
-Coverage to write alongside each phase:
+**BUILT: 27 tests in `tests/version-control.spec.ts`**, covering every item below except the last.
 
-- Detect all four attach states, including a repo that grows a remote and steps back.
+- All four attach states, including a managed repo that grows a remote and steps back to read-only (and is then correctly *not* offered for adoption).
 - The marker survives a folder rename (init, rename the temp dir, re-attach, still managed).
-- Init refuses inside a parent repo; init ignores a child repo; init seeds `.gitignore`.
+- Init refuses inside a parent repo; warns about a child repo; warns about a large folder without blocking; seeds `.gitignore`.
+- The opt-in gate: dimmed tab, off-state copy, the enable flow end to end, and the how-it-works recap opening both from the `?` and automatically after first setup.
 - Badge count matches files changed externally, including deletions.
-- A checkpoint captures new, modified, **and deleted** files.
+- A checkpoint captures new, modified, **and deleted** files, and its own tree diff reports the deletion.
 - Restore-file writes old content and leaves a new checkpoint on top.
 - Restore-all deletes files that did not exist at the target commit.
-- Restore into a dirty open tab raises the existing red conflict banner.
-- Auto-checkpoint does **not** fire while less than the interval has passed since the last one.
+- Restore into a dirty open tab raises the existing red conflict banner and leaves the unsaved edit intact.
 - Auto-checkpoint fires once eligible, changes are pending, and the signature is unchanged across two polls.
-- Auto-checkpoint does **not** fire mid-burst: rewrite the same file with *different* content between two polls and assert no commit. This is the coarse-enum trap above and it is the test most likely to catch a regression.
-- Churn in a gitignored file neither triggers a checkpoint nor stalls one that is due.
+- Auto-checkpoint does **not** fire on an untouched folder (no empty checkpoints).
+- Auto-checkpoint does **not** fire mid-burst: the same file rewritten repeatedly, at constant length, across many polls. This is the coarse-enum trap above and it is the test most likely to catch a regression.
+- A same-size rewrite inside the same second as a checkpoint is still detected (the racy-clean trap).
+- Churn in a gitignored file never counts as a change.
 - A commit does not cause a second checkpoint from its own `.git/` writes.
-- Quit with pending changes captures them.
-- Diff output for an added paragraph, a deleted paragraph, and a word-level edit.
+- Diff output for an added paragraph, a deleted paragraph, a word-level edit, an identical file, a file that did not exist before, and collapsed unchanged runs.
 
-The interval and poll constants must be injectable so tests do not wait ten minutes. Read them from an override the test harness can set, alongside the existing `--test-headless` flag handling.
+**Both silent-failure regressions were verified by mutation**, not just by passing: reverting the mtime/size half of `statusSignature` makes the mid-burst test commit six times during the burst, and disabling `deraceIndex` makes the same-second test report zero changes. A test whose whole assertion is "nothing happened" is worthless until it has been seen to fail, and both of these are that kind of test.
+
+Not covered: **quit with pending changes**. `before-quit` is deliberately skipped under `isTest` because Playwright's Electron driver closes the app on every teardown, so a real flush there would fight the harness. Verified by reading; covering it would need a separate non-headless harness.
+
+The interval and poll constants are injectable via `--vc-eligibility-ms` and `--vc-poll-ms` so tests do not wait ten minutes, handled alongside the existing `--test-headless` flag.
 
 ## Build order
 
@@ -422,8 +498,15 @@ Roughly 2,200 lines plus tests. Phase 7 is close to half the perceived quality o
 
 ## Open questions
 
-- Should the diff view be a tab or an overlay? Tab reuses existing machinery; overlay is easier to dismiss.
-- Does an auto-checkpoint deserve a toast, or is that noise? Leaning toward a toast for the first one in a session only.
-- What does the panel show for a foreign repo with 40,000 commits? Needs pagination in `vc-history` from the start, hence the `before` parameter.
-- Are 10 minutes and 60 seconds the right two constants? Needs tuning against a real Claude Code session, but nothing is load-bearing here. Even a 30-minute cadence would beat what these users have today, which is nothing, so there is a lot of slack.
-- How expensive is `statusMatrix` on a realistic folder (a few hundred Markdown files, plus whatever else is lying around)? Measure before assuming the `sawChange` gate is enough.
+Resolved during the build:
+
+- ~~Should the diff view be a tab or an overlay?~~ **Overlay.** See the diff view section above.
+- ~~What does the panel show for a foreign repo with 40,000 commits?~~ **Paginated from the start**, 30 per page with a "Show more" button, via the `before` parameter.
+- ~~How expensive is `statusMatrix` on a realistic folder?~~ **Measured: 52-74ms on this repo with 33k gitignored entries**, and the interval self-calibrates from there. See "Cost and pacing".
+
+Still open, and fine to leave open:
+
+- Does an auto-checkpoint deserve a toast, or is that noise? Currently **no toast** -- the tab badge clearing is the signal, and the history list is there when the user wants it. A toast per checkpoint would be noise at one per 10 minutes all day; the first-of-session variant remains the idea worth trying if the automatic behavior turns out to feel invisible.
+- Are 10 minutes and 60 seconds the right two constants? Needs tuning against a real Claude Code session, but nothing is load-bearing here. Even a 30-minute cadence would beat what these users have today, which is nothing, so there is a lot of slack. Both are injectable via `--vc-eligibility-ms` / `--vc-poll-ms` (used by the tests), which is also the fastest way to try alternatives.
+- Quit-time capture (`before-quit` -> `flushAll`) is not covered by a test, for the harness reason given under Testing. It is the one piece of this feature resting on reading rather than on a test.
+- The `sawChange` gate is still unfiltered, so a cloud-synced folder polls every tick. Correct but wasteful; gitignore-filtering the watcher is the fix if it ever matters. See the caveat under "Cost and pacing".

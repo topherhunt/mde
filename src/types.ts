@@ -33,6 +33,97 @@ export interface Tab {
   initialContent?: string;
 }
 
+export type SidebarMode = 'explorer' | 'outline' | 'versions';
+
+// --- Version history (checkpoints). See CHECKPOINTS.md for the full design. ---
+
+// Only 'managed' permits writes. Everything else is read-only browsing; see
+// `resolveState` in src/git/repo.ts. The marker grants write mode and nothing else does.
+export type VcAttachState = 'none' | 'managed' | 'foreign' | 'steppedBack';
+
+export interface VcState {
+  attach: VcAttachState;
+  // Human-readable explanation for the non-writable states, shown verbatim in the panel.
+  reason?: string;
+  branch?: string | null;
+  hasRemote?: boolean;
+  // Only populated for 'foreign'. More than one branch means adopting would immediately
+  // step back to read-only, so the panel hides the adopt button rather than offering a
+  // button that visibly does nothing.
+  branchCount?: number;
+}
+
+export type VcChangeKind = 'added' | 'modified' | 'deleted';
+
+export interface VcChangedFile {
+  path: string; // repo-relative
+  kind: VcChangeKind;
+  // Line counts, only populated when explicitly requested (they cost a blob read + diff).
+  added?: number;
+  removed?: number;
+}
+
+export interface VcStatus {
+  files: VcChangedFile[];
+  count: number;
+}
+
+export interface VcCheckpoint {
+  sha: string;
+  subject: string;
+  timestamp: number; // ms since epoch
+  kind: 'auto' | 'manual' | 'restore';
+  // Present when kind === 'restore': the checkpoint whose content was restored.
+  restoreOf?: string;
+  // Present when the commit was not made by MDE (only possible in an adopted repo).
+  foreign?: boolean;
+}
+
+export interface VcLargeFile {
+  path: string;
+  bytes: number;
+}
+
+export interface VcPreflight {
+  // Non-null blocks init outright: nesting a repo inside a repo is unrecoverable for this user.
+  parentRepo: string | null;
+  childRepos: string[];
+  totalBytes: number;
+  fileCount: number;
+  largeFiles: VcLargeFile[];
+  // e.g. 'iCloud Drive'. Warn but never block: reading every file on a
+  // storage-optimized sync folder can pull content back down from the cloud.
+  cloudSync: string | null;
+  // True when the walk hit its cap, so the totals above are lower bounds.
+  truncated: boolean;
+}
+
+export interface VcDiff {
+  path: string;
+  before: string | null; // null when the file did not exist at that point
+  after: string | null; // null when the file was deleted
+  binary: boolean;
+}
+
+export interface VcRestoreResult {
+  ok: boolean;
+  newSha: string | null;
+  filesWritten: number;
+  filesDeleted: number;
+  // The checkpoint capturing the pre-restore state, if anything needed capturing.
+  safetySha: string | null;
+  error?: string;
+}
+
+export interface VcCheckpointResult {
+  ok: boolean;
+  // null when there was nothing to commit -- not an error, just a no-op.
+  sha: string | null;
+  subject?: string;
+  filesChanged?: number;
+  error?: string;
+}
+
 export interface MdeAPI {
   platform: NodeJS.Platform;
   readFile: (filePath: string) => Promise<string>;
@@ -100,6 +191,24 @@ export interface MdeAPI {
   setSidebarWidth: (width: number) => Promise<void>;
   getFoldState: (filePath: string) => Promise<number[]>;
   setFoldState: (filePath: string, lineNumbers: number[]) => Promise<void>;
+
+  // --- Version history. All calls are no-ops on a folder MDE does not manage, except
+  // vcGetState/vcGetStatus/vcHistory/vcDiff, which are read-only and safe anywhere. ---
+  vcGetState: (root: string) => Promise<VcState>;
+  vcGetStatus: (root: string) => Promise<VcStatus>;
+  vcPreflight: (root: string) => Promise<VcPreflight>;
+  vcInit: (root: string) => Promise<{ ok: boolean; error?: string }>;
+  vcAdopt: (root: string) => Promise<{ ok: boolean; error?: string }>;
+  vcCheckpoint: (root: string, message?: string) => Promise<VcCheckpointResult>;
+  vcHistory: (root: string, opts?: { limit?: number; before?: string }) => Promise<VcCheckpoint[]>;
+  vcCheckpointFiles: (root: string, sha: string) => Promise<VcChangedFile[]>;
+  vcDiff: (root: string, filePath: string, sha?: string) => Promise<VcDiff>;
+  vcRestoreFile: (root: string, sha: string, filePath: string) => Promise<VcRestoreResult>;
+  vcRestoreAll: (root: string, sha: string) => Promise<VcRestoreResult>;
+  onVcStatus: (callback: (payload: { root: string; files: VcChangedFile[] }) => void) => () => void;
+  onVcCheckpoint: (
+    callback: (payload: { root: string; sha: string; subject: string }) => void
+  ) => () => void;
 }
 
 declare global {

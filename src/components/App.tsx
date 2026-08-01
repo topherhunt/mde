@@ -1,5 +1,5 @@
 import React, { useReducer, useEffect, useCallback, useRef, useState, useMemo } from 'react';
-import { Tab } from '../types';
+import { Tab, SidebarMode } from '../types';
 import Sidebar from './Sidebar';
 import TabBar from './TabBar';
 import Toolbar from './Toolbar';
@@ -8,6 +8,7 @@ import ConflictBanner from './ConflictBanner';
 import FindBar from './FindBar';
 import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
+import { useVersionControl } from './VersionPanel';
 import { DeleteConfirmDialog } from './FileContextMenu';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { FileEntry } from '../types';
@@ -17,7 +18,7 @@ import KEYBOARD_SHORTCUTS_CONTENT from '../../docs/help/keyboard_shortcuts.md';
 interface AppState {
   tabs: Tab[];
   activeTabIndex: number;
-  sidebarMode: 'explorer' | 'outline';
+  sidebarMode: SidebarMode;
   projectRoot: string | null;
   findBarOpen: boolean;
 }
@@ -31,7 +32,7 @@ type Action =
   | { type: 'MARK_CONFLICT'; tabId: string; conflict: boolean }
   | { type: 'UPDATE_TAB_PATH'; tabId: string; filePath: string; fileName: string; mtime: number | null; hash: string | null }
   | { type: 'UPDATE_TAB_MTIME'; tabId: string; mtime: number | null; hash: string | null }
-  | { type: 'SET_SIDEBAR_MODE'; mode: 'explorer' | 'outline' }
+  | { type: 'SET_SIDEBAR_MODE'; mode: SidebarMode }
   | { type: 'TOGGLE_FIND_BAR' }
   | { type: 'REORDER_TABS'; fromIndex: number; toIndex: number }
   | { type: 'PIN_TAB'; tabId: string };
@@ -223,6 +224,10 @@ export default function App() {
   }, []);
 
   const activeTab = state.tabs[state.activeTabIndex] || null;
+
+  // Lives here rather than inside the panel so the sidebar tab badge stays live whether or
+  // not the Checkpoints tab is the one on screen.
+  const vc = useVersionControl(state.projectRoot);
 
   // The hash we last read from / wrote to each path, recorded SYNCHRONOUSLY. `tab.diskHash`
   // holds the same value, but it only becomes visible once React commits the dispatch --
@@ -906,6 +911,7 @@ export default function App() {
           projectRoot={state.projectRoot}
           mode={state.sidebarMode}
           onSetMode={(mode) => dispatch({ type: 'SET_SIDEBAR_MODE', mode })}
+          vc={vc}
           onOpenFile={(filePath, tentative) => {
             suppressEditorFocusRef.current = true;
             openFile(filePath, tentative);

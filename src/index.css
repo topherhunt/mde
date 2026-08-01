@@ -22,9 +22,17 @@
   --code-text: #d4d4d4;
   --danger-text: #b91c1c;
   --info-text: #1d4ed8;
+  --success-text: #15803d;
+  --warning-bg: #fffbeb;
+  --warning-border: #fde68a;
+  --warning-text: #92400e;
   --toolbar-icon: #888888;
   --tooltip-bg: #2a2a2c;
   --tooltip-text: #f5f5f5;
+  --diff-add-bg: #e6ffed;
+  --diff-add-word: #a7f3b0;
+  --diff-del-bg: #ffeef0;
+  --diff-del-word: #fdb8c0;
 }
 
 [data-theme="dark"] {
@@ -44,9 +52,17 @@
   --code-text: #d4d4d4;
   --danger-text: #fca5a5;
   --info-text: #93c5fd;
+  --success-text: #4ade80;
+  --warning-bg: #3a2d0b;
+  --warning-border: #78641a;
+  --warning-text: #fcd34d;
   --toolbar-icon: #d6d6d6;
   --tooltip-bg: #3a3a3d;
   --tooltip-text: #f0f0f0;
+  --diff-add-bg: #12281a;
+  --diff-add-word: #1d5a2e;
+  --diff-del-bg: #2d1416;
+  --diff-del-word: #6b2028;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -67,9 +83,17 @@
     --code-text: #d4d4d4;
     --danger-text: #fca5a5;
     --info-text: #93c5fd;
+    --success-text: #4ade80;
+    --warning-bg: #3a2d0b;
+    --warning-border: #78641a;
+    --warning-text: #fcd34d;
     --toolbar-icon: #d6d6d6;
     --tooltip-bg: #3a3a3d;
     --tooltip-text: #f0f0f0;
+    --diff-add-bg: #12281a;
+    --diff-add-word: #1d5a2e;
+    --diff-del-bg: #2d1416;
+    --diff-del-word: #6b2028;
   }
 }
 
@@ -99,6 +123,126 @@ body {
 
 .text-muted {
   color: var(--text-muted);
+}
+
+.fw-semibold {
+  font-weight: 500;
+}
+
+.text-danger {
+  color: var(--danger-text);
+}
+
+.text-success {
+  color: var(--success-text);
+}
+
+.text-primary {
+  color: var(--accent);
+}
+
+.text-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.d-flex {
+  display: flex;
+}
+
+.flex-column {
+  flex-direction: column;
+}
+
+.flex-grow-1 {
+  flex-grow: 1;
+}
+
+.align-items-center {
+  align-items: center;
+}
+
+.justify-content-between {
+  justify-content: space-between;
+}
+
+.gap-1 { gap: 0.25rem; }
+.gap-2 { gap: 0.5rem; }
+.gap-3 { gap: 1rem; }
+
+.mt-1 { margin-top: 0.25rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-3 { margin-top: 1rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-3 { margin-bottom: 1rem; }
+
+/* Buttons. `.settings-btn` predates these and carries its own copy of the base shape;
+   new code should compose `.btn` + a variant. */
+.btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-sm {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent);
+  opacity: 0.9;
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: #ffffff;
+  border-color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger);
+  opacity: 0.9;
+}
+
+/* An icon-only button with no chrome until hovered. */
+.btn-plain {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  font-family: inherit;
+}
+
+.btn-plain:hover {
+  background: var(--bg-tertiary);
+  color: var(--text);
 }
 
 /* --- App layout --- */
@@ -1779,4 +1923,357 @@ body {
   70% { color: #93c5fd; }
   80% { color: #c4b5fd; }
   90% { color: #f0abfc; }
+}
+
+/* --- Checkpoints panel (sidebar tab 3) --- */
+/* The tab needs position:relative so the count badge can sit on its corner. */
+.sidebar-tab {
+  position: relative;
+}
+
+/* Not yet opted in: visible enough to be found, dim enough to read as "off". */
+.sidebar-tab-dim {
+  opacity: 0.45;
+}
+
+.sidebar-tab-badge {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+}
+
+.vc-panel {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+}
+
+.vc-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.vc-header-title {
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.vc-help {
+  margin: 0 8px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.vc-help-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.vc-help-list li + li {
+  margin-top: 6px;
+}
+
+.vc-help-list strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.vc-intro {
+  padding: 8px 10px 12px;
+  line-height: 1.5;
+}
+
+.vc-intro p + p {
+  margin-top: 6px;
+}
+
+.vc-notice {
+  margin: 0 8px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.vc-section {
+  padding: 0 8px 12px;
+}
+
+.vc-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 6px 0 4px;
+}
+
+.vc-empty {
+  padding: 2px 0 4px;
+}
+
+.vc-file-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A row is a real <button> so it is keyboard-reachable; the chrome is stripped back. */
+.vc-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vc-file-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.vc-file-row .bi {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.vc-file-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.vc-save-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.vc-message-input {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.vc-message-input:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.vc-checkpoint-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vc-checkpoint-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.vc-checkpoint.expanded > .vc-checkpoint-row {
+  background: var(--bg-tertiary);
+}
+
+.vc-checkpoint-icon {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.vc-checkpoint-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.vc-checkpoint-subject {
+  font-weight: 500;
+}
+
+.vc-checkpoint-detail {
+  padding: 2px 0 6px 18px;
+}
+
+.vc-warning {
+  padding: 8px 10px;
+  border: 1px solid var(--warning-border);
+  border-radius: 5px;
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  line-height: 1.45;
+}
+
+.vc-warning code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.95em;
+}
+
+.vc-warning-danger {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+/* --- Diff view --- */
+.diff-modal {
+  display: flex;
+  flex-direction: column;
+  width: 900px;
+  max-width: 92vw;
+  height: 80vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.diff-header-text {
+  min-width: 0;
+}
+
+.diff-title {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 0;
+}
+
+.diff-empty {
+  padding: 24px;
+  text-align: center;
+}
+
+/* Prose, not code: the reader is looking at sentences, so wrap rather than scroll. */
+.diff-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 1px 14px;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-gutter {
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--text-muted);
+  user-select: none;
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.diff-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.diff-added {
+  background: var(--diff-add-bg);
+}
+
+.diff-removed {
+  background: var(--diff-del-bg);
+}
+
+/* The word-level highlight -- the part that makes a prose diff readable. */
+.diff-word {
+  background: var(--diff-del-word);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.diff-added .diff-word {
+  background: var(--diff-add-word);
+}
+
+.diff-gap {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  margin: 4px 0;
+}
+
+.diff-footer {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }

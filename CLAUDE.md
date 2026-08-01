@@ -12,9 +12,10 @@ A WYSIWYG Markdown editor built with Electron + React + TipTap. See `plan.md` fo
 
 - **Preload** (`src/preload.ts`): Exposes `window.mde` API via contextBridge. All file system access goes through this bridge.
 - **Renderer** (`src/renderer.tsx`): React entry point. Imports Bootstrap Icons CSS and app styles.
-- **Components** (`src/components/`): App, Sidebar, TabBar, Toolbar, Editor, FindBar, LinkBar, QuickOpen, ConflictBanner, TableMenu.
+- **Components** (`src/components/`): App, Sidebar, TabBar, Toolbar, Editor, FindBar, LinkBar, QuickOpen, ConflictBanner, TableMenu, VersionPanel, DiffView.
 - **Types** (`src/types.ts`): Shared TypeScript types + `window.mde` declaration.
 - **Markdown utils** (`src/utils/markdown.ts`): TipTap <-> Markdown serialization via tiptap-markdown.
+- **Checkpoints** (`src/git/`): repo detection and the managed marker, status, checkpoint creation, the auto-checkpoint poller, history reads, restore, init guardrails, default gitignore. Runs entirely in the MAIN process via isomorphic-git -- the renderer never sees a repo object. -> notes: Checkpoints
 
 State management is React context + useReducer, no external state lib. User preferences (theme, spellcheck, sidebar width, window bounds, last project root, fold state) live in `mde-state.json` in Electron's userData dir via `loadState` / `saveState` in index.ts.
 
@@ -40,6 +41,11 @@ Break these and something silently corrupts, clobbers, or infinite-loops.
 - **Renderer webpack config must NOT use `@vercel/webpack-asset-relocator-loader`** -- it breaks ESM imports from TipTap packages. Main process only.
 - **Do NOT bundle `pdfjs-dist` or its worker with webpack** -- the worker spawning mechanism breaks. They stay externals and resolve from `node_modules` at runtime.
 - **When adding or changing a keyboard shortcut, update `docs/help/keyboard_shortcuts.md`** -- it is the single source of truth for the shortcut list and is loaded into the in-app help tab.
+- **Checkpoint history is append-only.** No `reset --hard`, no amend, no rebase, no force, ever. Restore writes old content as a NEW checkpoint on top, after taking a safety checkpoint first. -> notes: Checkpoints
+- **`mde.managed = true` in `.git/config` is the ONLY thing that grants write mode**, and live evidence (a remote, a second branch) overrides it. Never key managed-ness off a path in `mde-state.json`. Never create a repo without the user opting in. -> notes: Checkpoints
+- **Never return `null` from an isomorphic-git `walk` map** -- `null` means PRUNE, and returning it for the `'.'` root silently prunes the whole walk so every checkpoint reports zero files. Use `undefined`. -> notes: Checkpoints
+- **Keep `refresh: false` on `statusMatrix` and the `deraceIndex` call after commit.** isomorphic-git has no racy-clean rule, so a same-second same-size write is otherwise invisible FOREVER -- the changes list silently omits a file that really changed. Both halves are required; do not "simplify" either. -> notes: Checkpoints
+- **The checkpoint index must stay COMPLETE between checkpoints** (never dirty, but never emptied) -- `git.commit` builds its tree from it. Do not delete `.git/index`. -> notes: Checkpoints
 
 ## Key decisions
 
@@ -93,6 +99,18 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 - Drag-drop within the sidebar moves files/folders via `renameFile`; dropping into own descendants or current parent is blocked.
 - The outline highlights the last heading scrolled past the viewport's top reading line. -> notes: Sidebar and outline
 
+### Checkpoints (version history)
+
+Full design and as-built record: `CHECKPOINTS.md`. Short form here.
+
+- The word "Git" appears in the UI never. No staging, no branches, no remotes, no merge conflicts -- the audience is non-technical writers reviewing what an AI agent did to their files.
+- Four attach states: `none` (dimmed tab + opt-in screen), `managed` (writable), `foreign` (read-only + adopt button), `steppedBack` (read-only, not adoptable). -> notes: Checkpoints
+- One cadence rule, source-agnostic: more than 10 minutes since the last checkpoint + uncommitted changes + a quiet period -> checkpoint everything. No separate behavior for agent writes vs. the user's own edits. `--vc-eligibility-ms` / `--vc-poll-ms` override the constants for tests. -> notes: Checkpoints
+- Detection polls `statusMatrix` (which excludes gitignored files); the watcher is demoted to an unfiltered dirty-flag gate. The poller gate is `!sawChange && lastSignature === null` -- the second half prevents a deadlock after a single burst of edits. -> notes: Checkpoints
+- The quiet signature MUST fold in mtime and size: `statusMatrix`'s WORKDIR field is a coarse enum, not a content hash, so a rewritten file looks identical across polls. -> notes: Checkpoints
+- isomorphic-git has no `add -A` -- walk the status and call `remove` for deletions, or they silently vanish from checkpoints. Whole-tree restore must delete files that did not exist at the target, or you get a union of both states. -> notes: Checkpoints
+- Restore deliberately bypasses `write-file-if-unchanged` and writes straight to disk, so the existing conflict machinery handles open tabs for free. -> notes: Checkpoints
+
 ### Import and packaging
 
 - DOCX: mammoth + turndown, with HTML preprocessing so turndown-plugin-gfm's table rule fires. PDF: `pdfjs-dist` legacy build in fake-worker mode, with position-based line grouping, column detection, heading detection by font height, and table detection. -> notes: Import (DOCX / PDF)
@@ -121,13 +139,15 @@ Playwright in Electron mode. Tests live in `tests/`. Run with `npm test`. The `p
 
 All verification goes through E2E tests -- do not start the app interactively to check behavior.
 
-**Sidebar tab selectors** use `[title="File Explorer"]` and `[title="Document Outline"]` (not text content) since tabs show icons.
+**Sidebar tab selectors** use `[title="File Explorer"]` and `[title="Document Outline"]` (not text content) since tabs show icons. The Checkpoints tab uses `.qa-vc-tab`.
+
+**A test whose assertion is "nothing happened" must be seen to fail before you trust it.** Break the mechanism, watch the test go red, then restore. Two checkpoint tests are of this kind and were verified that way. -> notes: Checkpoints
 
 **`tests/packaged.spec.ts` tests the PACKAGED artifact, not the dev tree.** The rest of the suite launches Electron against `.webpack/main` with the project's own `node_modules` present, so anything that only breaks inside `app.asar` (missing runtime deps) passes there and fails for the user. That spec extracts `out/**/app.asar` and `require()`s the externals out of it in a real Node process. It can't just launch the packaged binary: the Fuses config (`RunAsNode: false`, `EnableNodeCliInspectArguments: false`) prevents Playwright's Electron driver from attaching.
 
 ## Current status
 
-150 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+177 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

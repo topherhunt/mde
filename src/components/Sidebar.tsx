@@ -3,11 +3,14 @@ import { FileEntry } from '../types';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { basename, dirname, joinPath } from '../utils/paths';
 import { FileContextMenu, DeleteConfirmDialog } from './FileContextMenu';
+import VersionPanel, { VersionControl } from './VersionPanel';
+import { SidebarMode } from '../types';
 
 interface SidebarProps {
   projectRoot: string | null;
-  mode: 'explorer' | 'outline';
-  onSetMode: (mode: 'explorer' | 'outline') => void;
+  mode: SidebarMode;
+  onSetMode: (mode: SidebarMode) => void;
+  vc: VersionControl;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
   onImportFile: (filePath: string) => void;
   activeEditor: TipTapEditor | null;
@@ -18,7 +21,7 @@ interface SidebarProps {
   onFileRenamed?: (oldPath: string, newPath: string) => void;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed }: SidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const resizing = useRef(false);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -98,9 +101,23 @@ export default function Sidebar({ projectRoot, mode, onSetMode, onOpenFile, onIm
         >
           <i className="bi bi-list-nested" />
         </button>
+        {/* Dimmed until the user opts in, so the feature is discoverable without ever
+            looking like it is already running. */}
+        <button
+          className={`sidebar-tab qa-vc-tab ${mode === 'versions' ? 'active' : ''} ${vc.state.attach === 'none' ? 'sidebar-tab-dim' : ''}`}
+          onClick={() => onSetMode('versions')}
+          title="Checkpoints"
+        >
+          <i className="bi bi-clock-history" />
+          {vc.files.length > 0 && vc.state.attach !== 'none' && (
+            <span className="sidebar-tab-badge qa-vc-badge">{vc.files.length}</span>
+          )}
+        </button>
       </div>
       <div className="sidebar-content">
-        {mode === 'explorer' ? (
+        {mode === 'versions' ? (
+          <VersionPanel projectRoot={projectRoot} vc={vc} onToast={onToast} />
+        ) : mode === 'explorer' ? (
           <FileExplorer
             projectRoot={projectRoot}
             onOpenFile={onOpenFile}

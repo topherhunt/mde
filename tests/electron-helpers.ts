@@ -19,11 +19,13 @@ function findWebpackMain(): string {
   );
 }
 
-export async function launchApp(): Promise<{ app: ElectronApplication; page: Page }> {
+export async function launchApp(
+  extraArgs: string[] = []
+): Promise<{ app: ElectronApplication; page: Page }> {
   const mainPath = findWebpackMain();
 
   const app = await electron.launch({
-    args: [mainPath, '--test-headless'],
+    args: [mainPath, '--test-headless', ...extraArgs],
   });
 
   const page = await app.firstWindow();

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { VcChangedFile } from './types';
 
 export interface FileEntry {
   name: string;
@@ -254,6 +255,42 @@ const api = {
 
   setFoldState: (filePath: string, lineNumbers: number[]): Promise<void> =>
     ipcRenderer.invoke('set-fold-state', filePath, lineNumbers),
+
+  // --- Version history (checkpoints). See CHECKPOINTS.md. ---
+
+  vcGetState: (root: string) => ipcRenderer.invoke('vc-get-state', root),
+  vcGetStatus: (root: string) => ipcRenderer.invoke('vc-get-status', root),
+  vcPreflight: (root: string) => ipcRenderer.invoke('vc-preflight', root),
+  vcInit: (root: string) => ipcRenderer.invoke('vc-init', root),
+  vcAdopt: (root: string) => ipcRenderer.invoke('vc-adopt', root),
+  vcCheckpoint: (root: string, message?: string) =>
+    ipcRenderer.invoke('vc-checkpoint', root, message),
+  vcHistory: (root: string, opts?: { limit?: number; before?: string }) =>
+    ipcRenderer.invoke('vc-history', root, opts),
+  vcCheckpointFiles: (root: string, sha: string) =>
+    ipcRenderer.invoke('vc-checkpoint-files', root, sha),
+  vcDiff: (root: string, filePath: string, sha?: string) =>
+    ipcRenderer.invoke('vc-diff', root, filePath, sha),
+  vcRestoreFile: (root: string, sha: string, filePath: string) =>
+    ipcRenderer.invoke('vc-restore-file', root, sha, filePath),
+  vcRestoreAll: (root: string, sha: string) =>
+    ipcRenderer.invoke('vc-restore-all', root, sha),
+
+  onVcStatus: (callback: (payload: { root: string; files: VcChangedFile[] }) => void) => {
+    const handler = (_e: unknown, payload: { root: string; files: VcChangedFile[] }) =>
+      callback(payload);
+    ipcRenderer.on('vc-status', handler);
+    return () => ipcRenderer.removeListener('vc-status', handler);
+  },
+
+  onVcCheckpoint: (
+    callback: (payload: { root: string; sha: string; subject: string }) => void
+  ) => {
+    const handler = (_e: unknown, payload: { root: string; sha: string; subject: string }) =>
+      callback(payload);
+    ipcRenderer.on('vc-checkpoint', handler);
+    return () => ipcRenderer.removeListener('vc-checkpoint', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('mde', api);

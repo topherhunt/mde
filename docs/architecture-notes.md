@@ -383,6 +383,79 @@ The Keyboard Shortcuts help page opens as a read-only tab. Content loaded from `
 
 ---
 
+## Checkpoints (version history)
+
+Full design rationale lives in `CHECKPOINTS.md`, which is both the proposal and the as-built record. This section covers only what will bite someone changing the code.
+
+Code: `src/git/` (`repo`, `status`, `checkpoint`, `checkpointer`, `history`, `restore`, `guards`, `ignore`), `src/components/VersionPanel.tsx`, `src/components/DiffView.tsx`, `src/utils/prosediff.ts`. Everything Git-touching runs in the MAIN process; the renderer never sees a repo object. Library is **isomorphic-git** (pure JS, no native deps, bundles normally) plus **jsdiff**.
+
+### The word "Git" appears in the UI never
+
+The audience is non-technical writers reviewing what an AI agent did to their files. No staging, no branches, no remotes, no merge conflicts. The tab is "Checkpoints" with a `bi-clock-history` icon -- deliberately not a branch icon, which reads as "this is for programmers" to exactly the person we are trying not to scare.
+
+### History is append-only
+
+There is no operation anywhere that destroys or rewrites a commit. Restore reads old content and writes it as a NEW checkpoint on top (the shape of `git revert`), and always takes a safety checkpoint of the current state first. Consequences: detached HEAD is unreachable, "I lost my work" is structurally impossible, and no action needs a scary confirmation. Do not add `reset --hard`, amend, or rebase to this feature for any reason.
+
+### The marker grants write mode, and nothing else does
+
+`mde.managed = true` in `.git/config` is the ONLY thing that makes a repo writable. `.git/config` is the right home: inside `.git/`, so never in the working tree, never in a diff, never committed, and it survives a move, rename, copy, or zip. Do NOT key managed-ness off a path in `mde-state.json` -- that breaks on exactly the rename case (there is a test).
+
+Four attach states: `none` (no repo -- dimmed tab, opt-in screen), `managed` (writable), `foreign` (a repo MDE did not create -- read-only browsing plus an explicit adopt button), `steppedBack` (marker present but a remote or a second branch appeared -- read-only, and NOT adoptable). Live evidence outranks the marker, always. A false negative costs one click; a false positive means MDE silently commits into a developer's real project.
+
+### Opt-in is mandatory
+
+Opening a folder never creates a repo. The user turns it on from the dimmed tab, and setup runs guardrails, seeds `.gitignore`, inits, writes the marker, and makes an initial checkpoint in one step. The `?` in the panel header toggles the how-it-works recap, which also auto-opens once right after first setup -- a help affordance nobody clicks is the same as no help.
+
+### The cadence rule -- there is exactly one
+
+> If it has been more than 10 minutes since the last checkpoint, and there are uncommitted changes, wait for a quiet period, then checkpoint everything.
+
+Deliberately source-agnostic: no different behavior for agent writes vs. the user's own edits. An earlier draft had two settle windows and collapsed on the mixed case (you edit a file, then Claude rewrites it -- which window applies?). A rule with a conditional inside it is one nobody can predict. Explicitly rejected: urgency escalation on volume (it splits bursts, and mid-burst states are the worst possible restore targets) and using the Git index as a debounce buffer (it strands real content in `.git/objects` that the UI cannot see or reach).
+
+`--vc-eligibility-ms` and `--vc-poll-ms` override the two constants so tests do not wait ten minutes.
+
+### Detection: poll status, gate on the watcher
+
+Change detection derives from `statusMatrix`, NOT from watcher events, and this is correctness rather than taste: **`statusMatrix` excludes gitignored files and watcher events do not**. Driving the settle window off watcher events means any frequently-rewritten ignored file (`.obsidian/workspace.json`, Dropbox sync traffic, a build watcher) resets it forever, and real changes sit uncommitted with no visible cause. The watcher is demoted to a dirty-flag gate -- `sawChange = true`, unfiltered, undebounced -- and that is its entire job.
+
+**The poller gate is `!sawChange && lastSignature === null`, and both halves are load-bearing.** Gating on the watcher alone deadlocks the most common case in the feature: one burst of edits, then silence. The burst sets the flag, the first tick consumes it, and with no further filesystem events no later tick ever runs -- so the settle window never completes and the changes sit there until the next unrelated edit. `lastSignature !== null` means "the last tick saw uncommitted changes", which is exactly when we must keep polling regardless of the watcher.
+
+**The signature must fold in mtime and size.** `statusMatrix`'s WORKDIR field is a coarse enum (0 absent / 1 same as HEAD / 2 different), NOT a content hash, so a file rewritten with different content produces a byte-identical row both times. A signature built from the matrix alone compares equal across two polls mid-burst and commits a half-finished agent operation. Test: "no checkpoint lands mid-burst".
+
+Poll interval self-calibrates: `max(60s, lastStatusDuration * 100)`, capped at 15 minutes. Measured 52-74ms on this repo with 33k gitignored entries, so a real Markdown folder is far cheaper.
+
+### isomorphic-git has no racy-clean rule
+
+`compareStats` reuses an index entry's cached hash when the mtime SECOND, ctime second, size, inode, and mode all still match. mtime granularity is one second. **So a write landing in the same second as the `git.add` that recorded those stats, at the same byte length, is invisible -- permanently, until something else touches the file.** Real Git closes this with the racy-clean rule; isomorphic-git does not implement it. For a feature promising "nothing is ever lost", a file silently missing from the changes list is the worst available failure.
+
+Two halves, both required:
+
+- `computeStatus` passes **`refresh: false`**, making status read-only with respect to the index. With the default, a status that merely happened to run in the same second as a write would poison the stat cache with nothing following it to undo the damage. This makes `git.add` the only writer of index stats in the whole system.
+- `createCheckpoint` calls **`deraceIndex`** right after committing, rewriting the index entry (via `updateIndex` with an explicit oid, which stores zeroed stats) for any just-committed file whose mtime second is the current second. Zeroed stats never compare equal to a real file, so the next status hashes it for real.
+
+Do NOT "fix" this by deleting `.git/index` between checkpoints. `git.commit` builds its tree FROM the index, so the index must stay COMPLETE even though it is never left dirty -- each checkpoint adds only the changed files on top of what is already there. "Transient" means no uncommitted content, not empty.
+
+### Other traps
+
+- **isomorphic-git has no `add -A`.** You must walk the status yourself and call `remove` for deletions and `add` for everything else. Forgetting the `remove` half silently drops deletions from checkpoints.
+- **Never return `null` from a `walk` map.** `_walk` treats `null` as PRUNE (`if (parent !== null) { ...recurse... }`), so returning it for the `'.'` root entry silently prunes the entire walk and every checkpoint reports zero files, with no error anywhere. `undefined` is the value that means "not a result". Directory entries must also return `undefined` so the walker recurses into them.
+- **Whole-tree restore must delete.** Write every blob at the target commit, then remove files that exist now but did not exist then. Forgetting the deletion half yields a union of both states, which is worse than either.
+- **Restore deliberately bypasses `write-file-if-unchanged`** and writes straight to disk. That guard is for renderer buffers; here the existing conflict machinery is what we want, and it works for free -- clean tabs silently reload with the blue banner, dirty tabs raise the red one.
+- **The `.git/` write loop is structurally prevented, not filtered.** Committing writes to `.git/`, the watcher sees it, `sawChange` goes true, and the resulting status is empty so nothing happens -- and `lastCommitAt` was just reset anyway. Two independent reasons it cannot loop, neither requiring the watcher to know what a path is.
+
+### Testing
+
+`tests/version-control.spec.ts`, 27 tests. Tab selector is `.qa-vc-tab`; the rest are `qa-vc-*` / `qa-diff-*`.
+
+Two of those tests assert that NOTHING happened (no mid-burst commit, no missing change row), and a "nothing happened" test is worthless until it has been seen to fail. Both were verified by mutation: reverting the mtime/size half of `statusSignature` makes the mid-burst test commit six times during the burst, and disabling `deraceIndex` makes the same-second test report zero changes. Re-verify the same way if you touch either mechanism.
+
+`makeTmpDir` calls `fs.realpathSync`. macOS hands out `/var/folders/...`, a symlink to `/private/var/...`, and isomorphic-git resolves it -- without the realpath the renderer's `projectRoot` and the main process's repo root are two different strings and every event is silently dropped.
+
+Not covered by tests: quit-time capture (`before-quit` -> `flushAll`), because `before-quit` is skipped under `isTest` -- Playwright closes the app on every teardown and a real flush would fight the harness.
+
+---
+
 ## Feature inventory
 
 What exists today, for orientation. This list goes stale faster than the notes above -- the test suite is authoritative.
@@ -425,3 +498,4 @@ What exists today, for orientation. This list goes stale faster than the notes a
 - Code folding: Cmd+. on a list item with children, or on a heading, toggles fold. A folded heading hides everything down to the next heading of the same or larger rank. When folded, the content is hidden, a blue "..." badge appears after the text, and (for list items) a blue chevron caret appears to the left of the bullet/checkbox. Fold state persists across file close/reopen and external file changes, and survives reordering (Cmd+Alt+Up/Down) and splitting (Enter) the surrounding items. Clicking the caret or badge unfolds, as does any edit that would put the cursor inside the hidden content. Hovering an unfolded foldable node shows a dim gray caret that folds just that node on click.
 - Task list editing: Enter carries checked-ness with the text. Only a click inside the checkbox itself toggles it. Backspace on an empty middle item deletes that item and moves the cursor to the end of the item above. Copying text inside a list item gives plain text with no `- ` / `[ ] ` marker.
 - Sidebar defaults to the outline tab when a file is opened with no project folder set (the explorer would be empty, so the outline is more useful).
+- Checkpoints: a third sidebar tab (`bi-clock-history`) giving a folder an undo history for AI-driven edits, backed by Git and never described as Git. Off until the user opts in -- the tab is dimmed, and turning it on runs guardrails (refuses inside a parent repo, warns about nested repos and big folders), seeds `.gitignore`, and makes an initial checkpoint. A `?` in the panel header toggles a how-it-works recap that also auto-opens once after setup. **Changes** lists everything that has moved since the last checkpoint (yours or an agent's), with the count on the tab badge; **History** lists checkpoints, expandable to their file lists. Checkpoints happen automatically (10-minute cadence, only after things go quiet) or on demand with an optional message. Clicking any file opens a word-level prose diff in a modal -- added words green, removed words red, long unchanged stretches collapsed -- with **Put this version back** in the footer. Restore works per-file or for the whole folder, always append-only: the current state is checkpointed first and restoring adds a new checkpoint on top, so nothing is ever lost. Repos MDE did not create are read-only history browsing plus an explicit adopt button.
