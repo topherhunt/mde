@@ -1477,6 +1477,19 @@ body {
   width: 620px;
 }
 
+/* The list of image references a file is about to lose. Scrolls rather than growing the dialog
+   past the viewport: a file can legitimately hold dozens. */
+.image-warning-refs {
+  margin-top: 12px;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--danger-border);
+  border-radius: 5px;
+  background: var(--danger-bg);
+  line-height: 1.6;
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;
@@ -1971,8 +1984,12 @@ body {
   height: 15px;
   padding: 0 4px;
   border-radius: 8px;
-  background: var(--danger);
-  color: #ffffff;
+  /* Deliberately neutral, never red. Red is a call to action, and there is no action to take:
+     checkpointing is automatic, so a pending count resolves itself within minutes whether or not
+     anyone looks at it. It is a status number, not an alert -- and on a folder MDE only reads
+     (foreign or stepped-back), it is not even something MDE will act on. */
+  background: var(--text-muted);
+  color: var(--bg);
   font-size: 10px;
   font-weight: 600;
   line-height: 15px;

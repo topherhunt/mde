@@ -300,6 +300,41 @@ test.describe('Checkpoint change detection', () => {
     await expect(page.locator('.qa-vc-changes')).toContainText('chapter2.md');
   });
 
+  test('the badge is a neutral count, not a red alert', async () => {
+    // Red reads as "do something about this". Nothing here needs doing: checkpointing is
+    // automatic, so the count clears itself within minutes -- and on a folder MDE only reads,
+    // it will never act on it at all. Compared against probe elements rather than a literal
+    // colour so this holds in either theme.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'chapter1.md'), '# Chapter One\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    fs.writeFileSync(path.join(dir, 'chapter1.md'), '# Chapter One\n\nRewritten by Claude.\n');
+    await expect(page.locator('.qa-vc-badge')).toHaveText('1', { timeout: 15000 });
+
+    const colors = await page.locator('.qa-vc-badge').evaluate(el => {
+      const probe = (value: string) => {
+        const d = document.createElement('div');
+        d.style.background = value;
+        document.body.appendChild(d);
+        const c = getComputedStyle(d).backgroundColor;
+        d.remove();
+        return c;
+      };
+      return {
+        badge: getComputedStyle(el).backgroundColor,
+        danger: probe('var(--danger)'),
+        muted: probe('var(--text-muted)'),
+      };
+    });
+
+    expect(colors.badge).toBe(colors.muted);
+    expect(colors.badge).not.toBe(colors.danger);
+  });
+
   test('ignored files never count as changes', async () => {
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
@@ -900,9 +935,13 @@ test.describe('Automatic checkpoints', () => {
     await enableCheckpoints();
 
     fs.writeFileSync(path.join(dir, 'note.md'), 'real work\n');
-    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    // Let the poller commit this itself instead of racing it to the Save button. With
+    // --vc-eligibility-ms=0 it is eligible the instant the folder goes quiet, so under full-suite
+    // load it could commit before the change row had rendered -- and this test then failed
+    // asserting a change row that was already gone. Nothing here needs a MANUAL checkpoint: the
+    // subject is what happens after a commit, and an automatic one is the more relevant kind
+    // anyway, since it is the poller's own .git writes that must not feed back into it.
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2, { timeout: 25000 });
 
     // ~15 poll cycles after a real commit. The count must not move.
     await page.waitForTimeout(3000);

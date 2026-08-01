@@ -88,6 +88,18 @@ The `LeadingParagraph` extension's `appendTransaction` prepends an empty paragra
 
 tiptap-markdown is configured with `html: false` so raw HTML tags in Markdown (e.g. `<ol>` in body text) are treated as literal text, not parsed as HTML elements. The text node serializer is overridden to skip tiptap-markdown's `escapeHTML` (which converts `<` `>` to `&lt;` `&gt;`), preserving prose like "Apples > oranges." verbatim on save. Standard Markdown character escaping (via prosemirror-markdown's `esc()`) is still applied.
 
+### Images are dropped, and the warning that says so
+
+There is no image node anywhere in the editor's schema -- StarterKit does not bundle `@tiptap/extension-image` and nothing else adds one. So `![alt](path)` becomes an `<img>` in `markdownToHtml`, ProseMirror's parser finds no node type that can hold it and discards it, and serializing the result writes a document that never contained an image. Open, type one character, save, and the reference is gone from disk with nothing said. Measured, not reasoned about: `"# Title\n\n![a cat](cat.png)\n\n![remote](...)\n\nafter\n"` came back as `"# Title\n\nafterX\n"`.
+
+The real fix is a schema that can hold the node; until then `findImageReferences` (in `utils/markdown.ts`) scans the RAW markdown on load -- before the parser sees it, since afterwards there is nothing left to find -- and `App` raises `ImageWarningDialog`.
+
+- It reuses `fencedLines` and blanks inline code spans first. Image syntax inside code is content, round-trips perfectly, and warning about it would fire on precisely the files most likely to contain the syntax (anything documenting Markdown), which is how a warning gets trained away. Indented 4-space code blocks are a known blind spot: they produce a false warning, which is the safe direction.
+- Raw `<img>` HTML is deliberately NOT matched. With `html: false` those are literal text and survive.
+- It is a blocking modal, not a toast. A toast is the right weight for "this happened"; this is "your file is about to lose content", it is the only warning there will be, and it has to survive not being looked at.
+- It fires from `Editor`'s load effect (both the `initialContent` and `readFile` branches) via an `onImagesFound` ref, and is skipped for `tab.readOnly` panes -- help pages and diffs are never saved, so nothing there is at risk.
+- **Delete all of this when the image node lands.** A warning that outlives its bug is worse than no warning.
+
 ### A lone `~` is never escaped
 
 `prosemirror-markdown`'s `esc()` escapes every `~`, so prose like "approx ~5" hit disk as `approx \~5`; markdown-it only opens a strikethrough on a DOUBLED `~~`, so a single tilde needs no escape. The `TextNode` override in Editor.tsx un-escapes just the span `state.text()` appended (`state.out` is a mutable public field), using `/(?<!\\~)\\~(?!\\~)/g` so a `\~` adjacent to another `\~` is LEFT escaped -- under-escaping there would silently turn literal `~~text~~` into a real strike on the next load, and over-escaping is the safe direction. This is a serializer change, so it affects saved files as well as the clipboard.
@@ -501,6 +513,7 @@ Line counts in the detail view are opt-in (`checkpointFiles(root, sha, { counts:
 - **Never return `null` from a `walk` map.** `_walk` treats `null` as PRUNE (`if (parent !== null) { ...recurse... }`), so returning it for the `'.'` root entry silently prunes the entire walk and every checkpoint reports zero files, with no error anywhere. `undefined` is the value that means "not a result". Directory entries must also return `undefined` so the walker recurses into them.
 - **Whole-tree restore must delete.** Write every blob at the target commit, then remove files that exist now but did not exist then. Forgetting the deletion half yields a union of both states, which is worse than either.
 - **Restore deliberately bypasses `write-file-if-unchanged`** and writes straight to disk. That guard is for renderer buffers; here the existing conflict machinery is what we want, and it works for free -- clean tabs silently reload with the blue banner, dirty tabs raise the red one.
+- **The changed-files badge is grey, never red.** `.sidebar-tab-badge` uses `var(--text-muted)` on `var(--bg)`. Red is a call to action and there is no action: checkpointing is automatic, so a pending count resolves itself within minutes whether or not anyone looks at it -- and on a `foreign` or `steppedBack` folder MDE is never going to act on it at all. It is a status number, not an alert. The test compares the computed colour against injected probe elements for `var(--text-muted)` and `var(--danger)` rather than an `rgb()` literal, so it holds in either theme.
 - **The `.git/` write loop is structurally prevented, not filtered.** Committing writes to `.git/`, the watcher sees it, `sawChange` goes true, and the resulting status is empty so nothing happens -- and `lastCommitAt` was just reset anyway. Two independent reasons it cannot loop, neither requiring the watcher to know what a path is.
 
 ### Testing

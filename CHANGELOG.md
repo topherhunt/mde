@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.6.0
+
+### Checkpoints -- version history for a folder, without Git
+
+The headline feature of this release. If you work alongside an AI agent (or just want an undo that outlives the editor), MDE can now snapshot your project folder on its own and show you, in plain prose, what changed and when. It's built on Git under the hood, but you never see or touch Git: no staging, no branches, no remotes, no merge conflicts.
+
+- **Opt-in, per folder**: Nothing is ever tracked until you turn it on. An untracked folder shows a dimmed clock tab in the sidebar and an explainer. Turning it on runs a preflight check, sets up history, ignores the usual OS and editor junk, and takes a first checkpoint so the history is never empty.
+- **Snapshots take themselves**: Roughly every ten to thirty minutes, whenever there are actual changes and things have gone quiet, MDE checkpoints the folder. Protection doesn't depend on you remembering to ask for it, and there's no separate behavior for an agent's writes vs. your own typing.
+- **See what changed, as prose**: The diff highlights the added and removed *words* inside a changed sentence, keeping the rest inline as context. A `+`/`-` line diff lights up whole paragraphs, which for prose tells you nothing.
+- **Browse the whole history in a tab**: "Browse all checkpoints" opens a full-page read-only tab with a breadcrumb: every checkpoint (50 at a time), the files each one touched with `+n -n` line counts, and the full-width diff. Your open documents keep their unsaved edits and undo history while you browse. The sidebar panel stays the quick glance.
+- **Checkpoint titles that say something**: A checkpoint is named after the files it moved ("Updated ch1.md, ch2.md and 4 more") rather than "6 files changed", so you can recognize the moment you're looking for while scanning. A pencil on any checkpoint lets you write your own description instead, or reset back to the automatic one.
+- **Restore one file, in either direction**: The Restore button opens a dialog offering both readings by name -- **Undo this change** (the file as it was before that checkpoint) and **Use this version** (as it came out of it) -- tinted with the same red and green as the diff you're looking at. It also tells you how many later checkpoints touching that file go with the choice, and says up front when a direction means the file goes away entirely.
+- **Restore the whole folder**: One action, with the dialog stating in words which side of the checkpoint you land on (the end of it, its changes included) and pointing at the row below for the other direction. Files that already match are left completely alone, so "nothing needed restoring" is a real answer rather than a silent no-op.
+- **Restoring never loses anything**: History is append-only. A restore takes a safety checkpoint of the current state first and then writes the old content as a *new* checkpoint on top, so the version you just replaced stays reachable and you can go forward again.
+- **One document's history**: Right-click a file in the explorer or its tab and choose **View Change History** to see just the checkpoints that touched it. Works on files that have since been deleted.
+- **Folders MDE didn't set up are read-only**: An existing Git repo opens in a look-but-don't-touch mode with a deliberate adopt button, and a folder that has since grown a remote or a second branch isn't adoptable at all. MDE never writes to a repository it doesn't own.
+
+### Development
+
+- E2E coverage expanded from 150 to 205 tests, all of the new ones in `tests/version-control.spec.ts`: the opt-in flow, every guardrail, automatic detection (including a same-second rewrite and deletions), the word-level diff, all restore paths including the dirty-buffer conflict, the three-level history drill-down, and checkpoint renaming.
+- `CHECKPOINTS.md` is gone; its as-built content now lives in the Checkpoints section of `docs/architecture-notes.md`, with the short-form rules in `CLAUDE.md`.
+- New runtime dependency: `isomorphic-git`, running entirely in the main process. The renderer never sees a repository object.
+
+### Known issues
+
+- **Opening and saving a file deletes any images in it.** The editor has no image node, so an `![alt](path)` reference is dropped when the document loads and is simply absent when it's written back -- silently, for both local and remote images. This is not new in v0.6.0, but it was only confirmed while preparing this release. Avoid editing files containing images until it's fixed; if you already have, the file's checkpoint history is the way back.
+- **Export as DOCX** appears in the menu but isn't wired up. **Export as PDF** works, but it captures the visible page rather than rendering the whole document.
+
+---
+
 ## v0.5.0
 
 ### Installation

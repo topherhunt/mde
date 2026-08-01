@@ -15,7 +15,7 @@ import { TextSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, EditorProps as PMEditorProps } from '@tiptap/pm/view';
 import { Fragment, DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { Tab } from '../types';
-import { markdownToHtml } from '../utils/markdown';
+import { findImageReferences, markdownToHtml } from '../utils/markdown';
 import TableMenu from './TableMenu';
 
 // Override tiptap-markdown's text serializer which blindly converts all < and >
@@ -1543,15 +1543,22 @@ interface EditorProps {
   onDestroy: () => void;
   onDirtyChange: (dirty: boolean) => void;
   onLinkClick: (href: string) => void;
+  // Fired once per load when the file contains image syntax the editor cannot hold, so the app
+  // can warn BEFORE a save silently drops it. See findImageReferences.
+  onImagesFound: (refs: string[]) => void;
 }
 
-export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkClick }: EditorProps) {
+export default function Editor({
+  tab, onReady, onDestroy, onDirtyChange, onLinkClick, onImagesFound,
+}: EditorProps) {
   const loadedRef = useRef(false);
   const cleanDocRef = useRef<string | null>(null);
   // Keep the latest onLinkClick reachable from the ProseMirror handleClick closure,
   // which is created once when the editor is initialized.
   const onLinkClickRef = useRef(onLinkClick);
   onLinkClickRef.current = onLinkClick;
+  const onImagesFoundRef = useRef(onImagesFound);
+  onImagesFoundRef.current = onImagesFound;
   // Lets the handlePaste editorProp reach the tiptap-markdown parser without a
   // use-before-define reference to the `editor` const being created below.
   const editorRef = useRef<TipTapEditor | null>(null);
@@ -1771,10 +1778,20 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
     if (tab.readOnly) editor.setEditable(false);
   }, [editor, tab.readOnly]);
 
+  // Raise the image warning from the RAW markdown, before it reaches the parser -- once it has
+  // been through markdownToHtml the images are already gone and there is nothing left to detect.
+  // Read-only panes (help pages, the diff viewer) are never saved, so nothing there is at risk.
+  const reportImages = useCallback((md: string) => {
+    if (tab.readOnly) return;
+    const refs = findImageReferences(md);
+    if (refs.length) onImagesFoundRef.current(refs);
+  }, [tab.readOnly]);
+
   useEffect(() => {
     if (!editor || loadedRef.current) return;
 
     if (tab.initialContent) {
+      reportImages(tab.initialContent);
       const html = markdownToHtml(editor, tab.initialContent);
       const doc = createNodeFromContent(html, editor.schema, { slice: false });
       const { tr } = editor.state;
@@ -1790,6 +1807,7 @@ export default function Editor({ tab, onReady, onDestroy, onDirtyChange, onLinkC
     if (!tab.filePath) return;
 
     window.mde.readFile(tab.filePath).then(async content => {
+      reportImages(content);
       const html = markdownToHtml(editor, content);
       const doc = createNodeFromContent(html, editor.schema, { slice: false });
       const { tr } = editor.state;

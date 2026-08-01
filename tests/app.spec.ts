@@ -3881,3 +3881,61 @@ test.describe('Sidebar layout', () => {
     expect(gap).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Images: the editor has no image node, so an image reference is dropped on load
+// and absent on save. Until that is fixed, opening such a file must SAY so.
+// ---------------------------------------------------------------------------
+
+test.describe('Image loss warning', () => {
+  test('warns that saving a file with images will strip them, and names them', async () => {
+    // Verified behaviour, not a hypothetical: opening this file, typing one character and
+    // saving writes back "# Title\n\nafterX\n" with both image lines gone.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'gallery.md');
+    fs.writeFileSync(
+      file,
+      '# Title\n\n![a cat](cat.png)\n\n![remote](https://example.com/x.png)\n\nafter\n'
+    );
+
+    await app.evaluate(({ BrowserWindow }, f) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
+    }, file);
+
+    const dialog = page.locator('.qa-image-warning');
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await expect(dialog).toContainText('gallery.md');
+    await expect(dialog).toContainText('2 images');
+    // The references are quoted verbatim so they can be found in the file itself.
+    const refs = page.locator('.qa-image-warning-refs');
+    await expect(refs).toContainText('![a cat](cat.png)');
+    await expect(refs).toContainText('![remote](https://example.com/x.png)');
+
+    await page.locator('.qa-image-warning-dismiss').click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test('image syntax inside code is not mistaken for a real image', async () => {
+    // A file that DOCUMENTS Markdown round-trips perfectly -- fenced blocks and code spans are
+    // content, not structure. Warning here would be crying wolf on exactly the files most
+    // likely to contain the syntax, which is how a warning gets trained away.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'syntax-guide.md');
+    fs.writeFileSync(
+      file,
+      '# How images work\n\nWrite `![alt](path.png)` inline, like this:\n\n' +
+      '```markdown\n![a cat](cat.png)\n```\n\nAnd that is the whole story.\n'
+    );
+
+    await app.evaluate(({ BrowserWindow }, f) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
+    }, file);
+
+    // Wait for the load to actually finish before asserting something is absent, or this
+    // passes on the frame before the warning would have appeared.
+    await expect(page.locator('.tiptap')).toContainText('the whole story', { timeout: 5000 });
+    await expect(page.locator('.qa-image-warning')).toHaveCount(0);
+  });
+});

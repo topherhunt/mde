@@ -60,6 +60,10 @@ You only need to do this once per machine. (Your browser may also warn that the 
 
 Once installed, double-clicking a `.md` file or choosing MDE from **Open with** will open it in MDE.
 
+## Note on images
+
+**MDE cannot edit files that contain images yet.** There is no image support in the editor, so an `![alt](path.png)` reference is dropped when the file loads -- and saving would then write the file back without it. Opening such a file pops up a warning that names the images it found and tells you not to save. Close the file without saving and the file on disk is untouched. Real image support is on the list.
+
 ## Note on HTML in Markdown
 
 Handling `<` and `>` characters in Markdown is a surprisingly subtle problem. MDE does not render raw HTML -- tags like `<ol>` or `<div>` are displayed as literal text, not interpreted as HTML elements. As a side effect, if your `.md` files contain HTML entities like `&gt;` or `&lt;`, MDE may convert them to their literal characters (`>`, `<`) on save. This improves readability but means MDE-edited files may differ slightly from files authored in raw-text editors that preserve HTML entities verbatim.

@@ -157,14 +157,14 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-205 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+208 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 
 **Not yet done / known gaps:**
 
 - DOCX export: menu item exists but handler is not wired in the renderer (Export as PDF *is* wired)
-- **Images are DESTROYED on save.** There is no image node in the editor schema, so an `![](path)` reference is dropped when the document loads and is simply absent when it is serialized back. Confirmed by probe, not inferred. See TASKS.md.
+- **Images are DESTROYED on save.** There is no image node in the editor schema, so an `![](path)` reference is dropped when the document loads and is simply absent when it is serialized back. Confirmed by probe, not inferred. Opening such a file now raises a blocking warning (`ImageWarningDialog`, fed by `findImageReferences` in `utils/markdown.ts`) -- that is a STOPGAP, not the fix, and it must be removed in the same change that adds a real image node. See TASKS.md. -> notes: Images are dropped, and the warning that says so
 - Toolbar hide/show setting not yet implemented
 
 ## CSS conventions

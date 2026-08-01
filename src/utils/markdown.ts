@@ -82,6 +82,44 @@ function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
+// Inline `code spans`. Image syntax inside one is literal text that survives the round trip
+// untouched, so it must not raise the warning.
+const CODE_SPAN = /(`+)[^`]*?\1/g;
+// Inline and reference-style images: ![alt](path) and ![alt][ref]. Escaped \![ is not one.
+const IMAGE_SYNTAX = /(^|[^\\])!\[[^\]\n]*\](\([^)\n]*\)|\[[^\]\n]*\])/g;
+
+/**
+ * Every image reference in `md` that the editor would DESTROY on the next save.
+ *
+ * There is no image node in the editor's schema (StarterKit does not bundle one), so markdown ->
+ * HTML makes an `<img>`, ProseMirror's parser finds no node type to put it in and drops it, and
+ * serializing back writes a document that never had an image. This finds them so the user can be
+ * told before that happens, since nothing else in the app would say a word.
+ *
+ * Fenced blocks and inline code spans are excluded: image syntax in there is CONTENT, round-trips
+ * intact, and warning about it would be crying wolf on any file that documents Markdown. Raw
+ * `<img>` HTML is not matched either -- tiptap-markdown runs with `html: false`, so those are
+ * literal text and survive. Indented (4-space) code blocks are a known blind spot; they would
+ * produce a false warning, which is the safe direction to be wrong in.
+ */
+export function findImageReferences(md: string): string[] {
+  const lines = md.split('\n');
+  const inFence = fencedLines(lines);
+  const found: string[] = [];
+
+  lines.forEach((line, i) => {
+    if (inFence[i]) return;
+    const bare = line.replace(CODE_SPAN, m => ' '.repeat(m.length));
+    for (const m of bare.matchAll(IMAGE_SYNTAX)) {
+      // Slice from the ORIGINAL line: the code-span blanking is only for finding positions.
+      const start = m.index + m[1].length;
+      found.push(line.slice(start, start + m[0].length - m[1].length));
+    }
+  });
+
+  return found;
+}
+
 // THE single markdown -> editor-HTML pipeline. Every path that puts markdown into the
 // document (file load, external reload, paste, help pages) goes through here so the
 // separator placeholder is always accounted for in exactly one place.

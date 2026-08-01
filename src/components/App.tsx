@@ -11,6 +11,7 @@ import QuickOpen from './QuickOpen';
 import { useVersionControl } from './VersionPanel';
 import HistoryView, { HistoryNavRequest } from './HistoryView';
 import { DeleteConfirmDialog } from './FileContextMenu';
+import ImageWarningDialog from './ImageWarningDialog';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { FileEntry } from '../types';
 import { basename, dirname, joinPath, resolvePath } from '../utils/paths';
@@ -205,6 +206,11 @@ export default function App() {
   const [findFocusTrigger, setFindFocusTrigger] = useState(0);
   // Blue "detected changes" banner shown after a silent auto-reload. `hiding` drives fade-out.
   const [reloadNotice, setReloadNotice] = useState<{ fileName: string; hiding?: boolean } | null>(null);
+  // A file just loaded that contains images the editor cannot hold, so saving it would strip
+  // them. One at a time, last one wins: opening two such files at once is rare, and the warning
+  // is per-file identical in substance -- a queue would be machinery for no gain.
+  const [imageWarning, setImageWarning] =
+    useState<{ fileName: string; refs: string[] } | null>(null);
   const reloadTimersRef = useRef<{ hide?: ReturnType<typeof setTimeout>; remove?: ReturnType<typeof setTimeout> }>({});
   const showReloadNotice = useCallback((fileName: string) => {
     const timers = reloadTimersRef.current;
@@ -1049,6 +1055,7 @@ export default function App() {
                       if (dirty) triggerAutosave();
                     }}
                     onLinkClick={(href) => handleLinkClick(href, tab.filePath)}
+                    onImagesFound={(refs) => setImageWarning({ fileName: tab.fileName, refs })}
                   />
                 )}
               </div>
@@ -1108,6 +1115,13 @@ export default function App() {
           target={tabDeleteTarget}
           onConfirm={confirmTabDelete}
           onCancel={() => setTabDeleteTarget(null)}
+        />
+      )}
+      {imageWarning && (
+        <ImageWarningDialog
+          fileName={imageWarning.fileName}
+          refs={imageWarning.refs}
+          onDismiss={() => setImageWarning(null)}
         />
       )}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} spellcheck={spellcheck} autosave={autosave} />}

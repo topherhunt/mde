@@ -1,7 +1,7 @@
 {
   "name": "mde",
   "productName": "MDE",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A simple WYSIWYG Markdown editor for macOS",
   "main": ".webpack/main",
   "private": true,
