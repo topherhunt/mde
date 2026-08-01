@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { VcDiff } from '../types';
+import { VcChangeKind, VcDiff } from '../types';
 import { buildDiff, BuiltDiff } from '../utils/prosediff';
 
 interface DiffViewProps {
@@ -10,13 +10,27 @@ interface DiffViewProps {
   // Shown above the diff, e.g. "Compared with the checkpoint before it".
   subtitle?: string;
   onClose: () => void;
-  // Absent when the folder is read-only, which removes the restore button entirely.
-  onRestore?: (filePath: string) => void;
-  restoreLabel?: string;
+  // Absent when the folder is read-only, which removes the restore button entirely. `kind` is
+  // what this checkpoint did to the file, which only the loaded diff knows -- the restore dialog
+  // needs it to say when a direction means deleting the file rather than rewriting it.
+  onRestore?: (filePath: string, kind: VcChangeKind) => void;
+  // Jumps to the list of checkpoints that touched THIS file. Omitted when that list is already
+  // what you came from, so the link never points at where you are.
+  onViewFileHistory?: () => void;
   // 'modal' floats over the sidebar; 'inline' fills the page it is rendered into (the history
   // tab), where the surrounding breadcrumb owns navigation so there is no backdrop and no
   // Escape handler to fight with.
   variant?: 'modal' | 'inline';
+}
+
+/**
+ * What the checkpoint did to this file, read back off the diff rather than passed in: this view
+ * is reached from a file list AND from a path, and the loaded diff is the one thing both have.
+ */
+function diffKind(diff: VcDiff): VcChangeKind {
+  if (diff.before === null) return 'added';
+  if (diff.after === null) return 'deleted';
+  return 'modified';
 }
 
 export default function DiffView({
@@ -26,7 +40,7 @@ export default function DiffView({
   subtitle,
   onClose,
   onRestore,
-  restoreLabel,
+  onViewFileHistory,
   variant = 'modal',
 }: DiffViewProps) {
   const [diff, setDiff] = useState<VcDiff | null>(null);
@@ -63,9 +77,20 @@ export default function DiffView({
           {subtitle && <div className="small text-muted">{subtitle}</div>}
         </div>
         <div className="d-flex gap-2 align-items-center">
+          {onViewFileHistory && (
+            <button className="btn btn-sm qa-diff-file-history" onClick={onViewFileHistory}>
+              <i className="bi bi-clock-history" /> This file's history
+            </button>
+          )}
+          {/* Disabled until the diff lands: the restore dialog's wording depends on whether this
+              checkpoint added, deleted, or modified the file, and that is only knowable from it. */}
           {onRestore && (
-            <button className="btn btn-primary btn-sm qa-diff-restore" onClick={() => onRestore(filePath)}>
-              {restoreLabel || 'Restore this version'}
+            <button
+              className="btn btn-primary btn-sm qa-diff-restore"
+              disabled={!diff}
+              onClick={() => diff && onRestore(filePath, diffKind(diff))}
+            >
+              Restore
             </button>
           )}
           {!inline && (

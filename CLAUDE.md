@@ -105,14 +105,21 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 
 Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 
-- The word "Git" appears in the UI never. No staging, no branches, no remotes, no merge conflicts -- the audience is non-technical writers reviewing what an AI agent did to their files.
+- The word "Git" appears in the UI exactly ONCE: the first bullet of the how-it-works recap, which credits it and says you never have to touch it. No button, label, menu item, dialog, or toast may name Git -- a second mention is a regression, not a precedent. No staging, no branches, no remotes, no merge conflicts -- the audience is non-technical writers reviewing what an AI agent did to their files. -> notes: Checkpoints
 - Four attach states: `none` (dimmed tab + opt-in screen), `managed` (writable), `foreign` (read-only + adopt button), `steppedBack` (read-only, not adoptable). -> notes: Checkpoints
 - Full history browsing lives in a read-only TAB (`Tab.view === 'history'` -> `HistoryView`), not an app mode: inactive panes are hidden, not unmounted, so open buffers keep their unsaved edits and undo history. The sidebar panel stays the glance. Both share `src/components/vcRestore.ts` so they can't phrase an outcome differently. -> notes: Checkpoints
+- **`HistoryView` is the ONLY checkpoint drill-down.** The sidebar routes every checkpoint click into it and renders no file list, checkpoint diff, or restore of its own -- two drill-downs over the same data is how the two views ended up wording the same restore differently. The one overlay left in the sidebar is for the CHANGES list, which has no commit to route to. -> notes: Checkpoints
+- **Navigation into the history tab is `{ target, nonce }`, never a bare target.** Re-requesting the same target is the normal case (Browse while already on that checkpoint's diff) and an unchanged prop fires no effect, so a bare target silently fails to zoom back out. `HistoryView` seeds `nav` lazily at mount and tracks an `appliedNonce` ref. -> notes: Checkpoints
+- In the checkpoint list the WHOLE ROW drills in (no button), and the counts (files / +added / -removed) sit right-aligned on the row's SECOND line so the title above can run the full width. Totals come from a SEPARATE `vc-checkpoint-stats` call made after the list -- never fold them into `listCheckpoints`, which must stay a cheap log walk. An unmeasurable count is absent, never `0`. -> notes: Checkpoints
+- The per-file view (right-click -> View Change History, in the file explorer or a tab) is a SCOPE on the list level, not a fourth nav level; drilling into a checkpoint from it still shows every file that checkpoint changed. `listFileCheckpoints` needs `force: true` or `log` throws on a deleted file. -> notes: Checkpoints
+- **`FileContextMenu` is shared by the file explorer and the tab bar** -- add a menu item once and both get it. It is mounted inside `FileExplorer`, not `Sidebar`, so its props thread one level deeper than they look.
 - One cadence rule, source-agnostic: more than 10 minutes since the last checkpoint + uncommitted changes + a quiet period -> checkpoint everything. No separate behavior for agent writes vs. the user's own edits. `--vc-eligibility-ms` / `--vc-poll-ms` override the constants for tests. -> notes: Checkpoints
 - Detection polls `statusMatrix` (which excludes gitignored files); the watcher is demoted to an unfiltered dirty-flag gate. The poller gate is `!sawChange && lastSignature === null` -- the second half prevents a deadlock after a single burst of edits. -> notes: Checkpoints
 - The quiet signature MUST fold in mtime and size: `statusMatrix`'s WORKDIR field is a coarse enum, not a content hash, so a rewritten file looks identical across polls. -> notes: Checkpoints
 - isomorphic-git has no `add -A` -- walk the status and call `remove` for deletions, or they silently vanish from checkpoints. Whole-tree restore must delete files that did not exist at the target, or you get a union of both states. -> notes: Checkpoints
 - Restore deliberately bypasses `write-file-if-unchanged` and writes straight to disk, so the existing conflict machinery handles open tabs for free. -> notes: Checkpoints
+- **Restoring one file never fires from a button.** The button says only "Restore" and opens `RestoreFileDialog`, which offers BOTH directions -- "Undo this change" (`checkpoint.parent`) and "Use this version" (`checkpoint.sha`) -- because "restore to this checkpoint" is genuinely ambiguous next to a red/green diff. The cards must stay tinted with the diff's own `--diff-del-*` / `--diff-add-*`, not generic danger/success: that colour match IS the explanation. -> notes: Checkpoints
+- **A tooltip inside `.sidebar-content` must not be centre-anchored.** `[data-tooltip]::after` is absolutely positioned and `nowrap`, and opacity 0 still takes part in layout, so one on a right-edge button pushed the panel's scrollable width ~47px past its visible width -- a permanent horizontal scrollbar with nothing to scroll to, at every sidebar width. The scoped rule right-anchors them. -> notes: UI details
 
 ### Import and packaging
 
@@ -144,13 +151,13 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 **Sidebar tab selectors** use `[title="File Explorer"]` and `[title="Document Outline"]` (not text content) since tabs show icons. The Checkpoints tab uses `.qa-vc-tab`.
 
-**A test whose assertion is "nothing happened" must be seen to fail before you trust it.** Break the mechanism, watch the test go red, then restore. Two checkpoint tests are of this kind and were verified that way. -> notes: Checkpoints
+**A test whose assertion is "nothing happened" must be seen to fail before you trust it.** Break the mechanism, watch the test go red, then restore. Several checkpoint tests are of this kind and were verified that way. Note that `npx playwright test` does NOT rebuild -- run `npx electron-forge package` first or the probe tests the old bundle and "passes" meaninglessly. Beware the transient-frame trap too: an assertion whose expected value also holds BEFORE the data settles will pass on the pre-fetch render. -> notes: Checkpoints
 
 **`tests/packaged.spec.ts` tests the PACKAGED artifact, not the dev tree.** The rest of the suite launches Electron against `.webpack/main` with the project's own `node_modules` present, so anything that only breaks inside `app.asar` (missing runtime deps) passes there and fails for the user. That spec extracts `out/**/app.asar` and `require()`s the externals out of it in a real Node process. It can't just launch the packaged binary: the Fuses config (`RunAsNode: false`, `EnableNodeCliInspectArguments: false`) prevents Playwright's Electron driver from attaching.
 
 ## Current status
 
-187 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+203 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

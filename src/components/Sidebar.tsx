@@ -4,7 +4,7 @@ import { Editor as TipTapEditor } from '@tiptap/react';
 import { basename, dirname, joinPath } from '../utils/paths';
 import { FileContextMenu, DeleteConfirmDialog } from './FileContextMenu';
 import VersionPanel, { VersionControl } from './VersionPanel';
-import { SidebarMode } from '../types';
+import { HistoryTarget, SidebarMode } from '../types';
 
 interface SidebarProps {
   projectRoot: string | null;
@@ -19,10 +19,12 @@ interface SidebarProps {
   onToast: (msg: string, variant?: string) => void;
   onDeleteFile: (filePath: string) => void;
   onFileRenamed?: (oldPath: string, newPath: string) => void;
-  onOpenHistory: () => void;
+  onOpenHistory: (target: HistoryTarget) => void;
+  // Undefined when the folder has no checkpoints; hides the context menu's history item.
+  onViewFileHistory?: (relativePath: string) => void;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed, onOpenHistory }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed, onOpenHistory, onViewFileHistory }: SidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const resizing = useRef(false);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -132,6 +134,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, 
             sidebarRef={sidebarRef}
             onDeleteFile={onDeleteFile}
             onFileRenamed={onFileRenamed}
+            onViewFileHistory={onViewFileHistory}
           />
         ) : (
           <DocumentOutline editor={activeEditor} />
@@ -155,6 +158,7 @@ interface FileExplorerProps {
   sidebarRef: React.RefObject<HTMLDivElement>;
   onDeleteFile: (filePath: string) => void;
   onFileRenamed?: (oldPath: string, newPath: string) => void;
+  onViewFileHistory?: (relativePath: string) => void;
 }
 
 function isEditable(name: string): boolean {
@@ -187,7 +191,7 @@ function flattenVisibleEntries(
   return result;
 }
 
-function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef, onDeleteFile, onFileRenamed }: FileExplorerProps) {
+function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef, onDeleteFile, onFileRenamed, onViewFileHistory }: FileExplorerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingEntry, setRenamingEntry] = useState<FileEntry | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -444,6 +448,7 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
           onRequestDelete={setDeletingEntry}
           onToast={onToast}
           onCreateInFolder={handleCreateInFolder}
+          onViewHistory={onViewFileHistory}
         />
       )}
     </>

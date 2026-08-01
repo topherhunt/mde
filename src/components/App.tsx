@@ -1,5 +1,5 @@
 import React, { useReducer, useEffect, useCallback, useRef, useState, useMemo } from 'react';
-import { Tab, SidebarMode } from '../types';
+import { Tab, SidebarMode, HistoryTarget } from '../types';
 import Sidebar from './Sidebar';
 import TabBar from './TabBar';
 import Toolbar from './Toolbar';
@@ -9,7 +9,7 @@ import FindBar from './FindBar';
 import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
 import { useVersionControl } from './VersionPanel';
-import HistoryView from './HistoryView';
+import HistoryView, { HistoryNavRequest } from './HistoryView';
 import { DeleteConfirmDialog } from './FileContextMenu';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { FileEntry } from '../types';
@@ -232,6 +232,10 @@ export default function App() {
   // not the Checkpoints tab is the one on screen.
   const vc = useVersionControl(state.projectRoot);
 
+  // Where the checkpoint history tab should point. Owned here because every entry point into
+  // that tab is outside it: the sidebar's Browse button, a checkpoint row, a right-click.
+  const [historyNav, setHistoryNav] = useState<HistoryNavRequest | null>(null);
+
   // The hash we last read from / wrote to each path, recorded SYNCHRONOUSLY. `tab.diskHash`
   // holds the same value, but it only becomes visible once React commits the dispatch --
   // and a callback created before that commit (a queued autosave, an in-flight
@@ -381,7 +385,13 @@ export default function App() {
 
   // Checkpoint history opens as an ordinary read-only tab. Deliberately not an app-wide mode:
   // open documents keep their buffers, their dirty flags, and their watchers while you browse.
-  const openCheckpointHistory = useCallback(() => {
+  //
+  // Every entry point routes through here with a target, so the tab is always pointed at what
+  // was clicked -- including when it is ALREADY open on a diff three levels down. The nonce is
+  // what makes that work: the same target twice must still navigate, and an unchanged prop
+  // fires no effect in the view.
+  const openCheckpointHistory = useCallback((target: HistoryTarget) => {
+    setHistoryNav(prev => ({ target, nonce: (prev?.nonce ?? 0) + 1 }));
     const existing = state.tabs.find(t => t.id === CHECKPOINT_HISTORY_TAB_ID);
     if (existing) {
       dispatch({ type: 'SET_ACTIVE_TAB', index: state.tabs.indexOf(existing) });
@@ -403,6 +413,13 @@ export default function App() {
       },
     });
   }, [state.tabs]);
+
+  // Right-click -> "View change history", from the file explorer or a tab. Both hand back a
+  // repo-relative path (the context menu computes it), which is what checkpoints are keyed by.
+  // Undefined -- not a no-op -- when there are no checkpoints, so the menu hides the item.
+  const viewFileHistory = vc.state.attach === 'none'
+    ? undefined
+    : (relativePath: string) => openCheckpointHistory({ kind: 'file', path: relativePath });
 
   // Clicking a .docx/.pdf: if it has already been converted, the useful offer is to
   // open that Markdown -- not to convert again. Only a source with no Markdown beside
@@ -952,6 +969,7 @@ export default function App() {
           onDeleteFile={handleDeleteFile}
           onFileRenamed={handleFileRenamedInSidebar}
           onOpenHistory={openCheckpointHistory}
+          onViewFileHistory={viewFileHistory}
         />
         <div className="main-area">
           <TabBar
@@ -965,6 +983,7 @@ export default function App() {
             onToast={showToast}
             onRenameFile={setTabRenameTarget}
             onRequestDeleteFile={setTabDeleteTarget}
+            onViewFileHistory={viewFileHistory}
           />
           {!activeTab?.readOnly && (
             <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} />
@@ -1014,7 +1033,12 @@ export default function App() {
                 style={{ display: i === state.activeTabIndex ? 'flex' : 'none' }}
               >
                 {tab.view === 'history' ? (
-                  <HistoryView projectRoot={state.projectRoot} vc={vc} onToast={showToast} />
+                  <HistoryView
+                    projectRoot={state.projectRoot}
+                    vc={vc}
+                    onToast={showToast}
+                    navRequest={historyNav}
+                  />
                 ) : (
                   <Editor
                     tab={tab}

@@ -141,6 +141,10 @@ body {
   color: var(--accent);
 }
 
+.text-warning {
+  color: var(--warning-text);
+}
+
 .text-truncate {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -615,6 +619,24 @@ body {
 [data-tooltip]:hover::after {
   opacity: 1;
   transition-delay: 0.45s;
+}
+
+/* The sidebar is a narrow scrollport, and the bubble is `white-space: nowrap` and centred on its
+   button -- so a tooltip on a button near the sidebar's right edge (the Checkpoints panel's "How
+   checkpoints work" is one) pushed the scrollable width ~47px past the visible width and left a
+   permanent horizontal scrollbar with nothing visible to scroll to. Opacity 0 still takes part in
+   layout, so this happened even with no tooltip showing, and it was a CONSTANT overrun: those
+   buttons are pinned to the right edge, so widening the sidebar never absorbed it.
+
+   Anchoring the bubble's right edge to the button keeps it inside the scrollport. Overflowing to
+   the LEFT would be the same mistake, but left overflow does not extend a scroll region in LTR,
+   so the panel stays scroll-free either way. */
+.sidebar-content [data-tooltip]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+  max-width: 200px;
+  white-space: normal;
 }
 
 .editor-content .tiptap .fold-caret[data-tooltip]::after {
@@ -1450,6 +1472,11 @@ body {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
+/* Two side-by-side choices do not fit the standard 480px dialog. */
+.modal-dialog-wide {
+  width: 620px;
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;
@@ -2118,10 +2145,6 @@ body {
   background: var(--bg-tertiary);
 }
 
-.vc-checkpoint.expanded > .vc-checkpoint-row {
-  background: var(--bg-tertiary);
-}
-
 .vc-checkpoint-icon {
   font-size: 11px;
   color: var(--text-muted);
@@ -2140,8 +2163,17 @@ body {
   font-weight: 500;
 }
 
-.vc-checkpoint-detail {
-  padding: 2px 0 6px 18px;
+/* Says "this goes somewhere" -- the row is a link into the history tab, not an expander. */
+.vc-checkpoint-chevron {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  flex-shrink: 0;
+  opacity: 0;
+}
+
+.vc-checkpoint-row:hover .vc-checkpoint-chevron {
+  opacity: 1;
 }
 
 .vc-warning {
@@ -2164,6 +2196,58 @@ body {
   border-color: var(--danger-border);
   background: var(--danger-bg);
   color: var(--danger-text);
+}
+
+/* --- Restore-one-file dialog ---
+   The two cards are tinted with the DIFF's own red and green, not with generic danger/success
+   colours. That is the whole mechanism: "before this change" and "the red lines you were just
+   looking at" have to be visibly the same thing, or the dialog is just a differently-worded
+   version of the ambiguity it exists to remove. */
+.restore-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.restore-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  line-height: 1.45;
+}
+
+/* Pushes the button to the bottom of whichever card is shorter, so the two line up. */
+.restore-choice button {
+  margin-top: auto;
+  align-self: stretch;
+}
+
+.restore-choice p {
+  margin-bottom: 8px;
+}
+
+.restore-choice-before {
+  background: var(--diff-del-bg);
+  border-left: 3px solid var(--diff-del-word);
+}
+
+.restore-choice-after {
+  background: var(--diff-add-bg);
+  border-left: 3px solid var(--diff-add-word);
+}
+
+.restore-later {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  line-height: 1.45;
 }
 
 /* --- Diff view --- */
@@ -2354,17 +2438,52 @@ body {
   padding: 16px 20px 24px;
 }
 
+/* Names the file the list below is filtered to, so a short list never reads as "the folder
+   has almost no history". */
+.history-scope-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.history-scope-header > .bi {
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.history-scope-path {
+  font-weight: 600;
+  word-break: break-all;
+}
+
 .history-list {
   display: flex;
   flex-direction: column;
 }
 
+/* The whole row is the target -- there is no button on it. */
 .history-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 4px;
+  padding: 10px 8px;
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.history-row:hover {
+  background: var(--bg-secondary);
+}
+
+.history-row:hover .history-row-subject {
+  color: var(--accent);
 }
 
 .history-row-icon {
@@ -2384,6 +2503,12 @@ body {
   color: var(--text);
 }
 
+.history-row-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .history-detail-subject {
   font-size: 17px;
 }
@@ -2393,21 +2518,6 @@ body {
   align-items: center;
   gap: 6px;
   min-width: 0;
-}
-
-.history-title-link {
-  background: none;
-  border: none;
-  padding: 0;
-  text-align: left;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.history-title-link:hover {
-  color: var(--accent);
 }
 
 /* Revealed on hover so a list of twenty checkpoints isn't a column of pencils. */
@@ -2427,6 +2537,23 @@ body {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Timestamp on the left, counts pushed to the right. Deliberately the row's SECOND line: the
+   title above it then has the full width to run into. */
+.history-row-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.history-stat {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .history-title-input {

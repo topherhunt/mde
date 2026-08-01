@@ -27,7 +27,10 @@ export async function restoreOneFile(
   if (!result.ok) return failure(result, 'Could not restore that file.');
 
   if (!result.filesWritten && !result.filesDeleted) {
-    return { message: `${filePath} already matches that checkpoint.`, variant: 'info', changed: false };
+    // "that version", not "that checkpoint": the caller may have restored to the checkpoint's
+    // PARENT (the "undo this change" direction), and naming the wrong one of the two is exactly
+    // the ambiguity the restore dialog exists to remove.
+    return { message: `${filePath} already matches that version.`, variant: 'info', changed: false };
   }
   return {
     message: result.filesDeleted

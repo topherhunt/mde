@@ -1,7 +1,15 @@
+// The sidebar panel: the GLANCE. What has moved since the last checkpoint, and a button to save
+// one. It deliberately does NOT drill into checkpoints -- clicking one routes to the history
+// tab, which is the only thing in the app that renders a checkpoint's files, a diff of one, or
+// a restore of either. Two drill-downs over the same data is how the two views ended up
+// describing the same restore differently; there is now exactly one.
+//
+// The one diff this panel still opens is for the CHANGES list, which is uncommitted work with
+// no checkpoint to route to -- and is genuinely a glance-and-dismiss modal.
+
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { VcChangedFile, VcCheckpoint, VcPreflight, VcState } from '../types';
+import { HistoryTarget, VcChangedFile, VcCheckpoint, VcPreflight, VcState } from '../types';
 import DiffView from './DiffView';
-import { restoreEverything, restoreOneFile } from './vcRestore';
 import { basename } from '../utils/paths';
 
 // --- Shared state -----------------------------------------------------------------
@@ -104,16 +112,9 @@ interface VersionPanelProps {
   projectRoot: string | null;
   vc: VersionControl;
   onToast: (msg: string, variant?: string) => void;
-  // Opens the full-page history tab. The sidebar stays the glance; that tab is where
-  // browsing, diffing, and renaming actually happen.
-  onOpenHistory: () => void;
-}
-
-interface DiffTarget {
-  path: string;
-  sha?: string;
-  subtitle: string;
-  restorable: boolean;
+  // Opens the full-page history tab, pointed at whatever was clicked. The sidebar stays the
+  // glance; that tab is where browsing, diffing, renaming, and restoring actually happen.
+  onOpenHistory: (target: HistoryTarget) => void;
 }
 
 export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }: VersionPanelProps) {
@@ -122,8 +123,8 @@ export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }
   const [initPreflight, setInitPreflight] = useState<VcPreflight | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
-  const [restoreAllTarget, setRestoreAllTarget] = useState<VcCheckpoint | null>(null);
+  // Uncommitted changes only -- always working-copy-vs-last-checkpoint, never restorable.
+  const [diffPath, setDiffPath] = useState<string | null>(null);
 
   const startInit = useCallback(async () => {
     if (!projectRoot) return;
@@ -193,32 +194,6 @@ export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }
     }
   }, [projectRoot, message, onToast, refresh]);
 
-  const runRestoreFile = useCallback(async (sha: string, filePath: string) => {
-    if (!projectRoot) return;
-    setBusy(true);
-    try {
-      const outcome = await restoreOneFile(projectRoot, sha, filePath);
-      if (outcome.variant !== 'danger') setDiffTarget(null);
-      onToast(outcome.message, outcome.variant);
-      if (outcome.changed) await refresh();
-    } finally {
-      setBusy(false);
-    }
-  }, [projectRoot, onToast, refresh]);
-
-  const confirmRestoreAll = useCallback(async () => {
-    if (!projectRoot || !restoreAllTarget) return;
-    setBusy(true);
-    try {
-      const outcome = await restoreEverything(projectRoot, restoreAllTarget.sha);
-      setRestoreAllTarget(null);
-      onToast(outcome.message, outcome.variant);
-      if (outcome.changed) await refresh();
-    } finally {
-      setBusy(false);
-    }
-  }, [projectRoot, restoreAllTarget, onToast, refresh]);
-
   if (!projectRoot) {
     return <div className="sidebar-empty qa-vc-no-folder">Open a folder to start saving checkpoints.</div>;
   }
@@ -277,13 +252,7 @@ export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }
           busy={busy}
           onMessageChange={setMessage}
           onSave={saveCheckpoint}
-          onOpenDiff={path =>
-            setDiffTarget({
-              path,
-              subtitle: 'Compared with the last checkpoint',
-              restorable: false,
-            })
-          }
+          onOpenDiff={setDiffPath}
         />
       )}
 
@@ -291,33 +260,20 @@ export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }
         <HistorySection
           projectRoot={projectRoot}
           historyKey={historyKey}
-          writable={writable}
           onOpenHistory={onOpenHistory}
-          onOpenDiff={(path, sha, checkpointLabel) =>
-            setDiffTarget({
-              path,
-              sha,
-              subtitle: `As it was after "${checkpointLabel}"`,
-              restorable: writable,
-            })
-          }
-          onRestoreAll={setRestoreAllTarget}
         />
       )}
 
-      {diffTarget && (
+      {diffPath && (
         <DiffView
           projectRoot={projectRoot}
-          filePath={diffTarget.path}
-          sha={diffTarget.sha}
-          subtitle={diffTarget.subtitle}
-          onClose={() => setDiffTarget(null)}
-          onRestore={
-            diffTarget.restorable && diffTarget.sha
-              ? path => runRestoreFile(diffTarget.sha!, path)
-              : undefined
-          }
-          restoreLabel="Put this version back"
+          filePath={diffPath}
+          subtitle="Compared with the last checkpoint"
+          onClose={() => setDiffPath(null)}
+          onViewFileHistory={() => {
+            setDiffPath(null);
+            onOpenHistory({ kind: 'file', path: diffPath });
+          }}
         />
       )}
 
@@ -328,15 +284,6 @@ export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }
           busy={busy}
           onConfirm={confirmInit}
           onCancel={() => setInitPreflight(null)}
-        />
-      )}
-
-      {restoreAllTarget && (
-        <RestoreAllDialog
-          checkpoint={restoreAllTarget}
-          busy={busy}
-          onConfirm={confirmRestoreAll}
-          onCancel={() => setRestoreAllTarget(null)}
         />
       )}
     </div>
@@ -355,6 +302,15 @@ function HelpCard({ writable, onClose }: { writable: boolean; onClose: () => voi
         </button>
       </div>
       <ul className="vc-help-list small">
+        {/* The one place "Git" is named. Everywhere else in the UI it stays invisible on purpose
+            -- but the credit belongs here, and knowing the history is kept in a standard,
+            portable format is reassurance rather than jargon. */}
+        <li className="qa-vc-help-git">
+          Turn this on and MDE saves a checkpoint of everything you change in this folder, every
+          ten to thirty minutes, without being asked. It is a simplified, automatic front end to{' '}
+          <strong>Git</strong>, the version-control system programmers rely on -- you never have
+          to touch Git itself.
+        </li>
         <li>
           A <strong>checkpoint</strong> is a snapshot of every file in this folder at one
           moment. MDE saves one automatically after things have been quiet for a bit, and
@@ -376,11 +332,16 @@ function HelpCard({ writable, onClose }: { writable: boolean; onClose: () => voi
         </li>
         {writable && (
           <li>
-            Don't like a change? Open the file from a checkpoint in <strong>History</strong>{' '}
-            and choose <em>Put this version back</em> -- or restore the whole folder to that
-            point.
+            Don't like a change? In that tab, find the file inside a checkpoint and press{' '}
+            <em>Restore</em>. MDE then asks which version you want: the way it was{' '}
+            <em>before</em> that change, or the way it came out <em>after</em> it. You can also
+            restore the whole folder to that point.
           </li>
         )}
+        <li>
+          To follow just one file, right-click it in the file list (or its tab) and choose{' '}
+          <strong>View change history</strong>.
+        </li>
         <li>
           Nothing is ever thrown away. Restoring adds a new checkpoint on top, so the
           version you had a moment ago is still there to go back to.
@@ -465,15 +426,11 @@ const PAGE_SIZE = 30;
 interface HistorySectionProps {
   projectRoot: string;
   historyKey: number;
-  writable: boolean;
-  onOpenHistory: () => void;
-  onOpenDiff: (path: string, sha: string, checkpointLabel: string) => void;
-  onRestoreAll: (checkpoint: VcCheckpoint) => void;
+  onOpenHistory: (target: HistoryTarget) => void;
 }
 
-function HistorySection({ projectRoot, historyKey, writable, onOpenHistory, onOpenDiff, onRestoreAll }: HistorySectionProps) {
+function HistorySection({ projectRoot, historyKey, onOpenHistory }: HistorySectionProps) {
   const [checkpoints, setCheckpoints] = useState<VcCheckpoint[]>([]);
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [exhausted, setExhausted] = useState(false);
 
@@ -501,7 +458,10 @@ function HistorySection({ projectRoot, historyKey, writable, onOpenHistory, onOp
     <div className="vc-section qa-vc-history">
       <div className="vc-section-title">History</div>
 
-      <button className="btn btn-sm vc-browse-btn qa-vc-browse" onClick={onOpenHistory}>
+      <button
+        className="btn btn-sm vc-browse-btn qa-vc-browse"
+        onClick={() => onOpenHistory({ kind: 'all' })}
+      >
         <i className="bi bi-clock-history" /> Browse all checkpoints
       </button>
 
@@ -516,13 +476,8 @@ function HistorySection({ projectRoot, historyKey, writable, onOpenHistory, onOp
       {checkpoints.map(checkpoint => (
         <CheckpointRow
           key={checkpoint.sha}
-          projectRoot={projectRoot}
           checkpoint={checkpoint}
-          expanded={expanded === checkpoint.sha}
-          writable={writable}
-          onToggle={() => setExpanded(prev => (prev === checkpoint.sha ? null : checkpoint.sha))}
-          onOpenDiff={onOpenDiff}
-          onRestoreAll={onRestoreAll}
+          onOpen={() => onOpenHistory({ kind: 'checkpoint', checkpoint })}
         />
       ))}
 
@@ -541,65 +496,18 @@ const CHECKPOINT_ICON: Record<VcCheckpoint['kind'], string> = {
   restore: 'bi-arrow-counterclockwise',
 };
 
-interface CheckpointRowProps {
-  projectRoot: string;
-  checkpoint: VcCheckpoint;
-  expanded: boolean;
-  writable: boolean;
-  onToggle: () => void;
-  onOpenDiff: (path: string, sha: string, checkpointLabel: string) => void;
-  onRestoreAll: (checkpoint: VcCheckpoint) => void;
-}
-
-function CheckpointRow({ projectRoot, checkpoint, expanded, writable, onToggle, onOpenDiff, onRestoreAll }: CheckpointRowProps) {
-  const [files, setFiles] = useState<VcChangedFile[] | null>(null);
-
-  useEffect(() => {
-    if (!expanded || files) return;
-    let cancelled = false;
-    window.mde.vcCheckpointFiles(projectRoot, checkpoint.sha).then(result => {
-      if (!cancelled) setFiles(result);
-    });
-    return () => { cancelled = true; };
-  }, [expanded, files, projectRoot, checkpoint.sha]);
-
+/** A one-line summary that opens the history tab at this checkpoint. No expansion, by design. */
+function CheckpointRow({ checkpoint, onOpen }: { checkpoint: VcCheckpoint; onOpen: () => void }) {
   return (
-    <div className={`vc-checkpoint ${expanded ? 'expanded' : ''}`}>
-      <button className="vc-checkpoint-row qa-vc-checkpoint" onClick={onToggle}>
+    <div className="vc-checkpoint">
+      <button className="vc-checkpoint-row qa-vc-checkpoint" onClick={onOpen}>
         <i className={`bi ${CHECKPOINT_ICON[checkpoint.kind]} vc-checkpoint-icon`} />
         <span className="vc-checkpoint-text">
           <span className="vc-checkpoint-subject text-truncate">{checkpoint.subject}</span>
           <span className="small text-muted">{formatRelativeTime(checkpoint.timestamp)}</span>
         </span>
+        <i className="bi bi-chevron-right vc-checkpoint-chevron" />
       </button>
-
-      {expanded && (
-        <div className="vc-checkpoint-detail">
-          {files === null && <div className="small text-muted">Loading...</div>}
-          {files !== null && files.length === 0 && (
-            <div className="small text-muted">No file changes recorded.</div>
-          )}
-          {files?.map(file => (
-            <button
-              key={file.path}
-              className="vc-file-row qa-vc-checkpoint-file"
-              title={file.path}
-              onClick={() => onOpenDiff(file.path, checkpoint.sha, checkpoint.subject)}
-            >
-              <i className={`bi ${KIND_ICON[file.kind]} ${KIND_CLASS[file.kind]}`} />
-              <span className="vc-file-name text-truncate">{basename(file.path) || file.path}</span>
-            </button>
-          ))}
-          {writable && (
-            <button
-              className="btn btn-sm mt-2 qa-vc-restore-all"
-              onClick={() => onRestoreAll(checkpoint)}
-            >
-              Restore everything to here
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }

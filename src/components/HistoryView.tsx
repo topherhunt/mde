@@ -2,18 +2,24 @@
 // in src/types.ts for why.
 //
 // Three levels, one at a time, with a breadcrumb back: the list of checkpoints, one
-// checkpoint's changed files, and one file's diff. The sidebar panel stays as the glance
-// ("what has moved since the last checkpoint, save one now"); everything you'd want a whole
-// window for happens here, where a prose diff finally has the width to be readable.
+// checkpoint's changed files, and one file's diff. The list also has a SCOPE (see `Scope`) so
+// the same three levels serve "every checkpoint" and "just the ones that touched this file".
+//
+// This is the ONLY checkpoint drill-down in the app. The sidebar panel stays the glance
+// ("what has moved since the last checkpoint, save one now") and routes every click here;
+// everything you'd want a whole window for happens in this view, where a prose diff finally
+// has the width to be readable.
 //
 // Restore goes through src/components/vcRestore.ts rather than being re-implemented, so this
 // view and the sidebar can never disagree about what just happened to the user's files.
 
-import React, { useCallback, useEffect, useState } from 'react';
-import { VcChangedFile, VcCheckpoint } from '../types';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { HistoryTarget, VcChangedFile, VcChangeKind, VcCheckpoint, VcCheckpointStat } from '../types';
 import DiffView from './DiffView';
 import { VersionControl, formatRelativeTime, RestoreAllDialog } from './VersionPanel';
 import { restoreEverything, restoreOneFile } from './vcRestore';
+import RestoreFileDialog from './RestoreFileDialog';
+import { basename } from '../utils/paths';
 
 const PAGE_SIZE = 50;
 
@@ -47,32 +53,84 @@ function formatAbsoluteTime(timestamp: number): string {
   });
 }
 
+/**
+ * What the LIST level is showing. Every checkpoint, or only the ones that touched one file.
+ *
+ * A scope rather than a fourth level, because it only ever filters the list: once you drill
+ * into a checkpoint you see everything it changed. The breadcrumb reflects that by wording the
+ * scope crumb as a list ("Changes to ch4.md") rather than as a file, so it cannot be confused
+ * with the filename crumb that may sit two positions to its right.
+ */
+type Scope = { kind: 'all' } | { kind: 'file'; path: string };
+
 type Nav =
-  | { level: 'list' }
-  | { level: 'checkpoint'; checkpoint: VcCheckpoint }
-  | { level: 'file'; checkpoint: VcCheckpoint; path: string };
+  | { level: 'list'; scope: Scope }
+  | { level: 'checkpoint'; scope: Scope; checkpoint: VcCheckpoint }
+  | { level: 'file'; scope: Scope; checkpoint: VcCheckpoint; path: string };
+
+const ALL: Scope = { kind: 'all' };
+
+export interface HistoryNavRequest {
+  target: HistoryTarget;
+  // Bumped on every request. The target alone is not enough: opening the same file twice, or
+  // pressing Browse while already on the list, must still re-navigate, and an unchanged prop
+  // fires no effect.
+  nonce: number;
+}
 
 interface HistoryViewProps {
   projectRoot: string | null;
   vc: VersionControl;
   onToast: (msg: string, variant?: string) => void;
+  navRequest: HistoryNavRequest | null;
 }
 
-export default function HistoryView({ projectRoot, vc, onToast }: HistoryViewProps) {
-  const [nav, setNav] = useState<Nav>({ level: 'list' });
+function navFor(target: HistoryTarget | undefined): Nav {
+  if (!target || target.kind === 'all') return { level: 'list', scope: ALL };
+  if (target.kind === 'file') return { level: 'list', scope: { kind: 'file', path: target.path } };
+  return { level: 'checkpoint', scope: ALL, checkpoint: target.checkpoint };
+}
+
+export default function HistoryView({ projectRoot, vc, onToast, navRequest }: HistoryViewProps) {
+  // Seeded from the request rather than defaulting to the unfiltered list and correcting itself
+  // in an effect. Correcting it later means the first paint is the WRONG list -- opening one
+  // file's history would flash every checkpoint in the folder and fetch a page nobody asked for.
+  const [nav, setNav] = useState<Nav>(() => navFor(navRequest?.target));
+  const appliedNonce = useRef(navRequest?.nonce ?? 0);
   const [checkpoints, setCheckpoints] = useState<VcCheckpoint[]>([]);
+  const [stats, setStats] = useState<Record<string, VcCheckpointStat>>({});
   const [loading, setLoading] = useState(true);
   const [exhausted, setExhausted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [restoreAllTarget, setRestoreAllTarget] = useState<VcCheckpoint | null>(null);
+  // The pending one-file restore. Set by either entry point (a file row in a checkpoint, or the
+  // diff's own button) and cleared by the dialog; nothing is written until it confirms a
+  // DIRECTION, which is the whole point of the dialog existing.
+  const [restoreFileTarget, setRestoreFileTarget] =
+    useState<{ checkpoint: VcCheckpoint; path: string; kind: VcChangeKind } | null>(null);
 
   const writable = vc.state.attach === 'managed';
+  // A plain string, not the scope object: the load effect depends on it, and a fresh object
+  // identity on every render would refetch forever.
+  const scopePath = nav.scope.kind === 'file' ? nav.scope.path : '';
+
+  // External navigation: the Browse button, a sidebar checkpoint, or "view change history" on a
+  // file. Browse sends `all`, which is also what makes it ZOOM BACK OUT when the tab is already
+  // open two levels deep -- that is what someone pressing "Browse all checkpoints" is asking for.
+  useEffect(() => {
+    if (!navRequest || navRequest.nonce === appliedNonce.current) return;
+    appliedNonce.current = navRequest.nonce;
+    setNav(navFor(navRequest.target));
+  }, [navRequest?.nonce]);
 
   useEffect(() => {
     if (!projectRoot) return;
     let cancelled = false;
     setLoading(true);
-    window.mde.vcHistory(projectRoot, { limit: PAGE_SIZE }).then(result => {
+    const page = scopePath
+      ? window.mde.vcFileHistory(projectRoot, scopePath, { limit: PAGE_SIZE })
+      : window.mde.vcHistory(projectRoot, { limit: PAGE_SIZE });
+    page.then(result => {
       if (cancelled) return;
       setCheckpoints(result);
       setExhausted(result.length < PAGE_SIZE);
@@ -86,28 +144,54 @@ export default function HistoryView({ projectRoot, vc, onToast }: HistoryViewPro
       });
     });
     return () => { cancelled = true; };
-  }, [projectRoot, vc.historyKey]);
+  }, [projectRoot, vc.historyKey, scopePath]);
+
+  // The diff-stat bars, fetched after the list rather than with it: measuring a checkpoint costs
+  // a diff per file it changed, and the list must not wait on that. Keyed by sha, which is a
+  // content address, so the map is a CACHE -- paging in older checkpoints, or the refetch a
+  // retitle triggers, never re-measures a checkpoint that has already been measured.
+  useEffect(() => {
+    if (!projectRoot) return;
+    const missing = checkpoints.filter(c => !(c.sha in stats)).map(c => c.sha);
+    if (missing.length === 0) return;
+    let cancelled = false;
+    window.mde.vcCheckpointStats(projectRoot, missing).then(result => {
+      if (cancelled) return;
+      // A sha the main process could not read at all is recorded as zero files rather than left
+      // absent, or every render would ask about it again.
+      const merged: Record<string, VcCheckpointStat> = {};
+      for (const sha of missing) merged[sha] = result[sha] ?? { files: 0 };
+      setStats(prev => ({ ...prev, ...merged }));
+    });
+    return () => { cancelled = true; };
+  }, [projectRoot, checkpoints, stats]);
 
   const loadMore = useCallback(async () => {
     if (!projectRoot) return;
     const last = checkpoints[checkpoints.length - 1];
     if (!last) return;
-    const more = await window.mde.vcHistory(projectRoot, { limit: PAGE_SIZE, before: last.sha });
+    const opts = { limit: PAGE_SIZE, before: last.sha };
+    const more = scopePath
+      ? await window.mde.vcFileHistory(projectRoot, scopePath, opts)
+      : await window.mde.vcHistory(projectRoot, opts);
     setCheckpoints(prev => [...prev, ...more]);
     if (more.length < PAGE_SIZE) setExhausted(true);
-  }, [projectRoot, checkpoints]);
+  }, [projectRoot, checkpoints, scopePath]);
 
-  const runRestoreFile = useCallback(async (sha: string, filePath: string) => {
-    if (!projectRoot) return;
+  // `sha` is the direction the dialog chose: the checkpoint itself, or its parent.
+  const confirmRestoreFile = useCallback(async (sha: string) => {
+    if (!projectRoot || !restoreFileTarget) return;
+    const filePath = restoreFileTarget.path;
     setBusy(true);
     try {
       const outcome = await restoreOneFile(projectRoot, sha, filePath);
+      setRestoreFileTarget(null);
       onToast(outcome.message, outcome.variant);
       if (outcome.changed) await vc.refresh();
     } finally {
       setBusy(false);
     }
-  }, [projectRoot, onToast, vc]);
+  }, [projectRoot, restoreFileTarget, onToast, vc]);
 
   const confirmRestoreAll = useCallback(async () => {
     if (!projectRoot || !restoreAllTarget) return;
@@ -153,18 +237,30 @@ export default function HistoryView({ projectRoot, vc, onToast }: HistoryViewPro
       <div className="history-crumbs qa-hist-crumbs">
         <button
           className="history-crumb qa-hist-crumb-root"
-          disabled={nav.level === 'list'}
-          onClick={() => setNav({ level: 'list' })}
+          disabled={nav.level === 'list' && nav.scope.kind === 'all'}
+          onClick={() => setNav({ level: 'list', scope: ALL })}
         >
           Checkpoints
         </button>
+        {nav.scope.kind === 'file' && (
+          <>
+            <i className="bi bi-chevron-right history-crumb-sep" />
+            <button
+              className="history-crumb qa-hist-crumb-scope"
+              disabled={nav.level === 'list'}
+              onClick={() => setNav({ level: 'list', scope: nav.scope })}
+            >
+              Changes to {basename(nav.scope.path) || nav.scope.path}
+            </button>
+          </>
+        )}
         {nav.level !== 'list' && (
           <>
             <i className="bi bi-chevron-right history-crumb-sep" />
             <button
               className="history-crumb qa-hist-crumb-checkpoint"
               disabled={nav.level === 'checkpoint'}
-              onClick={() => setNav({ level: 'checkpoint', checkpoint: nav.checkpoint })}
+              onClick={() => setNav({ level: 'checkpoint', scope: nav.scope, checkpoint: nav.checkpoint })}
             >
               {nav.checkpoint.subject}
             </button>
@@ -182,10 +278,12 @@ export default function HistoryView({ projectRoot, vc, onToast }: HistoryViewPro
         {nav.level === 'list' && (
           <CheckpointList
             checkpoints={checkpoints}
+            stats={stats}
+            scope={nav.scope}
             loading={loading}
             exhausted={exhausted}
             writable={writable}
-            onOpen={checkpoint => setNav({ level: 'checkpoint', checkpoint })}
+            onOpen={checkpoint => setNav({ level: 'checkpoint', scope: nav.scope, checkpoint })}
             onLoadMore={loadMore}
             onSaveTitle={saveTitle}
           />
@@ -197,8 +295,9 @@ export default function HistoryView({ projectRoot, vc, onToast }: HistoryViewPro
             checkpoint={nav.checkpoint}
             writable={writable}
             busy={busy}
-            onOpenFile={path => setNav({ level: 'file', checkpoint: nav.checkpoint, path })}
-            onRestoreFile={path => runRestoreFile(nav.checkpoint.sha, path)}
+            onOpenFile={path => setNav({ level: 'file', scope: nav.scope, checkpoint: nav.checkpoint, path })}
+            onRestoreFile={(path, kind) =>
+              setRestoreFileTarget({ checkpoint: nav.checkpoint, path, kind })}
             onRestoreAll={() => setRestoreAllTarget(nav.checkpoint)}
             onSaveTitle={saveTitle}
           />
@@ -211,12 +310,34 @@ export default function HistoryView({ projectRoot, vc, onToast }: HistoryViewPro
             filePath={nav.path}
             sha={nav.checkpoint.sha}
             subtitle={`As it was after "${nav.checkpoint.subject}"`}
-            onClose={() => setNav({ level: 'checkpoint', checkpoint: nav.checkpoint })}
-            onRestore={writable ? path => runRestoreFile(nav.checkpoint.sha, path) : undefined}
-            restoreLabel="Put this version back"
+            onClose={() => setNav({ level: 'checkpoint', scope: nav.scope, checkpoint: nav.checkpoint })}
+            onRestore={
+              writable
+                ? (path, kind) => setRestoreFileTarget({ checkpoint: nav.checkpoint, path, kind })
+                : undefined
+            }
+            // The one place the file-scoped list is discoverable without a right-click: you are
+            // already looking at one file and "what else happened to this?" is the next thought.
+            onViewFileHistory={
+              scopePath === nav.path
+                ? undefined
+                : () => setNav({ level: 'list', scope: { kind: 'file', path: nav.path } })
+            }
           />
         )}
       </div>
+
+      {restoreFileTarget && (
+        <RestoreFileDialog
+          projectRoot={projectRoot}
+          filePath={restoreFileTarget.path}
+          checkpoint={restoreFileTarget.checkpoint}
+          kind={restoreFileTarget.kind}
+          busy={busy}
+          onConfirm={confirmRestoreFile}
+          onCancel={() => setRestoreFileTarget(null)}
+        />
+      )}
 
       {restoreAllTarget && (
         <RestoreAllDialog
@@ -234,6 +355,8 @@ export default function HistoryView({ projectRoot, vc, onToast }: HistoryViewPro
 
 interface CheckpointListProps {
   checkpoints: VcCheckpoint[];
+  stats: Record<string, VcCheckpointStat>;
+  scope: Scope;
   loading: boolean;
   exhausted: boolean;
   writable: boolean;
@@ -242,17 +365,50 @@ interface CheckpointListProps {
   onSaveTitle: (sha: string, title: string) => Promise<void>;
 }
 
-function CheckpointList({ checkpoints, loading, exhausted, writable, onOpen, onLoadMore, onSaveTitle }: CheckpointListProps) {
+function CheckpointList({ checkpoints, stats, scope, loading, exhausted, writable, onOpen, onLoadMore, onSaveTitle }: CheckpointListProps) {
   if (loading) return <div className="history-empty text-muted">Loading...</div>;
   if (checkpoints.length === 0) {
-    return <div className="history-empty text-muted qa-hist-empty">No checkpoints yet.</div>;
+    return (
+      <div className="history-empty text-muted qa-hist-empty">
+        {scope.kind === 'file'
+          ? `No checkpoint has changed ${basename(scope.path) || scope.path} yet.`
+          : 'No checkpoints yet.'}
+      </div>
+    );
   }
 
   return (
     <>
+      {scope.kind === 'file' && (
+        <div className="history-scope-header qa-hist-scope-header">
+          <i className="bi bi-file-earmark-text" />
+          <div>
+            <div className="history-scope-path">{scope.path}</div>
+            <div className="small text-muted">
+              {checkpoints.length === 1
+                ? '1 checkpoint changed this file'
+                : `${checkpoints.length} checkpoints changed this file`}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="history-list">
         {checkpoints.map(checkpoint => (
-          <div key={checkpoint.sha} className="history-row qa-hist-checkpoint">
+          // The WHOLE row drills in -- there is no "see what changed" button, because a row that
+          // is entirely clickable does not need one and the width is better spent on the title.
+          // Not a <button>: the pencil is a button too, and nesting them is invalid HTML.
+          <div
+            key={checkpoint.sha}
+            className="history-row qa-hist-checkpoint"
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpen(checkpoint)}
+            onKeyDown={e => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              onOpen(checkpoint);
+            }}
+          >
             <i className={`bi ${CHECKPOINT_ICON[checkpoint.kind]} history-row-icon`} />
             <div className="history-row-main">
               <EditableTitle
@@ -260,19 +416,17 @@ function CheckpointList({ checkpoints, loading, exhausted, writable, onOpen, onL
                 writable={writable}
                 className="history-row-subject qa-hist-subject"
                 onSave={onSaveTitle}
-                onActivate={() => onOpen(checkpoint)}
               />
-              <div className="small text-muted">
-                {formatAbsoluteTime(checkpoint.timestamp)} &middot;{' '}
-                {formatRelativeTime(checkpoint.timestamp)} &middot; {KIND_LABEL[checkpoint.kind]}
+              {/* The counts share the timestamp's line rather than sitting beside the title,
+                  so a long checkpoint description can run the full width of the row. */}
+              <div className="history-row-meta small">
+                <span className="text-muted text-truncate">
+                  {formatAbsoluteTime(checkpoint.timestamp)} &middot;{' '}
+                  {formatRelativeTime(checkpoint.timestamp)} &middot; {KIND_LABEL[checkpoint.kind]}
+                </span>
+                <CheckpointStat stat={stats[checkpoint.sha]} />
               </div>
             </div>
-            <button
-              className="btn btn-sm qa-hist-open"
-              onClick={() => onOpen(checkpoint)}
-            >
-              See what changed
-            </button>
           </div>
         ))}
       </div>
@@ -285,6 +439,32 @@ function CheckpointList({ checkpoints, loading, exhausted, writable, onOpen, onL
   );
 }
 
+// --- The per-checkpoint counts --------------------------------------------------------
+
+/**
+ * How much a checkpoint moved: files touched, then lines added and removed. The two line
+ * counts are formatted exactly as they are on the file rows inside a checkpoint (`FileCounts`),
+ * so the same numbers never appear in two different shapes.
+ *
+ * Zeros are dropped rather than printed, and a checkpoint whose lines could not be measured
+ * shows only its file count -- see `checkpointStats` for why that is not a zero.
+ */
+function CheckpointStat({ stat }: { stat: VcCheckpointStat | undefined }) {
+  if (!stat) return null;
+  return (
+    <span
+      className="history-stat qa-hist-stat"
+      data-files={stat.files}
+      data-added={stat.added}
+      data-removed={stat.removed}
+    >
+      <span className="text-warning">{stat.files === 1 ? '1 file' : `${stat.files} files`}</span>
+      {stat.added ? <span className="text-success">+{stat.added}</span> : null}
+      {stat.removed ? <span className="text-danger">&minus;{stat.removed}</span> : null}
+    </span>
+  );
+}
+
 // --- Level 2: one checkpoint ----------------------------------------------------------
 
 interface CheckpointDetailProps {
@@ -293,7 +473,7 @@ interface CheckpointDetailProps {
   writable: boolean;
   busy: boolean;
   onOpenFile: (path: string) => void;
-  onRestoreFile: (path: string) => void;
+  onRestoreFile: (path: string, kind: VcChangeKind) => void;
   onRestoreAll: () => void;
   onSaveTitle: (sha: string, title: string) => Promise<void>;
 }
@@ -355,9 +535,9 @@ function CheckpointDetail({
                 <button
                   className="btn btn-sm qa-hist-restore-file"
                   disabled={busy}
-                  onClick={() => onRestoreFile(file.path)}
+                  onClick={() => onRestoreFile(file.path, file.kind)}
                 >
-                  Put this version back
+                  Restore
                 </button>
               )}
             </div>
@@ -390,11 +570,9 @@ interface EditableTitleProps {
   writable: boolean;
   className: string;
   onSave: (sha: string, title: string) => Promise<void>;
-  // When present, the (non-editing) title itself is clickable and drills in.
-  onActivate?: () => void;
 }
 
-function EditableTitle({ checkpoint, writable, className, onSave, onActivate }: EditableTitleProps) {
+function EditableTitle({ checkpoint, writable, className, onSave }: EditableTitleProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(checkpoint.subject);
 
@@ -411,7 +589,9 @@ function EditableTitle({ checkpoint, writable, className, onSave, onActivate }: 
 
   if (editing) {
     return (
-      <div className="history-title-edit">
+      // In the list, this sits inside a row that drills in on click. Renaming must not also
+      // navigate away, so nothing in here is allowed to reach the row.
+      <div className="history-title-edit" onClick={e => e.stopPropagation()}>
         <input
           className="history-title-input qa-hist-title-input"
           autoFocus
@@ -443,19 +623,13 @@ function EditableTitle({ checkpoint, writable, className, onSave, onActivate }: 
 
   return (
     <div className="history-title-row">
-      {onActivate ? (
-        <button className={`${className} history-title-link`} onClick={onActivate}>
-          {checkpoint.subject}
-        </button>
-      ) : (
-        <span className={className}>{checkpoint.subject}</span>
-      )}
+      <span className={className}>{checkpoint.subject}</span>
       {writable && (
         <button
           className="btn-plain history-title-pencil qa-hist-title-edit"
           data-tooltip="Change this description"
           aria-label="Change this description"
-          onClick={begin}
+          onClick={e => { e.stopPropagation(); begin(); }}
         >
           <i className="bi bi-pencil" />
         </button>

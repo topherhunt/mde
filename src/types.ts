@@ -69,6 +69,15 @@ export interface VcChangedFile {
   removed?: number;
 }
 
+/** One checkpoint at a glance: how many files it touched and how far the lines moved. */
+export interface VcCheckpointStat {
+  files: number;
+  // Absent, never zero, when nothing in the checkpoint could be measured (all binary, or past
+  // the file cap). A zero would read as "nothing really changed" instead of "nobody counted".
+  added?: number;
+  removed?: number;
+}
+
 export interface VcStatus {
   files: VcChangedFile[];
   count: number;
@@ -76,6 +85,10 @@ export interface VcStatus {
 
 export interface VcCheckpoint {
   sha: string;
+  // The checkpoint immediately before this one. Absent only on the very first checkpoint in a
+  // folder. This is what "restore the way it was BEFORE this change" restores to, so it is
+  // carried on every checkpoint rather than fetched when a restore dialog opens.
+  parent?: string;
   // What to display. The user's edited title when there is one, else the generated subject.
   subject: string;
   // The auto-generated subject, always. Kept so "use the automatic title again" can restore it
@@ -108,6 +121,21 @@ export interface VcPreflight {
   // True when the walk hit its cap, so the totals above are lower bounds.
   truncated: boolean;
 }
+
+/**
+ * Where to point the checkpoint history tab when something opens it.
+ *
+ * The tab is the ONLY thing that renders a checkpoint drill-down; the sidebar routes here
+ * instead of keeping a second, shallower copy of the same screens. `all` also means "zoom back
+ * out", which is what the Browse button must do when the tab is already open on a file diff.
+ */
+export type HistoryTarget =
+  | { kind: 'all' }
+  | { kind: 'checkpoint'; checkpoint: VcCheckpoint }
+  // Repo-relative path. Only the LIST is filtered -- drilling into a checkpoint from here still
+  // shows everything that checkpoint touched, because "what else moved at the same time" is the
+  // next question and hiding it would make the checkpoint look smaller than it was.
+  | { kind: 'file'; path: string };
 
 export interface VcDiff {
   path: string;
@@ -212,11 +240,21 @@ export interface MdeAPI {
   vcAdopt: (root: string) => Promise<{ ok: boolean; error?: string }>;
   vcCheckpoint: (root: string, message?: string) => Promise<VcCheckpointResult>;
   vcHistory: (root: string, opts?: { limit?: number; before?: string }) => Promise<VcCheckpoint[]>;
+  // Just the checkpoints that touched one file (repo-relative path), same shape as vcHistory.
+  vcFileHistory: (
+    root: string,
+    filePath: string,
+    opts?: { limit?: number; before?: string }
+  ) => Promise<VcCheckpoint[]>;
   vcCheckpointFiles: (
     root: string,
     sha: string,
     opts?: { counts?: boolean }
   ) => Promise<VcChangedFile[]>;
+  // Line totals for the history list's diff-stat bars, keyed by sha. Batched and fetched after
+  // the list itself: it costs a diff per changed file, and the list must not wait on it.
+  // A sha with nothing measurable is simply absent from the result.
+  vcCheckpointStats: (root: string, shas: string[]) => Promise<Record<string, VcCheckpointStat>>;
   // Stores a display title in a sidecar inside .git. Deliberately NOT a commit rewrite --
   // see the header of src/git/titles.ts. Pass '' to go back to the generated title.
   vcSetTitle: (root: string, sha: string, title: string) => Promise<{ ok: boolean; error?: string }>;

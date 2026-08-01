@@ -22,10 +22,15 @@ interface FileContextMenuProps {
   // Only provided (and only shown) when the target is a folder that supports
   // creating children -- the file explorer passes it, the tab bar does not.
   onCreateInFolder?: (folderPath: string, type: 'file' | 'folder') => void;
+  // Opens the checkpoint history tab filtered to this one file. Absent when the folder has
+  // no checkpoints, so the menu never offers a screen that would be empty by construction.
+  // Receives the repo-relative path, since that is what checkpoints are keyed by.
+  onViewHistory?: (relativePath: string) => void;
 }
 
 export function FileContextMenu({
   x, y, target, projectRoot, onClose, onStartRename, onRequestDelete, onToast, onCreateInFolder,
+  onViewHistory,
 }: FileContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -81,6 +86,11 @@ export function FileContextMenu({
     onClose();
   };
 
+  const handleViewHistory = () => {
+    onViewHistory!(relativePath);
+    onClose();
+  };
+
   return (
     <div ref={ref} className="ctx-menu" style={style}>
       {target.isDirectory && onCreateInFolder && (
@@ -90,6 +100,16 @@ export function FileContextMenu({
           </button>
           <button className="ctx-menu-item" onClick={() => { onCreateInFolder(target.path, 'folder'); onClose(); }}>
             <i className="bi bi-folder-plus" /> New Folder
+          </button>
+          <div className="ctx-menu-divider" />
+        </>
+      )}
+      {/* A file outside the project root can't appear in this folder's checkpoints, so there
+          would be nothing to show. Folders aren't offered: history is per-file. */}
+      {onViewHistory && !target.isDirectory && hasRelativePath && (
+        <>
+          <button className="ctx-menu-item qa-ctx-file-history" onClick={handleViewHistory}>
+            <i className="bi bi-clock-history" /> View Change History
           </button>
           <div className="ctx-menu-divider" />
         </>

@@ -6,7 +6,7 @@ import { resolveState, initRepo, adoptRepo, findParentRepo } from './git/repo';
 import { computeStatus } from './git/status';
 import { preflight, seedIgnoreFile } from './git/guards';
 import { createCheckpoint } from './git/checkpoint';
-import { listCheckpoints, checkpointFiles, diffFile } from './git/history';
+import { listCheckpoints, listFileCheckpoints, checkpointFiles, checkpointStats, diffFile } from './git/history';
 import { restoreFile, restoreAll } from './git/restore';
 import { setTitle } from './git/titles';
 import {
@@ -1222,11 +1222,23 @@ ipcMain.handle('vc-history', async (_event, root: string, opts?: { limit?: numbe
   return listCheckpoints(root, opts || {});
 });
 
+ipcMain.handle('vc-file-history', async (_event, root: string, filepath: string, opts?: { limit?: number; before?: string }) => {
+  return listFileCheckpoints(root, filepath, opts || {});
+});
+
 ipcMain.handle('vc-checkpoint-files', async (_event, root: string, sha: string, opts?: { counts?: boolean }) => {
   try {
     return await checkpointFiles(root, sha, opts || {});
   } catch {
     return [];
+  }
+});
+
+ipcMain.handle('vc-checkpoint-stats', async (_event, root: string, shas: string[]) => {
+  try {
+    return await checkpointStats(root, shas || []);
+  } catch {
+    return {};
   }
 });
 

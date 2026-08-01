@@ -14,9 +14,12 @@ interface TabBarProps {
   onToast: (msg: string, variant?: string) => void;
   onRenameFile: (target: FileEntry) => void;
   onRequestDeleteFile: (target: FileEntry) => void;
+  // Undefined when the folder has no checkpoints, which hides the menu item. Kept identical
+  // to the file explorer's menu by construction: both mount the same FileContextMenu.
+  onViewFileHistory?: (relativePath: string) => void;
 }
 
-export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder, onPinTab, projectRoot, onToast, onRenameFile, onRequestDeleteFile }: TabBarProps) {
+export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder, onPinTab, projectRoot, onToast, onRenameFile, onRequestDeleteFile, onViewFileHistory }: TabBarProps) {
   const activeTabRef = useRef<HTMLDivElement>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -124,6 +127,7 @@ export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder
           onStartRename={onRenameFile}
           onRequestDelete={onRequestDeleteFile}
           onToast={onToast}
+          onViewHistory={onViewFileHistory}
         />
       )}
     </div>

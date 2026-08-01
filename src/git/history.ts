@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import git from 'isomorphic-git';
 import { diffLines } from 'diff';
-import { VcCheckpoint, VcChangedFile, VcDiff } from '../types';
+import { VcCheckpoint, VcChangedFile, VcCheckpointStat, VcDiff } from '../types';
 import { TRAILER_KIND, TRAILER_RESTORE } from './checkpoint';
 import { readTitles, TitleMap } from './titles';
 
@@ -19,7 +19,8 @@ function toCheckpoint(
   sha: string,
   message: string,
   timestampSec: number,
-  titles: TitleMap
+  titles: TitleMap,
+  parents: string[]
 ): VcCheckpoint {
   const generated = message.split('\n')[0].trim();
   const rawKind = parseTrailer(message, TRAILER_KIND);
@@ -32,6 +33,9 @@ function toCheckpoint(
   const custom = titles[sha];
   return {
     sha,
+    // A merge is not something MDE ever creates, but an adopted repo can contain one. First
+    // parent is the right answer there too: it is the line of history this list is walking.
+    parent: parents[0],
     subject: custom ?? generated,
     generatedSubject: generated,
     titleEdited: custom !== undefined,
@@ -64,10 +68,58 @@ export async function listCheckpoints(
     // Read the sidecar once per page, not once per row.
     const titles = readTitles(root);
     return sliced.map(e =>
-      toCheckpoint(e.oid, e.commit.message, e.commit.author.timestamp, titles)
+      toCheckpoint(e.oid, e.commit.message, e.commit.author.timestamp, titles, e.commit.parent)
     );
   } catch {
     // No commits yet (unborn HEAD) is normal for a freshly created repo.
+    return [];
+  }
+}
+
+/**
+ * The checkpoints that touched ONE file, newest first. Same shape and pagination as
+ * `listCheckpoints`, so the history view renders either list with the same code.
+ *
+ * `force: true` matters: without it, `log` THROWS when the file does not exist at the starting
+ * ref. That is not an edge case here -- "what happened to this?" is a question people ask about
+ * a file precisely when it has just been deleted, and a tab can outlive the file it points at.
+ * With it, the walk continues past the gap and still finds the checkpoints that had it.
+ *
+ * Renames are not followed (`follow` defaults false). isomorphic-git implements it by mutating
+ * the filepath mid-walk, and a subtly wrong history is worse here than an obviously short one:
+ * this list is what someone decides whether to restore from.
+ */
+export async function listFileCheckpoints(
+  root: string,
+  filepath: string,
+  opts: { limit?: number; before?: string } = {}
+): Promise<VcCheckpoint[]> {
+  const limit = opts.limit ?? 50;
+  try {
+    const entries = await git.log({
+      fs,
+      dir: root,
+      // `depth` counts MATCHING commits, not commits walked, so this really is a page size.
+      depth: limit + (opts.before ? 1 : 0),
+      ref: opts.before || undefined,
+      filepath,
+      force: true,
+    });
+    const sliced = opts.before ? entries.slice(1) : entries;
+    const titles = readTitles(root);
+    const seen = new Set<string>();
+    const out: VcCheckpoint[] = [];
+    for (const e of sliced) {
+      // Defensive: the filepath walk pushes from two places and a boundary commit can arrive
+      // twice. A duplicated row would read as two separate edits at the same moment.
+      if (seen.has(e.oid)) continue;
+      seen.add(e.oid);
+      out.push(
+        toCheckpoint(e.oid, e.commit.message, e.commit.author.timestamp, titles, e.commit.parent)
+      );
+    }
+    return out;
+  } catch {
     return [];
   }
 }
@@ -207,6 +259,46 @@ export async function checkpointFiles(
   }
 
   return files;
+}
+
+/**
+ * File count plus total lines added and removed, for each of several checkpoints. This is what
+ * the history list shows on the right of every row.
+ *
+ * Deliberately a SEPARATE call from `listCheckpoints` rather than a field on it. Listing is a
+ * cheap log walk; this is two blob reads plus a diff per changed file, per checkpoint, and
+ * folding it into the list would make the whole page wait on the slowest part of it. The list
+ * paints immediately and the counts arrive a moment later.
+ *
+ * The file count is always available; the line counts are omitted when nothing in the
+ * checkpoint could be measured (all binary, or past `checkpointFiles`'s caps) -- same rule as
+ * the per-file counts, where a zero would read as "nothing really changed" not "nobody counted".
+ */
+export async function checkpointStats(
+  root: string,
+  shas: string[]
+): Promise<Record<string, VcCheckpointStat>> {
+  const out: Record<string, VcCheckpointStat> = {};
+  for (const sha of shas) {
+    try {
+      const files = await checkpointFiles(root, sha, { counts: true });
+      let added = 0;
+      let removed = 0;
+      let measured = false;
+      for (const file of files) {
+        if (file.added === undefined && file.removed === undefined) continue;
+        measured = true;
+        added += file.added ?? 0;
+        removed += file.removed ?? 0;
+      }
+      out[sha] = measured
+        ? { files: files.length, added, removed }
+        : { files: files.length };
+    } catch {
+      // One unreadable checkpoint must not cost the rest of the page its counts.
+    }
+  }
+  return out;
 }
 
 const BINARY_EXT = new Set([

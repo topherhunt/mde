@@ -284,7 +284,7 @@ No checkboxes. Everything is included, always.
 │    Yesterday 9:02am         │
 ```
 
-Clicking a checkpoint opens its detail: the file list at that point, each file clickable to a diff, plus two restore actions.
+Clicking a checkpoint **routes to the history tab**, opened at that checkpoint. It deliberately does not expand in place -- see "One drill-down, not two" below.
 
 ### The diff view
 
@@ -301,21 +301,43 @@ Opens in the main editor area rather than the sidebar, since it needs the width.
 
 Ship a line-level diff first (phase 5) and the prose renderer after (phase 7). The line-level version is genuinely useful and unblocks restore.
 
-**BUILT: a modal overlay, not a tab.** This resolves the first open question at the bottom of this document, and the reasoning changed once the panel existed. A diff is something you glance at and dismiss, usually several in a row while scanning what an agent did; a tab is something you *keep*. Opening one tab per file inspected would bury the documents the user is actually working on within a minute. The overlay gets the same full width, closes on Escape or a backdrop click, and leaves the tab bar alone. It also keeps restore where the diff is -- the **Put this version back** button lives in the diff footer, so "look at it, then undo it" is one uninterrupted gesture instead of a trip back to the sidebar.
+**BUILT: a modal overlay, not a tab.** This resolves the first open question at the bottom of this document, and the reasoning changed once the panel existed. A diff is something you glance at and dismiss, usually several in a row while scanning what an agent did; a tab is something you *keep*. Opening one tab per file inspected would bury the documents the user is actually working on within a minute. The overlay gets the same full width, closes on Escape or a backdrop click, and leaves the tab bar alone. It also keeps restore where the diff is -- the **Restore** button lives in the diff header, so "look at it, then undo it" is one uninterrupted gesture instead of a trip back to the sidebar.
+
+The overlay now survives for exactly one thing: the **Changes** list, which is uncommitted work with no checkpoint to route to. Every diff that belongs to a checkpoint renders inline in the history tab instead.
 
 ### Browsing the whole history
 
 **BUILT.** The sidebar drill-down above is fine for "what did the last checkpoint touch", but working back through a folder's history in a 260px column is not. **Browse all checkpoints** in the History section opens a full-page view in a read-only tab, with three levels and a breadcrumb back:
 
-1. **Checkpoints** -- every checkpoint with its absolute time, relative time, and how it was made, paged 50 at a time.
+1. **Checkpoints** -- every checkpoint with its absolute time, relative time, and how it was made, paged 50 at a time. The whole row is the target, and its right end carries three counts: files touched (yellow-orange), then `+added` and `−removed` in exactly the shape the file rows inside a checkpoint use. They sit on the row's *second* line, right-aligned beside the timestamp, so the title above is free to run the full width. Blocks were tried first and dropped: the numbers were already there one level down, and they say strictly more.
 2. **One checkpoint** -- the files it touched, each with `+n −n` line counts so you can see at a glance whether a file was retouched or rewritten, plus **Restore everything to here**.
-3. **One file** -- the prose diff, at full page width, with **Put this version back**.
+3. **One file** -- the prose diff, at full page width, with **Restore**.
 
 A pencil on the title at levels 1 and 2 edits the description.
 
 It is a **tab, not an app mode**, and that is a correctness choice rather than a layout one. A mode that took over the main area would have to either unmount the open documents (losing unsaved buffers and their undo history) or keep a hidden editor alive receiving keystrokes and watcher events. As a tab, every existing question -- Cmd+W, Cmd+S, the conflict banner, drag-drop -- already has an answer, inactive panes are merely hidden, and you can leave an unsaved paragraph mid-sentence, go read three diffs, and come back to it untouched. There is a test for exactly that.
 
 Unlike a diff, this view is something you *keep* while you work, which is why the earlier "modal, not a tab" reasoning does not apply to it. Only one ever opens; clicking Browse again re-focuses it.
+
+**Browse always zooms back out.** If the tab is already open three levels down on a file diff, clicking **Browse all checkpoints** returns it to the unfiltered list -- that is what the button says it does. Mechanically this needs more than a target prop, because handing the view the same target twice changes nothing and fires no effect. Every navigation request therefore carries a nonce (`{ target, nonce }`), and the view applies any request whose nonce it has not seen. The same mechanism is what lets a right-click re-point a tab that is already open.
+
+### One drill-down, not two
+
+The sidebar panel briefly had its own expander: click a checkpoint, see its files, click one, get a diff overlay. That was a second implementation of the history tab's three levels, over the same data, in a quarter of the width -- and the two had already drifted, describing the same no-op restore in two different ways.
+
+The sidebar is now purely a **glance that routes**. It answers "what has moved since the last checkpoint" and "save one now"; clicking any checkpoint opens the history tab at that checkpoint. The tab is the only thing in the app that renders a checkpoint's file list, a checkpoint diff, or a restore. The one overlay that remains belongs to the Changes list, which has no checkpoint to route to.
+
+### One file's history
+
+Right-click a file in the file explorer -- or its tab -- and choose **View change history**. The history tab opens showing only the checkpoints that touched that file, with the filename in a header above the list.
+
+The scope is a **filter on the list level**, not a fourth level of navigation. The breadcrumb reads `Checkpoints › Changes to ch4.md › Updated ch4.md › notes.md`: the scope crumb is phrased as a list ("Changes to X") precisely so it cannot be misread as the file crumb at the end. Drilling into a checkpoint from a scoped list still shows *everything* that checkpoint changed -- the filter narrows which checkpoints you see, never what a checkpoint contains -- and the scope survives the trip, so backing out returns to the same short list.
+
+Both menus are the same component (`FileContextMenu`, mounted by the file explorer and the tab bar), so the "keep them in parallel" requirement is structural rather than remembered. The entry is hidden entirely when checkpoints are off for the folder, so the menu never offers a screen that would be empty by construction. Folders are not offered: history here is per-file.
+
+Reading one file's log needs `force: true` on isomorphic-git's `log`, or it **throws** when the file is absent at the starting ref -- and "what happened to this?" is asked about a file most often right after it has been deleted. Renames are deliberately not followed: isomorphic-git implements `follow` by mutating the filepath mid-walk, and a subtly wrong history is worse than an obviously short one when it is what someone decides whether to restore from.
+
+Discovery is by right-click, plus one in-context affordance: when you are already looking at a file's diff inside a checkpoint, the diff header offers **This file's history**, because "what else happened to this?" is the next thought. There is no entry point from the unfiltered checkpoint list, which has no file in hand to scope to.
 
 ### Restore
 
@@ -325,6 +347,34 @@ Two granularities, both append-only:
 - **Restore everything** to this checkpoint. The panic button.
 
 Both auto-checkpoint the current state first, then write, then checkpoint the result with an `MDE-Restore` trailer. Nothing is ever lost, so neither needs a frightening confirmation. A plain "Restore" with a one-line "your current version is saved first" is enough.
+
+**But "restore this file to this checkpoint" turned out not to be one thing.** You reach that button while looking at a red-and-green diff, and it can mean either side of it: the file as it was *before* that change, or as it came out *after*. Nothing on a button reading "Put this version back" said which, and the two are opposites. The case that sends someone looking is the worst one for guessing: *"I changed `details.md` a while ago, I want that undone, and I have no idea which checkpoint last touched it."*
+
+So the button now says only **Restore**, and it opens a dialog that offers both directions side by side rather than asking yes/no to one hidden interpretation:
+
+```
+Restore details.md
+Which version do you want back?
+
+┌─ Before this change ──────┬─ After this change ───────┐
+│ the red side of the diff  │ the green side of the diff│
+│ How it was just before    │ How it was at the end of  │
+│ "Fixed typos", 3 days ago │ "Fixed typos", 3 days ago │
+│ [ Undo this change ]      │ [ Use this version ]      │
+└───────────────────────────┴───────────────────────────┘
+
+ⓘ 2 later checkpoints also changed this file. Either choice undoes those too.
+
+MDE saves a checkpoint of your current version first.        [ Cancel ]
+```
+
+The cards are tinted with the diff's **own** red and green (`--diff-del-*` and `--diff-add-*`), not with generic danger/success colours. That is the mechanism, not decoration: "before this change" and "the red lines you were just looking at" have to be visibly the same thing, or the dialog is just a differently-worded copy of the ambiguity it was built to remove.
+
+"Undo this change" restores the checkpoint's **parent**, and that cost nothing to add -- `restoreFile` already takes any sha and already handles "the file did not exist there" by deleting it after a safety checkpoint, and the parent sha comes free off the commit walk. Three cases are stated out loud rather than left as surprises: the first checkpoint has no parent (undo is disabled, with the reason on the card), a checkpoint that *created* the file makes undo a deletion, and one that *deleted* it makes the after-side a deletion.
+
+The warning line is the one consequence the two cards cannot convey. Restoring one file always discards **every** later change to it, not only this checkpoint's -- the file goes back to a point in time and everything after that point goes with it. The dialog counts the later checkpoints that touched the file and says so.
+
+Whole-folder restore keeps its single meaning and its own dialog. "The folder as it was at this checkpoint" is not ambiguous, so there is no before/after choice there.
 
 **Two things went wrong here in practice, both now fixed and both worth remembering.**
 

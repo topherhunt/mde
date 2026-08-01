@@ -107,6 +107,41 @@ test.describe('Checkpoints opt-in', () => {
     await enableCheckpoints();
     await expect(page.locator('.qa-vc-help')).toBeVisible();
   });
+
+  test('the recap credits Git and says how often checkpoints happen', async () => {
+    // The only place in the whole UI that names Git. It is deliberate: the credit belongs
+    // somewhere, and "your history is kept in a standard format" is reassurance, not jargon.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'hello\n');
+
+    await openCheckpoints(dir);
+    await page.locator('.qa-vc-help-toggle').click();
+    const first = page.locator('.qa-vc-help-git');
+    await expect(first).toContainText('Git');
+    await expect(first).toContainText('ten to thirty minutes');
+    // It leads the list -- this is the framing for everything below it.
+    await expect(page.locator('.vc-help-list li').first()).toHaveClass(/qa-vc-help-git/);
+  });
+
+  test('the checkpoints sidebar never scrolls sideways', async () => {
+    // A tooltip bubble is `position: absolute` and `nowrap`, and opacity 0 still takes part in
+    // layout -- so the one on the question-mark button pushed the panel's scrollable width ~47px
+    // past its visible width. The result was a permanent horizontal scrollbar with nothing
+    // visible to scroll to, at every sidebar width.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'hello\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+    await expect(page.locator('.qa-vc-help')).toBeVisible();
+
+    const overflow = await page.locator('.sidebar-content').evaluate(
+      el => el.scrollWidth - el.clientWidth
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -325,11 +360,13 @@ test.describe('Checkpoint change detection', () => {
     await page.locator('.qa-vc-save').click();
     await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Removed a chapter');
 
-    // The commit's own tree diff must show the deletion, not an empty change set.
+    // The commit's own tree diff must show the deletion, not an empty change set. The sidebar
+    // row routes into the history tab, which is the only place that renders a checkpoint's files.
     await page.locator('.qa-vc-checkpoint').first().click();
-    await expect(page.locator('.qa-vc-checkpoint-file')).toHaveCount(1);
-    await expect(page.locator('.qa-vc-checkpoint-file')).toContainText('doomed.md');
-    await expect(page.locator('.qa-vc-checkpoint-file .bi-dash-lg')).toBeVisible();
+    await expect(page.locator('.qa-hist-detail')).toBeVisible();
+    await expect(page.locator('.qa-hist-file')).toHaveCount(1);
+    await expect(page.locator('.qa-hist-file')).toContainText('doomed.md');
+    await expect(page.locator('.qa-hist-file .bi-dash-lg')).toBeVisible();
   });
 
   test('saving a checkpoint records the message and clears the changes list', async () => {
@@ -409,10 +446,10 @@ test.describe('Checkpoint diffs', () => {
     await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Second pass');
 
     await page.locator('.qa-vc-checkpoint').first().click();
-    await expect(page.locator('.qa-vc-checkpoint-file')).toHaveCount(1);
-    await page.locator('.qa-vc-checkpoint-file').click();
+    await expect(page.locator('.qa-hist-file')).toHaveCount(1);
+    await page.locator('.qa-hist-file').locator('.history-file-main').click();
 
-    await expect(page.locator('.qa-diff-view')).toBeVisible();
+    await expect(page.locator('.qa-hist-diff')).toBeVisible();
     await expect(page.locator('.diff-removed')).toContainText('original');
     await expect(page.locator('.diff-added')).toContainText('revised');
   });
@@ -440,12 +477,15 @@ test.describe('Checkpoint restore', () => {
 
     const countBefore = await page.locator('.qa-vc-checkpoint').count();
 
-    // Go back to the FIRST checkpoint (the initial one) and put that version back.
-    // Its file list also holds the seeded .gitignore, so pick note.md by name.
+    // Go back to the FIRST checkpoint (the initial one) and put that version back. The sidebar
+    // row routes into the history tab; restore lives there and nowhere else. That checkpoint's
+    // file list also holds the seeded .gitignore, so pick note.md by name.
     await page.locator('.qa-vc-checkpoint').last().click();
-    await page.locator('.qa-vc-checkpoint-file', { hasText: 'note.md' }).click();
-    await expect(page.locator('.qa-diff-view')).toBeVisible();
+    await page.locator('.qa-hist-file', { hasText: 'note.md' }).locator('.history-file-main').click();
+    await expect(page.locator('.qa-hist-diff')).toBeVisible();
     await page.locator('.qa-diff-restore').click();
+    // That checkpoint's own version IS the original text, so take the green side.
+    await page.locator('.qa-restore-after').click();
 
     await expect.poll(() => fs.readFileSync(file, 'utf8'), { timeout: 15000 })
       .toBe('original text\n');
@@ -455,6 +495,135 @@ test.describe('Checkpoint restore', () => {
       .toBeGreaterThan(countBefore);
     await expect(page.locator('.qa-vc-history')).toContainText('Agent rewrite');
     await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Restored note.md');
+  });
+
+  // The restore dialog. It exists because "restore to this checkpoint" is ambiguous while you
+  // are looking at a red-and-green diff: before the change, or after it? These tests pin down
+  // that BOTH directions are offered and that neither one fires without being chosen.
+
+  /** Seed a folder, enable checkpoints, then make `count` further checkpoints of note.md. */
+  async function seedCheckpoints(count: number): Promise<{ dir: string; file: string }> {
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'note.md');
+    fs.writeFileSync(file, 'version 1\n');
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+    for (let i = 2; i <= count + 1; i++) {
+      fs.writeFileSync(file, `version ${i}\n`);
+      await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+      await page.locator('.qa-vc-message').fill(`Edit ${i}`);
+      await page.locator('.qa-vc-save').click();
+      await expect(page.locator('.qa-vc-checkpoint').first()).toContainText(`Edit ${i}`);
+    }
+    return { dir, file };
+  }
+
+  test('restore asks which version instead of writing immediately, and cancel writes nothing', async () => {
+    ({ app, page } = await launchApp());
+    // Three checkpoints, and the one we open is NOT the current state -- otherwise either
+    // direction would be a no-op and the test could not tell "cancelled" from "restored".
+    const { file } = await seedCheckpoints(2);
+
+    await page.locator('.qa-vc-browse').click();
+    await page.locator('.qa-hist-checkpoint', { hasText: 'Edit 2' }).click();
+    await page.locator('.qa-hist-file', { hasText: 'note.md' })
+      .locator('.qa-hist-restore-file').click();
+
+    // Both directions are on offer, named for the two sides of the diff.
+    await expect(page.locator('.qa-restore-file-dialog')).toBeVisible();
+    await expect(page.locator('.qa-restore-before')).toHaveText('Undo this change');
+    await expect(page.locator('.qa-restore-after')).toHaveText('Use this version');
+
+    await page.locator('.qa-restore-file-cancel').click();
+    await expect(page.locator('.qa-restore-file-dialog')).toHaveCount(0);
+    // Nothing was written, and no restore checkpoint was appended.
+    expect(fs.readFileSync(file, 'utf8')).toBe('version 3\n');
+    await page.locator('.qa-hist-crumb-root').click();
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(3);
+    await expect(page.locator('.qa-hist-checkpoint', { hasText: 'Restored' })).toHaveCount(0);
+  });
+
+  test('"undo this change" restores the version from before the checkpoint', async () => {
+    ({ app, page } = await launchApp());
+    const { file } = await seedCheckpoints(1);
+
+    await page.locator('.qa-vc-browse').click();
+    await page.locator('.qa-hist-checkpoint', { hasText: 'Edit 2' }).click();
+    await page.locator('.qa-hist-file', { hasText: 'note.md' })
+      .locator('.qa-hist-restore-file').click();
+    await page.locator('.qa-restore-before').click();
+
+    // The checkpoint's own content is "version 2"; its PARENT holds "version 1". Undo takes
+    // the parent, which is the whole point -- the other button would have given version 2.
+    await expect.poll(() => fs.readFileSync(file, 'utf8'), { timeout: 15000 })
+      .toBe('version 1\n');
+    await expect(page.locator('.toast')).toContainText('still in your history');
+  });
+
+  test('undoing cannot be offered on the very first checkpoint', async () => {
+    ({ app, page } = await launchApp());
+    await seedCheckpoints(0);
+
+    await page.locator('.qa-vc-browse').click();
+    // The initial checkpoint is the root commit: there is no "before" to go back to.
+    await page.locator('.qa-hist-checkpoint').last().click();
+    await page.locator('.qa-hist-file', { hasText: 'note.md' })
+      .locator('.qa-hist-restore-file').click();
+    await expect(page.locator('.qa-restore-before')).toBeDisabled();
+    await expect(page.locator('.qa-restore-after')).toBeEnabled();
+  });
+
+  test('the dialog warns that later checkpoints touching the file are undone too', async () => {
+    ({ app, page } = await launchApp());
+    await seedCheckpoints(2);
+
+    await page.locator('.qa-vc-browse').click();
+    // Edit 2 has one checkpoint after it that also changed note.md: Edit 3.
+    await page.locator('.qa-hist-checkpoint', { hasText: 'Edit 2' }).click();
+    await page.locator('.qa-hist-file', { hasText: 'note.md' })
+      .locator('.qa-hist-restore-file').click();
+    await expect(page.locator('.qa-restore-later'))
+      .toContainText('1 later checkpoint', { timeout: 15000 });
+
+    // And the newest checkpoint has nothing after it, so the warning stays away entirely.
+    await page.locator('.qa-restore-file-cancel').click();
+    await page.locator('.qa-hist-crumb-root').click();
+    await page.locator('.qa-hist-checkpoint', { hasText: 'Edit 3' }).click();
+    await page.locator('.qa-hist-file', { hasText: 'note.md' })
+      .locator('.qa-hist-restore-file').click();
+    // The count arrives after the dialog does, and "no warning" is exactly what the dialog
+    // looks like in the meantime -- so settle on the attribute that only exists once it has
+    // been counted, or this assertion passes against a build that never hides the warning.
+    await expect(page.locator('.qa-restore-file-dialog'))
+      .toHaveAttribute('data-later', '0', { timeout: 15000 });
+    await expect(page.locator('.qa-restore-later')).toHaveCount(0);
+  });
+
+  test('undoing a checkpoint that created a file says so, and removes the file', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'note\n');
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    const invented = path.join(dir, 'invented.md');
+    fs.writeFileSync(invented, 'a file the agent invented\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Agent added a file');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Agent added a file');
+
+    await page.locator('.qa-vc-browse').click();
+    await page.locator('.qa-hist-checkpoint', { hasText: 'Agent added a file' }).click();
+    await page.locator('.qa-hist-file', { hasText: 'invented.md' })
+      .locator('.qa-hist-restore-file').click();
+
+    // "Undo" here means the file goes away again. That must be said before it happens.
+    await expect(page.locator('.qa-restore-before-note')).toContainText('removes the file');
+    await page.locator('.qa-restore-before').click();
+
+    await expect.poll(() => fs.existsSync(invented), { timeout: 15000 }).toBe(false);
+    await expect(page.locator('.toast')).toContainText('still in your history');
   });
 
   test('restoring the whole folder removes files added since that point', async () => {
@@ -475,7 +644,7 @@ test.describe('Checkpoint restore', () => {
     await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Agent went wild');
 
     await page.locator('.qa-vc-checkpoint').last().click();
-    await page.locator('.qa-vc-restore-all').click();
+    await page.locator('.qa-hist-restore-all').click();
     await expect(page.locator('.qa-vc-restore-dialog')).toBeVisible();
     await page.locator('.qa-vc-restore-confirm').click();
 
@@ -521,7 +690,7 @@ test.describe('Checkpoint restore', () => {
 
     // Restore the checkpoint that represents the CURRENT state -- the exact reported case.
     await page.locator('.qa-vc-checkpoint').first().click();
-    await page.locator('.qa-vc-restore-all').click();
+    await page.locator('.qa-hist-restore-all').click();
     await expect(page.locator('.qa-vc-restore-dialog')).toBeVisible();
     await page.locator('.qa-vc-restore-confirm').click();
     await expect(page.locator('.qa-vc-restore-dialog')).toHaveCount(0, { timeout: 15000 });
@@ -553,7 +722,7 @@ test.describe('Checkpoint restore', () => {
     const otherMtime = fs.statSync(other).mtimeMs;
 
     await page.locator('.qa-vc-checkpoint').first().click();
-    await page.locator('.qa-vc-restore-all').click();
+    await page.locator('.qa-hist-restore-all').click();
     await page.locator('.qa-vc-restore-confirm').click();
 
     await expect(page.locator('.toast')).toContainText('already', { timeout: 15000 });
@@ -594,15 +763,18 @@ test.describe('Checkpoint restore', () => {
     await editor.type(' plus my own edit');
     await expect(page.locator('.tab-dirty-dot')).toBeVisible();
 
-    // Restore the pre-agent version from the initial checkpoint.
+    // Restore the pre-agent version from the initial checkpoint, via the history tab.
     await page.locator('.qa-vc-tab').click();
     await page.locator('.qa-vc-checkpoint').last().click();
-    await page.locator('.qa-vc-checkpoint-file', { hasText: 'note.md' }).click();
-    await expect(page.locator('.qa-diff-view')).toBeVisible();
+    await page.locator('.qa-hist-file', { hasText: 'note.md' }).locator('.history-file-main').click();
+    await expect(page.locator('.qa-hist-diff')).toBeVisible();
     await page.locator('.qa-diff-restore').click();
+    await page.locator('.qa-restore-after').click();
 
     await expect.poll(() => fs.readFileSync(file, 'utf8'), { timeout: 15000 })
       .toContain('# Original');
+    // The banner belongs to the ACTIVE tab, and browsing history made the history tab active.
+    await page.locator('.tab', { hasText: 'note.md' }).click();
     await expect(page.locator('.conflict-banner')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('.conflict-banner-text')).toContainText('modified on disk');
     // The unsaved edit is still in the buffer, not clobbered.
@@ -779,7 +951,7 @@ test.describe('Checkpoint history tab', () => {
     await expect(page.locator('.qa-hist-checkpoint').first()).toContainText('Second pass');
 
     // Level 2: the files in that checkpoint, with how much each one moved.
-    await page.locator('.qa-hist-checkpoint').first().locator('.qa-hist-open').click();
+    await page.locator('.qa-hist-checkpoint').first().click();
     await expect(page.locator('.qa-hist-detail')).toBeVisible();
     await expect(page.locator('.qa-hist-file')).toHaveCount(1);
     await expect(page.locator('.qa-hist-file')).toContainText('note.md');
@@ -855,14 +1027,270 @@ test.describe('Checkpoint history tab', () => {
     await page.locator('.qa-vc-browse').click();
     // The OLDEST checkpoint is the one holding the original text. It also carries the seeded
     // .gitignore, so restore the one row that matters rather than everything in it.
-    await page.locator('.qa-hist-checkpoint').last().locator('.qa-hist-open').click();
+    await page.locator('.qa-hist-checkpoint').last().click();
     const noteRow = page.locator('.qa-hist-file', { hasText: 'note.md' });
     await expect(noteRow).toHaveCount(1);
     await noteRow.locator('.qa-hist-restore-file').click();
+    await page.locator('.qa-restore-after').click();
 
     await expect.poll(() => fs.readFileSync(file, 'utf8'), { timeout: 15000 })
       .toBe('# Original\n');
     await expect(page.locator('.toast')).toContainText('still in your history');
+  });
+
+  test('a checkpoint clicked in the sidebar opens in the tab instead of expanding in place', async () => {
+    // The sidebar used to render its own, shallower drill-down over the same data. Two views
+    // of one thing is how they ended up wording the same restore differently, so the sidebar
+    // is now purely a glance that routes here.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'first\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    await page.locator('.qa-vc-checkpoint').first().click();
+
+    await expect(page.locator('.tab', { hasText: 'Checkpoint History' })).toBeVisible();
+    await expect(page.locator('.qa-hist-detail')).toBeVisible();
+    await expect(page.locator('.qa-hist-file', { hasText: 'note.md' })).toHaveCount(1);
+    // Nothing expanded in the sidebar: there is no second file list to disagree with this one.
+    await expect(page.locator('.qa-vc-checkpoint-file')).toHaveCount(0);
+  });
+
+  test('Browse zooms back out when the tab is already open on a file diff', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'first\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    // Get two levels deep.
+    await page.locator('.qa-vc-browse').click();
+    await page.locator('.qa-hist-checkpoint').first().click();
+    await page.locator('.qa-hist-file', { hasText: 'note.md' }).locator('.history-file-main').click();
+    await expect(page.locator('.qa-hist-diff')).toBeVisible();
+
+    // Pressing Browse again must mean "show me all the checkpoints", not "focus the tab you
+    // are already looking at" -- which, before the nav request carried a nonce, is what it did.
+    await page.locator('.qa-vc-tab').click();
+    await page.locator('.qa-vc-browse').click();
+
+    await expect(page.locator('.qa-hist-diff')).toHaveCount(0);
+    await expect(page.locator('.qa-hist-checkpoint').first()).toBeVisible();
+    await expect(page.locator('.qa-hist-crumb-root')).toBeDisabled();
+  });
+
+  test('the whole row opens a checkpoint, not just a button on it', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'first\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+    await page.locator('.qa-vc-browse').click();
+
+    // The timestamp line: dead space back when a "See what changed" button was the only target.
+    await page.locator('.qa-hist-checkpoint').first().locator('.text-muted').click();
+    await expect(page.locator('.qa-hist-detail')).toBeVisible();
+    await expect(page.locator('.qa-hist-file', { hasText: 'note.md' })).toHaveCount(1);
+  });
+
+  test("each row counts the files and lines that checkpoint moved", async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'note.md');
+    fs.writeFileSync(file, 'first\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    // Two files at once, so the file count is something other than 1.
+    fs.writeFileSync(file, Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n') + '\n');
+    fs.writeFileSync(path.join(dir, 'second.md'), 'alpha\nbeta\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(2, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Big rewrite');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+
+    await page.locator('.qa-vc-browse').click();
+    const row = page.locator('.qa-hist-checkpoint', { hasText: 'Big rewrite' });
+    const stat = row.locator('.qa-hist-stat');
+
+    // The counts arrive AFTER the list, so wait on an attribute that does not exist until they
+    // do -- reading the text first would read the row as it is while still being measured.
+    await expect(stat).toHaveAttribute('data-files', '2', { timeout: 15000 });
+    const added = Number(await stat.getAttribute('data-added'));
+    const removed = Number(await stat.getAttribute('data-removed'));
+    expect(added).toBeGreaterThan(0);
+    expect(removed).toBeGreaterThan(0);
+
+    // Files in warning yellow, then the same +/- pair the file rows inside a checkpoint use.
+    await expect(stat.locator('.text-warning')).toHaveText('2 files');
+    await expect(stat.locator('.text-success')).toHaveText(`+${added}`);
+    await expect(stat.locator('.text-danger')).toHaveText(`−${removed}`);
+
+    // The row's numbers must be exactly the checkpoint's own file rows, summed.
+    await row.click();
+    await expect(page.locator('.qa-hist-file')).toHaveCount(2);
+    const perFile = await page.locator('.qa-hist-file .qa-hist-counts').allInnerTexts();
+    const sum = (re: RegExp) => perFile.reduce((total, text) => {
+      const match = text.match(re);
+      return total + (match ? Number(match[1]) : 0);
+    }, 0);
+    expect(sum(/\+(\d+)/)).toBe(added);
+    expect(sum(/−(\d+)/)).toBe(removed);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One file's history
+// ---------------------------------------------------------------------------
+
+test.describe("One file's change history", () => {
+  /** Two checkpoints touching note.md, one touching other.md only. */
+  async function seedMixedHistory(dir: string): Promise<void> {
+    fs.writeFileSync(path.join(dir, 'note.md'), 'draft one\n');
+    fs.writeFileSync(path.join(dir, 'other.md'), 'unrelated\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    fs.writeFileSync(path.join(dir, 'note.md'), 'draft two\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Second draft');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+
+    fs.writeFileSync(path.join(dir, 'other.md'), 'unrelated, revised\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Touched something else');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(3);
+  }
+
+  test('right-clicking a file in the explorer lists only the checkpoints that touched it', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    await seedMixedHistory(dir);
+
+    await page.locator('[title="File Explorer"]').click();
+    await page.locator('.tree-file', { hasText: 'note.md' }).click({ button: 'right' });
+    await page.locator('.qa-ctx-file-history').click();
+
+    await expect(page.locator('.qa-hist-view')).toBeVisible();
+    // Three checkpoints exist; only two ever changed note.md.
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2);
+    await expect(page.locator('.qa-hist-checkpoint').first()).toContainText('Second draft');
+    await expect(page.locator('.qa-hist-view')).not.toContainText('Touched something else');
+
+    // The file is named at the top, so a short list never reads as "barely any history".
+    await expect(page.locator('.qa-hist-scope-header')).toContainText('note.md');
+    await expect(page.locator('.qa-hist-scope-header')).toContainText('2 checkpoints');
+    await expect(page.locator('.qa-hist-crumb-scope')).toContainText('Changes to note.md');
+  });
+
+  test('drilling into a checkpoint from a file list still shows everything it changed', async () => {
+    // The scope filters the LIST only. Hiding a checkpoint's other files would make it look
+    // smaller than it was, and "what else moved at the same time" is the next question.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'one\n');
+    fs.writeFileSync(path.join(dir, 'sibling.md'), 'one\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    fs.writeFileSync(path.join(dir, 'note.md'), 'two\n');
+    fs.writeFileSync(path.join(dir, 'sibling.md'), 'two\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(2, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Both at once');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+
+    await page.locator('[title="File Explorer"]').click();
+    await page.locator('.tree-file', { hasText: 'note.md' }).click({ button: 'right' });
+    await page.locator('.qa-ctx-file-history').click();
+    await page.locator('.qa-hist-checkpoint').first().click();
+
+    await expect(page.locator('.qa-hist-file')).toHaveCount(2);
+    await expect(page.locator('.qa-hist-detail')).toContainText('sibling.md');
+    // The scope crumb survives the drill-down, so Back returns to the filtered list.
+    await page.locator('.qa-hist-crumb-scope').click();
+    await expect(page.locator('.qa-hist-scope-header')).toContainText('note.md');
+  });
+
+  test('right-clicking an open tab offers the same history entry as the file explorer', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    await seedMixedHistory(dir);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(dir, 'note.md'));
+    await expect(page.locator('.tiptap')).toBeVisible({ timeout: 5000 });
+
+    await page.locator('.tab', { hasText: 'note.md' }).click({ button: 'right' });
+    await page.locator('.qa-ctx-file-history').click();
+
+    await expect(page.locator('.qa-hist-scope-header')).toContainText('note.md');
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2);
+  });
+
+  test('a deleted file still has a history to look back at', async () => {
+    // isomorphic-git's log THROWS when the file does not exist at the starting ref unless
+    // `force: true` is passed -- and "what happened to this?" is asked about a file precisely
+    // when it has just gone missing. Without force this list is empty for every deleted file.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'gone.md');
+    fs.writeFileSync(file, 'here for now\n');
+    fs.writeFileSync(path.join(dir, 'other.md'), 'unrelated\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    // A middle checkpoint that leaves gone.md alone, so the scoped list (2) can never be
+    // confused with the unscoped one (3) -- including on a half-rendered frame.
+    fs.writeFileSync(path.join(dir, 'other.md'), 'unrelated, revised\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Touched something else');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+
+    fs.unlinkSync(file);
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Deleted the draft');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(3);
+
+    // The file is gone from the explorer, so reach it the way its own tab would: through the
+    // checkpoint that deleted it.
+    await page.locator('.qa-vc-checkpoint').first().click();
+    await page.locator('.qa-hist-file', { hasText: 'gone.md' }).locator('.history-file-main').click();
+    await page.locator('.qa-diff-file-history').click();
+
+    // The checkpoint that created it and the one that deleted it -- and NOT the one in between.
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2);
+    await expect(page.locator('.qa-hist-view')).not.toContainText('Touched something else');
+    await expect(page.locator('.qa-hist-scope-header')).toContainText('gone.md');
+  });
+
+  test('the history menu entry is absent while checkpoints are off', async () => {
+    // Offering it would open a tab that is empty by construction.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'no checkpoints here\n');
+
+    await openProject(dir);
+    await page.locator('[title="File Explorer"]').click();
+    await page.locator('.tree-file', { hasText: 'note.md' }).click({ button: 'right' });
+
+    await expect(page.locator('.ctx-menu')).toBeVisible();
+    await expect(page.locator('.qa-ctx-file-history')).toHaveCount(0);
+    // The rest of the menu is unaffected.
+    await expect(page.locator('.ctx-menu')).toContainText('Rename');
   });
 });
 
