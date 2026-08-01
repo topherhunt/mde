@@ -18,7 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import git from 'isomorphic-git';
 import { createCheckpoint } from './checkpoint';
-import { readFileAt } from './history';
+import { readBlobAt } from './history';
 import { VcRestoreResult } from '../types';
 
 export type RestoreResult = VcRestoreResult;
@@ -40,9 +40,26 @@ async function treeFiles(root: string, sha: string): Promise<Set<string>> {
   return out;
 }
 
-function writeFileEnsuringDir(target: string, content: string): void {
+/**
+ * Write bytes verbatim, and DON'T WRITE AT ALL if the file already holds exactly these bytes.
+ *
+ * The skip is not an optimization, it is correctness at the UI level. A whole-folder restore
+ * walks the entire tree, so without it every untouched file gets rewritten with identical
+ * content -- new mtime, watcher event, and (before the byte fix above) a corrupted binary.
+ * Restoring the checkpoint that matches the current state reported "Restored 3 files" when the
+ * honest answer was "nothing needed restoring".
+ *
+ * Returns true only when something actually changed on disk.
+ */
+function writeIfDifferent(target: string, content: Buffer): boolean {
+  try {
+    if (fs.readFileSync(target).equals(content)) return false;
+  } catch {
+    // Missing or unreadable: fall through and write it.
+  }
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, content, 'utf8');
+  fs.writeFileSync(target, content);
+  return true;
 }
 
 /** Remove now-empty directories left behind by deletions, stopping at the repo root. */
@@ -74,7 +91,7 @@ export async function restoreFile(
     message: 'Before restoring ' + filepath,
   });
 
-  const content = await readFileAt(root, sha, filepath);
+  const content = await readBlobAt(root, sha, filepath);
   const target = path.join(root, filepath);
   let written = 0;
   let deleted = 0;
@@ -87,8 +104,7 @@ export async function restoreFile(
     } catch {
       // Already absent: the working tree already matches the checkpoint.
     }
-  } else {
-    writeFileEnsuringDir(target, content);
+  } else if (writeIfDifferent(target, content)) {
     written = 1;
   }
 
@@ -141,10 +157,9 @@ export async function restoreAll(root: string, sha: string): Promise<RestoreResu
 
   let written = 0;
   for (const filepath of target) {
-    const content = await readFileAt(root, sha, filepath);
+    const content = await readBlobAt(root, sha, filepath);
     if (content === null) continue;
-    writeFileEnsuringDir(path.join(root, filepath), content);
-    written++;
+    if (writeIfDifferent(path.join(root, filepath), content)) written++;
   }
 
   let deleted = 0;

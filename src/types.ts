@@ -31,6 +31,12 @@ export interface Tab {
   tentative: boolean;
   readOnly?: boolean;
   initialContent?: string;
+  // A tab that renders something other than the editor. Deliberately a TAB rather than an
+  // app-wide mode: the main area's contract is "show the active tab", and a mode that hid the
+  // editor would have to either unmount live buffers (losing unsaved work and undo history) or
+  // keep a hidden editor receiving keystrokes. Everything else -- Cmd+W, Cmd+S, the conflict
+  // banner, drag-drop -- already has a correct answer for a read-only tab.
+  view?: 'history';
 }
 
 export type SidebarMode = 'explorer' | 'outline' | 'versions';
@@ -70,7 +76,12 @@ export interface VcStatus {
 
 export interface VcCheckpoint {
   sha: string;
+  // What to display. The user's edited title when there is one, else the generated subject.
   subject: string;
+  // The auto-generated subject, always. Kept so "use the automatic title again" can restore it
+  // without re-deriving it, and so the pencil never hides what MDE originally recorded.
+  generatedSubject: string;
+  titleEdited?: boolean;
   timestamp: number; // ms since epoch
   kind: 'auto' | 'manual' | 'restore';
   // Present when kind === 'restore': the checkpoint whose content was restored.
@@ -201,7 +212,14 @@ export interface MdeAPI {
   vcAdopt: (root: string) => Promise<{ ok: boolean; error?: string }>;
   vcCheckpoint: (root: string, message?: string) => Promise<VcCheckpointResult>;
   vcHistory: (root: string, opts?: { limit?: number; before?: string }) => Promise<VcCheckpoint[]>;
-  vcCheckpointFiles: (root: string, sha: string) => Promise<VcChangedFile[]>;
+  vcCheckpointFiles: (
+    root: string,
+    sha: string,
+    opts?: { counts?: boolean }
+  ) => Promise<VcChangedFile[]>;
+  // Stores a display title in a sidecar inside .git. Deliberately NOT a commit rewrite --
+  // see the header of src/git/titles.ts. Pass '' to go back to the generated title.
+  vcSetTitle: (root: string, sha: string, title: string) => Promise<{ ok: boolean; error?: string }>;
   vcDiff: (root: string, filePath: string, sha?: string) => Promise<VcDiff>;
   vcRestoreFile: (root: string, sha: string, filePath: string) => Promise<VcRestoreResult>;
   vcRestoreAll: (root: string, sha: string) => Promise<VcRestoreResult>;

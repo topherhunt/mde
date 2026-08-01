@@ -19,9 +19,10 @@ interface SidebarProps {
   onToast: (msg: string, variant?: string) => void;
   onDeleteFile: (filePath: string) => void;
   onFileRenamed?: (oldPath: string, newPath: string) => void;
+  onOpenHistory: () => void;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed, onOpenHistory }: SidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const resizing = useRef(false);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -116,7 +117,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, 
       </div>
       <div className="sidebar-content">
         {mode === 'versions' ? (
-          <VersionPanel projectRoot={projectRoot} vc={vc} onToast={onToast} />
+          <VersionPanel projectRoot={projectRoot} vc={vc} onToast={onToast} onOpenHistory={onOpenHistory} />
         ) : mode === 'explorer' ? (
           <FileExplorer
             projectRoot={projectRoot}

@@ -387,7 +387,7 @@ The Keyboard Shortcuts help page opens as a read-only tab. Content loaded from `
 
 Full design rationale lives in `CHECKPOINTS.md`, which is both the proposal and the as-built record. This section covers only what will bite someone changing the code.
 
-Code: `src/git/` (`repo`, `status`, `checkpoint`, `checkpointer`, `history`, `restore`, `guards`, `ignore`), `src/components/VersionPanel.tsx`, `src/components/DiffView.tsx`, `src/utils/prosediff.ts`. Everything Git-touching runs in the MAIN process; the renderer never sees a repo object. Library is **isomorphic-git** (pure JS, no native deps, bundles normally) plus **jsdiff**.
+Code: `src/git/` (`repo`, `status`, `checkpoint`, `checkpointer`, `history`, `restore`, `guards`, `ignore`, `titles`), `src/components/VersionPanel.tsx`, `src/components/HistoryView.tsx`, `src/components/DiffView.tsx`, `src/components/vcRestore.ts`, `src/utils/prosediff.ts`. Everything Git-touching runs in the MAIN process; the renderer never sees a repo object. Library is **isomorphic-git** (pure JS, no native deps, bundles normally) plus **jsdiff**.
 
 ### The word "Git" appears in the UI never
 
@@ -436,6 +436,33 @@ Two halves, both required:
 
 Do NOT "fix" this by deleting `.git/index` between checkpoints. `git.commit` builds its tree FROM the index, so the index must stay COMPLETE even though it is never left dirty -- each checkpoint adds only the changed files on top of what is already there. "Transient" means no uncommitted content, not empty.
 
+### Restore moves BYTES, and only the bytes that differ
+
+A restore corrupted a user's PDF, and the mechanism is worth remembering because it looks like nothing at the call site. `readFileAt` decoded a git blob into a JS string and `writeFileEnsuringDir` wrote it back with `'utf8'`. Every byte sequence that is not valid UTF-8 becomes U+FFFD on the way in, and U+FFFD serialises to `EF BF BD` on the way out. Markdown survives this untouched, so it passed every test and every manual check; a PDF, an image, or a `.docx` is destroyed silently and permanently.
+
+Two rules now hold the line:
+
+- **`readBlobAt` returns a `Buffer` and restore writes that Buffer.** `readFileAt` (the string form) still exists for the diff viewer, which genuinely needs text. Nothing that writes to disk may go through it.
+- **`writeIfDifferent` byte-compares before writing.** Whole-folder restore used to rewrite every file in the tree unconditionally, which turned one damaged file into a folder-wide rewrite and disturbed the mtime of files nobody had touched. Now an identical file is left completely alone -- which is also what makes "restore everything" honest when the target is already the current state (`filesWritten === 0` -> "nothing needed restoring" rather than a fabricated "restored 3 files").
+
+Both have repro tests that were confirmed failing first.
+
+### Titles are a sidecar, never a commit rewrite
+
+The pencil on a checkpoint stores a display title in **`.git/mde-titles.json`**, keyed by sha, written temp-then-rename. It never touches the commit.
+
+Rewriting the stored message would mean writing a new commit object for that checkpoint and for every descendant, then moving the branch ref. isomorphic-git has no rebase, so all of that would be hand-rolled -- and it would change the shas that existing `MDE-Restore:` trailers name, turning every restore entry in the list into a dangling reference. It also punctures the append-only rule the rest of the feature leans on. File CONTENT could never be harmed either way (blobs and trees are content-addressed and immutable), so this is a referential-integrity and implementation-risk argument, not a corruption one -- but a cosmetic label does not justify any of it.
+
+`.git/` is the right home for the same reasons as the managed marker: never in the working tree, never in a diff, never one more change to think about, and it travels with the folder. Losing the sidecar degrades to the generated title, which is the correct failure mode for a field whose only job is recognition. `readTitles` therefore never throws -- a missing or malformed file just means "no custom titles". `toCheckpoint` applies it, so every history read gets it without each caller remembering to look.
+
+### History is a tab, not a mode
+
+`Tab.view === 'history'` renders `HistoryView` in the main area instead of an `Editor`. Deliberately a tab: an app-wide mode that hid the editor would have to either unmount live buffers (losing unsaved work and undo history) or keep a hidden editor receiving keystrokes and watcher events. As a tab, Cmd+W, Cmd+S, the conflict banner, and drag-drop all already have correct answers, and inactive panes are `display: none` rather than unmounted -- there is a test asserting an unsaved edit survives a trip through history.
+
+The sidebar panel stays the glance ("what has moved, save one now"); the tab is where browsing, per-file line counts, full-width diffs, retitling, and restore happen. Both go through `src/components/vcRestore.ts` so they can never phrase an outcome differently -- which matters, because "Restored 3 files" on an operation that changed nothing was a real reported bug.
+
+Line counts in the detail view are opt-in (`checkpointFiles(root, sha, { counts: true })`) and doubly capped -- 200 files, 2 MB per side -- because counting costs two blob reads plus a diff per file. Unmeasured files render **nothing**, never `+0 −0`: a zero would read as "this file did not really change", which is a lie.
+
 ### Other traps
 
 - **isomorphic-git has no `add -A`.** You must walk the status yourself and call `remove` for deletions and `add` for everything else. Forgetting the `remove` half silently drops deletions from checkpoints.
@@ -446,9 +473,9 @@ Do NOT "fix" this by deleting `.git/index` between checkpoints. `git.commit` bui
 
 ### Testing
 
-`tests/version-control.spec.ts`, 27 tests. Tab selector is `.qa-vc-tab`; the rest are `qa-vc-*` / `qa-diff-*`.
+`tests/version-control.spec.ts`. Tab selector is `.qa-vc-tab`; the rest are `qa-vc-*` (sidebar), `qa-hist-*` (history tab), `qa-diff-*` (diff viewer).
 
-Two of those tests assert that NOTHING happened (no mid-burst commit, no missing change row), and a "nothing happened" test is worthless until it has been seen to fail. Both were verified by mutation: reverting the mtime/size half of `statusSignature` makes the mid-burst test commit six times during the burst, and disabling `deraceIndex` makes the same-second test report zero changes. Re-verify the same way if you touch either mechanism.
+Three of those tests assert that NOTHING happened (no mid-burst commit, no missing change row, no history rewrite on a retitle), and a "nothing happened" test is worthless until it has been seen to fail. All three were verified by mutation: reverting the mtime/size half of `statusSignature` makes the mid-burst test commit six times during the burst, disabling `deraceIndex` makes the same-second test report zero changes, and making the `vc-set-title` handler also create a checkpoint turns the retitle test's sha assertion red. Re-verify the same way if you touch any of them.
 
 `makeTmpDir` calls `fs.realpathSync`. macOS hands out `/var/folders/...`, a symlink to `/private/var/...`, and isomorphic-git resolves it -- without the realpath the renderer's `projectRoot` and the main process's repo root are two different strings and every event is silently dropped.
 
@@ -498,4 +525,4 @@ What exists today, for orientation. This list goes stale faster than the notes a
 - Code folding: Cmd+. on a list item with children, or on a heading, toggles fold. A folded heading hides everything down to the next heading of the same or larger rank. When folded, the content is hidden, a blue "..." badge appears after the text, and (for list items) a blue chevron caret appears to the left of the bullet/checkbox. Fold state persists across file close/reopen and external file changes, and survives reordering (Cmd+Alt+Up/Down) and splitting (Enter) the surrounding items. Clicking the caret or badge unfolds, as does any edit that would put the cursor inside the hidden content. Hovering an unfolded foldable node shows a dim gray caret that folds just that node on click.
 - Task list editing: Enter carries checked-ness with the text. Only a click inside the checkbox itself toggles it. Backspace on an empty middle item deletes that item and moves the cursor to the end of the item above. Copying text inside a list item gives plain text with no `- ` / `[ ] ` marker.
 - Sidebar defaults to the outline tab when a file is opened with no project folder set (the explorer would be empty, so the outline is more useful).
-- Checkpoints: a third sidebar tab (`bi-clock-history`) giving a folder an undo history for AI-driven edits, backed by Git and never described as Git. Off until the user opts in -- the tab is dimmed, and turning it on runs guardrails (refuses inside a parent repo, warns about nested repos and big folders), seeds `.gitignore`, and makes an initial checkpoint. A `?` in the panel header toggles a how-it-works recap that also auto-opens once after setup. **Changes** lists everything that has moved since the last checkpoint (yours or an agent's), with the count on the tab badge; **History** lists checkpoints, expandable to their file lists. Checkpoints happen automatically (10-minute cadence, only after things go quiet) or on demand with an optional message. Clicking any file opens a word-level prose diff in a modal -- added words green, removed words red, long unchanged stretches collapsed -- with **Put this version back** in the footer. Restore works per-file or for the whole folder, always append-only: the current state is checkpointed first and restoring adds a new checkpoint on top, so nothing is ever lost. Repos MDE did not create are read-only history browsing plus an explicit adopt button.
+- Checkpoints: a third sidebar tab (`bi-clock-history`) giving a folder an undo history for AI-driven edits, backed by Git and never described as Git. Off until the user opts in -- the tab is dimmed, and turning it on runs guardrails (refuses inside a parent repo, warns about nested repos and big folders), seeds `.gitignore`, and makes an initial checkpoint. A `?` in the panel header toggles a how-it-works recap that also auto-opens once after setup. **Changes** lists everything that has moved since the last checkpoint (yours or an agent's), with the count on the tab badge; **History** lists checkpoints, expandable to their file lists. Checkpoints happen automatically (10-minute cadence, only after things go quiet) or on demand with an optional message. Clicking any file opens a word-level prose diff in a modal -- added words green, removed words red, long unchanged stretches collapsed -- with **Put this version back** in the footer. **Browse all checkpoints** opens the full history in a read-only tab: checkpoint list -> that checkpoint's files (with per-file `+n −n` line counts) -> a full-width diff, with breadcrumbs back up, and a pencil on any checkpoint to give it a clearer description. Restore works per-file or for the whole folder, always append-only: the current state is checkpointed first and restoring adds a new checkpoint on top, so nothing is ever lost. Restoring to a state the folder already matches says so instead of claiming work it did not do. Repos MDE did not create are read-only history browsing plus an explicit adopt button.

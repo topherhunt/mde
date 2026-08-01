@@ -13,6 +13,10 @@ interface DiffViewProps {
   // Absent when the folder is read-only, which removes the restore button entirely.
   onRestore?: (filePath: string) => void;
   restoreLabel?: string;
+  // 'modal' floats over the sidebar; 'inline' fills the page it is rendered into (the history
+  // tab), where the surrounding breadcrumb owns navigation so there is no backdrop and no
+  // Escape handler to fight with.
+  variant?: 'modal' | 'inline';
 }
 
 export default function DiffView({
@@ -23,10 +27,12 @@ export default function DiffView({
   onClose,
   onRestore,
   restoreLabel,
+  variant = 'modal',
 }: DiffViewProps) {
   const [diff, setDiff] = useState<VcDiff | null>(null);
   const [built, setBuilt] = useState<BuiltDiff | null>(null);
   const [loading, setLoading] = useState(true);
+  const inline = variant === 'inline';
 
   useEffect(() => {
     let cancelled = false;
@@ -41,88 +47,97 @@ export default function DiffView({
   }, [projectRoot, filePath, sha]);
 
   useEffect(() => {
+    if (inline) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); onClose(); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, inline]);
 
-  return (
-    <div className="modal-backdrop qa-diff-view" onMouseDown={onClose}>
-      <div className="diff-modal" onMouseDown={e => e.stopPropagation()}>
-        <div className="diff-header">
-          <div className="diff-header-text">
-            <div className="diff-title qa-diff-path">{filePath}</div>
-            {subtitle && <div className="small text-muted">{subtitle}</div>}
-          </div>
-          <div className="d-flex gap-2 align-items-center">
-            {onRestore && (
-              <button className="btn btn-primary btn-sm qa-diff-restore" onClick={() => onRestore(filePath)}>
-                {restoreLabel || 'Restore this version'}
-              </button>
-            )}
+  const content = (
+    <div className={inline ? 'diff-inline qa-hist-diff' : 'diff-modal'} onMouseDown={e => e.stopPropagation()}>
+      <div className="diff-header">
+        <div className="diff-header-text">
+          <div className="diff-title qa-diff-path">{filePath}</div>
+          {subtitle && <div className="small text-muted">{subtitle}</div>}
+        </div>
+        <div className="d-flex gap-2 align-items-center">
+          {onRestore && (
+            <button className="btn btn-primary btn-sm qa-diff-restore" onClick={() => onRestore(filePath)}>
+              {restoreLabel || 'Restore this version'}
+            </button>
+          )}
+          {!inline && (
             <button className="btn-plain" onClick={onClose} aria-label="Close">
               <i className="bi bi-x-lg" />
             </button>
-          </div>
+          )}
         </div>
+      </div>
 
-        <div className="diff-body">
-          {loading && <div className="diff-empty text-muted">Loading...</div>}
+      <div className="diff-body">
+        {loading && <div className="diff-empty text-muted">Loading...</div>}
 
-          {!loading && diff?.binary && (
-            <div className="diff-empty text-muted qa-diff-binary">
-              This is not a text file, so there is nothing to compare.
-            </div>
-          )}
+        {!loading && diff?.binary && (
+          <div className="diff-empty text-muted qa-diff-binary">
+            This is not a text file, so there is nothing to compare.
+          </div>
+        )}
 
-          {!loading && !diff?.binary && built?.identical && (
-            <div className="diff-empty text-muted qa-diff-identical">
-              No changes in this file.
-            </div>
-          )}
+        {!loading && !diff?.binary && built?.identical && (
+          <div className="diff-empty text-muted qa-diff-identical">
+            No changes in this file.
+          </div>
+        )}
 
-          {!loading && !diff?.binary && built && !built.identical && (
-            <div className="diff-rows">
-              {built.rows.map((row, i) => {
-                if (row.type === 'gap') {
-                  return (
-                    <div key={i} className="diff-row diff-gap">
-                      <span className="diff-gutter" />
-                      <span className="diff-text">
-                        {row.hiddenCount} unchanged {row.hiddenCount === 1 ? 'line' : 'lines'}
-                      </span>
-                    </div>
-                  );
-                }
-                const mark = row.type === 'added' ? '+' : row.type === 'removed' ? '−' : '';
+        {!loading && !diff?.binary && built && !built.identical && (
+          <div className="diff-rows">
+            {built.rows.map((row, i) => {
+              if (row.type === 'gap') {
                 return (
-                  <div key={i} className={`diff-row diff-${row.type}`}>
-                    <span className="diff-gutter">{mark}</span>
+                  <div key={i} className="diff-row diff-gap">
+                    <span className="diff-gutter" />
                     <span className="diff-text">
-                      {row.segments.map((seg, j) =>
-                        seg.changed ? (
-                          <mark key={j} className="diff-word">{seg.text}</mark>
-                        ) : (
-                          <span key={j}>{seg.text}</span>
-                        )
-                      )}
+                      {row.hiddenCount} unchanged {row.hiddenCount === 1 ? 'line' : 'lines'}
                     </span>
                   </div>
                 );
-              })}
-            </div>
-          )}
-        </div>
-
-        {built && !built.identical && (
-          <div className="diff-footer small text-muted qa-diff-summary">
-            {built.added} {built.added === 1 ? 'line' : 'lines'} added,{' '}
-            {built.removed} {built.removed === 1 ? 'line' : 'lines'} removed
+              }
+              const mark = row.type === 'added' ? '+' : row.type === 'removed' ? '−' : '';
+              return (
+                <div key={i} className={`diff-row diff-${row.type}`}>
+                  <span className="diff-gutter">{mark}</span>
+                  <span className="diff-text">
+                    {row.segments.map((seg, j) =>
+                      seg.changed ? (
+                        <mark key={j} className="diff-word">{seg.text}</mark>
+                      ) : (
+                        <span key={j}>{seg.text}</span>
+                      )
+                    )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
+
+      {built && !built.identical && (
+        <div className="diff-footer small text-muted qa-diff-summary">
+          {built.added} {built.added === 1 ? 'line' : 'lines'} added,{' '}
+          {built.removed} {built.removed === 1 ? 'line' : 'lines'} removed
+        </div>
+      )}
+    </div>
+  );
+
+  if (inline) return content;
+
+  return (
+    <div className="modal-backdrop qa-diff-view" onMouseDown={onClose}>
+      {content}
     </div>
   );
 }

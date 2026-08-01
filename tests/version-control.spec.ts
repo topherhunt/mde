@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { buildDiff } from '../src/utils/prosediff';
+import { describeChanges } from '../src/git/checkpoint';
 
 let app: ElectronApplication;
 let page: Page;
@@ -486,6 +487,82 @@ test.describe('Checkpoint restore', () => {
     await expect(page.locator('.qa-vc-history')).toContainText('Agent went wild');
   });
 
+  test('restoring never corrupts a binary file it did not change', async () => {
+    // A real corruption bug, reported from live use: edit one line of a Markdown file, make a
+    // checkpoint, restore that checkpoint, and a PDF sitting untouched in the same folder
+    // came back blank. Restore read every blob as a utf8 STRING and wrote it back as one, so
+    // every byte that is not valid UTF-8 became U+FFFD. Markdown survives that round trip;
+    // nothing else does.
+    //
+    // The bytes below are deliberately not valid UTF-8 (lone continuation bytes, a NUL, an
+    // 0xFF that can never appear in UTF-8) -- exactly what a real PDF is full of.
+    const binary = Buffer.from([
+      0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a,
+      0xff, 0xfe, 0x00, 0x80, 0x81, 0x9f, 0xc3, 0x28, 0xed, 0xa0, 0x80,
+      0x0a, 0x25, 0x25, 0x45, 0x4f, 0x46, 0x0a,
+    ]);
+
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const pdf = path.join(dir, 'report.pdf');
+    const note = path.join(dir, 'DETAILS.md');
+    fs.writeFileSync(pdf, binary);
+    fs.writeFileSync(note, '# Details\n\nline one\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    // One line of Markdown changes. The PDF is not touched.
+    fs.writeFileSync(note, '# Details\n\nline one changed\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Update DETAILS.md');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Update DETAILS.md');
+
+    // Restore the checkpoint that represents the CURRENT state -- the exact reported case.
+    await page.locator('.qa-vc-checkpoint').first().click();
+    await page.locator('.qa-vc-restore-all').click();
+    await expect(page.locator('.qa-vc-restore-dialog')).toBeVisible();
+    await page.locator('.qa-vc-restore-confirm').click();
+    await expect(page.locator('.qa-vc-restore-dialog')).toHaveCount(0, { timeout: 15000 });
+
+    // Byte-for-byte identical. A utf8 round trip would have replaced 6 of these 27 bytes.
+    expect(fs.readFileSync(pdf).equals(binary)).toBe(true);
+  });
+
+  test('restoring the checkpoint that is already current leaves everything alone', async () => {
+    // The "Restore everything" button on the newest checkpoint used to rewrite every file in
+    // the tree with identical content, which is how an untouched PDF ended up in a diff. It
+    // must be a no-op, and must say so rather than reporting a restore that did nothing.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const note = path.join(dir, 'note.md');
+    const other = path.join(dir, 'other.md');
+    fs.writeFileSync(note, 'first\n');
+    fs.writeFileSync(other, 'untouched\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    fs.writeFileSync(note, 'second\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Second pass');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+
+    const otherMtime = fs.statSync(other).mtimeMs;
+
+    await page.locator('.qa-vc-checkpoint').first().click();
+    await page.locator('.qa-vc-restore-all').click();
+    await page.locator('.qa-vc-restore-confirm').click();
+
+    await expect(page.locator('.toast')).toContainText('already', { timeout: 15000 });
+    // No new checkpoint, no rewritten files, no disturbed mtimes.
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    expect(fs.readFileSync(note, 'utf8')).toBe('second\n');
+    expect(fs.statSync(other).mtimeMs).toBe(otherMtime);
+  });
+
   test('restoring over a file with unsaved edits raises the conflict banner', async () => {
     // Restore deliberately bypasses write-file-if-unchanged (that guard is for renderer
     // buffers) and writes straight to disk. The payoff is that the existing conflict
@@ -627,6 +704,231 @@ test.describe('Automatic checkpoints', () => {
 // ---------------------------------------------------------------------------
 // Prose diff engine (pure function, no app needed)
 // ---------------------------------------------------------------------------
+
+test.describe('Checkpoint titles', () => {
+  // A generated title has one job: let someone scanning History recognise which moment this
+  // was. "6 files changed" fails that completely, so every title names files.
+  const f = (path: string, kind: 'added' | 'modified' | 'deleted') => ({ path, kind } as const);
+
+  test('names the files instead of only counting them', () => {
+    expect(describeChanges([f('note.md', 'modified')])).toBe('Updated note.md');
+    expect(describeChanges([f('a.md', 'modified'), f('b.md', 'modified')]))
+      .toBe('Updated a.md and b.md');
+    expect(describeChanges([
+      f('a.md', 'modified'), f('b.md', 'modified'), f('c.md', 'modified'),
+    ])).toBe('Updated a.md, b.md and 1 more');
+  });
+
+  test('leads with the largest group and sweeps the rest into the count', () => {
+    // Four edits and two new files: it reads as an editing session, not "6 files changed".
+    const files = [
+      f('ch1.md', 'modified'), f('ch2.md', 'modified'),
+      f('ch3.md', 'modified'), f('ch4.md', 'modified'),
+      f('new1.md', 'added'), f('new2.md', 'added'),
+    ];
+    expect(describeChanges(files)).toBe('Updated ch1.md, ch2.md and 4 more');
+
+    // Flip the balance and the verb follows it.
+    const mostlyNew = [
+      f('new1.md', 'added'), f('new2.md', 'added'), f('new3.md', 'added'),
+      f('ch1.md', 'modified'),
+    ];
+    expect(describeChanges(mostlyNew)).toBe('Added new1.md, new2.md and 2 more');
+
+    expect(describeChanges([f('old.md', 'deleted'), f('gone.md', 'deleted')]))
+      .toBe('Deleted old.md and gone.md');
+  });
+
+  test('never claims a change when there is none', () => {
+    expect(describeChanges([])).toBe('No changes');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The full-page history tab
+// ---------------------------------------------------------------------------
+
+/** The sha the branch currently points at, read straight off disk. */
+function headSha(dir: string): string {
+  const head = fs.readFileSync(path.join(dir, '.git', 'HEAD'), 'utf8').trim();
+  const ref = head.replace(/^ref:\s*/, '');
+  return fs.readFileSync(path.join(dir, '.git', ref), 'utf8').trim();
+}
+
+test.describe('Checkpoint history tab', () => {
+  test('opens as an ordinary tab and drills list -> checkpoint -> file diff and back', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'note.md');
+    fs.writeFileSync(file, 'one\ntwo\nthree\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    fs.writeFileSync(file, 'one\ntwo CHANGED\nthree\nfour\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Second pass');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+
+    await page.locator('.qa-vc-browse').click();
+    // It really is a tab, sitting alongside any documents -- not a mode that replaced the app.
+    await expect(page.locator('.tab', { hasText: 'Checkpoint History' })).toBeVisible();
+    await expect(page.locator('.qa-hist-view')).toBeVisible();
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2);
+    await expect(page.locator('.qa-hist-checkpoint').first()).toContainText('Second pass');
+
+    // Level 2: the files in that checkpoint, with how much each one moved.
+    await page.locator('.qa-hist-checkpoint').first().locator('.qa-hist-open').click();
+    await expect(page.locator('.qa-hist-detail')).toBeVisible();
+    await expect(page.locator('.qa-hist-file')).toHaveCount(1);
+    await expect(page.locator('.qa-hist-file')).toContainText('note.md');
+    // 'two' -> 'two CHANGED' plus an appended 'four': two added lines, one removed.
+    const counts = page.locator('.qa-hist-counts');
+    await expect(counts).toContainText('+2');
+    await expect(counts).toContainText('−1');
+
+    // Level 3: the prose diff, inline in the page rather than floating over the sidebar.
+    await page.locator('.qa-hist-file').locator('.history-file-main').click();
+    await expect(page.locator('.qa-hist-diff')).toBeVisible();
+    await expect(page.locator('.qa-diff-path')).toContainText('note.md');
+    await expect(page.locator('.qa-hist-crumb-file')).toContainText('note.md');
+
+    // And the breadcrumb walks back up both levels.
+    await page.locator('.qa-hist-crumb-checkpoint').click();
+    await expect(page.locator('.qa-hist-detail')).toBeVisible();
+    await page.locator('.qa-hist-crumb-root').click();
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2);
+  });
+
+  test('browsing history leaves an open document and its unsaved edits alone', async () => {
+    // This is the whole reason history is a TAB and not an app-wide mode: a mode would have to
+    // unmount the editor (losing the buffer and its undo history) or keep a hidden one alive.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'note.md');
+    fs.writeFileSync(file, '# Note\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, file);
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+    await editor.click();
+    await editor.press('End');
+    await editor.type(' with an unsaved thought');
+    await expect(page.locator('.tab-dirty-dot')).toBeVisible();
+
+    await page.locator('.qa-vc-tab').click();
+    await page.locator('.qa-vc-browse').click();
+    await expect(page.locator('.qa-hist-view')).toBeVisible();
+    // Hidden, NOT unmounted -- that distinction is the whole benefit of a tab over a mode.
+    await expect(editor).toBeHidden();
+    await expect(editor).toHaveCount(1);
+
+    // Back to the document: the buffer, the edit and the dirty flag all survived.
+    await page.locator('.tab', { hasText: 'note.md' }).click();
+    await expect(page.locator('.tiptap')).toContainText('with an unsaved thought');
+    await expect(page.locator('.tab-dirty-dot')).toBeVisible();
+    // Nothing was written to disk behind the user's back.
+    expect(fs.readFileSync(file, 'utf8')).toBe('# Note\n');
+  });
+
+  test('restores a single file from the history tab', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'note.md');
+    fs.writeFileSync(file, '# Original\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    fs.writeFileSync(file, '# Rewritten by an agent\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+    await page.locator('.qa-vc-message').fill('Agent rewrite');
+    await page.locator('.qa-vc-save').click();
+    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+
+    await page.locator('.qa-vc-browse').click();
+    // The OLDEST checkpoint is the one holding the original text. It also carries the seeded
+    // .gitignore, so restore the one row that matters rather than everything in it.
+    await page.locator('.qa-hist-checkpoint').last().locator('.qa-hist-open').click();
+    const noteRow = page.locator('.qa-hist-file', { hasText: 'note.md' });
+    await expect(noteRow).toHaveCount(1);
+    await noteRow.locator('.qa-hist-restore-file').click();
+
+    await expect.poll(() => fs.readFileSync(file, 'utf8'), { timeout: 15000 })
+      .toBe('# Original\n');
+    await expect(page.locator('.toast')).toContainText('still in your history');
+  });
+});
+
+test.describe('Editing a checkpoint description', () => {
+  test('the pencil renames a checkpoint without touching history', async () => {
+    // A title is a label, not a fact about the files, so it is stored BESIDE the history in
+    // .git/mde-titles.json. Rewriting the commit would change its sha and every descendant's,
+    // stranding the MDE-Restore trailers that name them. The sha assertion is the point of
+    // this test: history must be byte-identical after a rename.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'start\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    const shaBefore = headSha(dir);
+
+    await page.locator('.qa-vc-browse').click();
+    const row = page.locator('.qa-hist-checkpoint').first();
+    await expect(row).toContainText('Started tracking changes');
+
+    await row.locator('.qa-hist-title-edit').click();
+    await page.locator('.qa-hist-title-input').fill('Before Claude touched anything');
+    await page.locator('.qa-hist-title-save').click();
+
+    await expect(page.locator('.qa-hist-checkpoint').first())
+      .toContainText('Before Claude touched anything');
+
+    // History is untouched; the label lives in a sidecar. Both halves of this were
+    // mutation-verified: making the handler also commit turns each of them red.
+    expect(headSha(dir)).toBe(shaBefore);
+    const titles = JSON.parse(fs.readFileSync(path.join(dir, '.git', 'mde-titles.json'), 'utf8'));
+    expect(titles[shaBefore]).toBe('Before Claude touched anything');
+
+    // And the sidebar list agrees -- one name for one moment, wherever it is shown.
+    await page.locator('.qa-vc-tab').click();
+    await expect(page.locator('.qa-vc-checkpoint').first())
+      .toContainText('Before Claude touched anything');
+  });
+
+  test('the automatic description can be put back', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'start\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    await page.locator('.qa-vc-browse').click();
+    const row = page.locator('.qa-hist-checkpoint').first();
+    await row.locator('.qa-hist-title-edit').click();
+    await page.locator('.qa-hist-title-input').fill('A name I regret');
+    await page.locator('.qa-hist-title-save').click();
+    await expect(page.locator('.qa-hist-checkpoint').first()).toContainText('A name I regret');
+
+    // The reset button only exists once a custom title is in play.
+    await page.locator('.qa-hist-checkpoint').first().locator('.qa-hist-title-edit').click();
+    await page.locator('.qa-hist-title-reset').click();
+
+    await expect(page.locator('.qa-hist-checkpoint').first())
+      .toContainText('Started tracking changes');
+    const titles = JSON.parse(fs.readFileSync(path.join(dir, '.git', 'mde-titles.json'), 'utf8'));
+    expect(Object.keys(titles)).toHaveLength(0);
+  });
+});
 
 test.describe('Prose diff', () => {
   test('marks only the words that changed inside a rewritten paragraph', () => {

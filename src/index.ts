@@ -8,6 +8,7 @@ import { preflight, seedIgnoreFile } from './git/guards';
 import { createCheckpoint } from './git/checkpoint';
 import { listCheckpoints, checkpointFiles, diffFile } from './git/history';
 import { restoreFile, restoreAll } from './git/restore';
+import { setTitle } from './git/titles';
 import {
   configureCheckpointer,
   initCheckpointer,
@@ -1221,11 +1222,25 @@ ipcMain.handle('vc-history', async (_event, root: string, opts?: { limit?: numbe
   return listCheckpoints(root, opts || {});
 });
 
-ipcMain.handle('vc-checkpoint-files', async (_event, root: string, sha: string) => {
+ipcMain.handle('vc-checkpoint-files', async (_event, root: string, sha: string, opts?: { counts?: boolean }) => {
   try {
-    return await checkpointFiles(root, sha);
+    return await checkpointFiles(root, sha, opts || {});
   } catch {
     return [];
+  }
+});
+
+// Writes a display title into .git/mde-titles.json. Managed-only, like every other write:
+// a folder MDE is merely browsing gets nothing written into it, not even a cosmetic sidecar.
+// No checkpoint is created and no commit is touched -- see src/git/titles.ts for why.
+ipcMain.handle('vc-set-title', async (_event, root: string, sha: string, title: string) => {
+  const blocked = await requireManaged(root);
+  if (blocked) return { ok: false, error: blocked };
+  try {
+    setTitle(root, sha, title);
+    return { ok: true };
+  } catch (error: any) {
+    return { ok: false, error: error?.message || String(error) };
   }
 });
 

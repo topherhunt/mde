@@ -27,7 +27,7 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 - **Standard editing tools** -- links, code blocks, tables
 - **DOCX and PDF import/export** -- converts to Markdown on click, preserving structure (tables, headings, columns) where possible (not perfect!)
 - **File conflict detection** -- detects external changes; silent reload or warning banner
-- **Checkpoints** -- opt-in version history for a folder. Snapshots save themselves automatically once things go quiet (or on demand, with a note). Clicking a changed file shows a word-level diff in plain prose -- added words green, removed words red -- and one click puts that version back. Restoring never overwrites your history; it adds to it, so you can always go forward again. Folders that already have version history set up by other tools stay read-only unless you say otherwise.
+- **Checkpoints** -- opt-in version history for a folder. Snapshots save themselves automatically once things go quiet (or on demand, with a note). Clicking a changed file shows a word-level diff in plain prose -- added words green, removed words red -- and one click puts that version back. **Browse all checkpoints** opens the full history in a tab, where you can work back through every checkpoint, see how much each file changed, and rename a checkpoint to something you will recognise later. Restoring never overwrites your history; it adds to it, so you can always go forward again. Folders that already have version history set up by other tools stay read-only unless you say otherwise.
 - **Dark mode** -- light, dark, or follow system preference
 - **Terminal launcher** -- `mde .` to open a folder from the command line
 

@@ -267,8 +267,10 @@ const api = {
     ipcRenderer.invoke('vc-checkpoint', root, message),
   vcHistory: (root: string, opts?: { limit?: number; before?: string }) =>
     ipcRenderer.invoke('vc-history', root, opts),
-  vcCheckpointFiles: (root: string, sha: string) =>
-    ipcRenderer.invoke('vc-checkpoint-files', root, sha),
+  vcCheckpointFiles: (root: string, sha: string, opts?: { counts?: boolean }) =>
+    ipcRenderer.invoke('vc-checkpoint-files', root, sha, opts),
+  vcSetTitle: (root: string, sha: string, title: string) =>
+    ipcRenderer.invoke('vc-set-title', root, sha, title),
   vcDiff: (root: string, filePath: string, sha?: string) =>
     ipcRenderer.invoke('vc-diff', root, filePath, sha),
   vcRestoreFile: (root: string, sha: string, filePath: string) =>

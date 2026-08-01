@@ -45,6 +45,8 @@ Break these and something silently corrupts, clobbers, or infinite-loops.
 - **`mde.managed = true` in `.git/config` is the ONLY thing that grants write mode**, and live evidence (a remote, a second branch) overrides it. Never key managed-ness off a path in `mde-state.json`. Never create a repo without the user opting in. -> notes: Checkpoints
 - **Never return `null` from an isomorphic-git `walk` map** -- `null` means PRUNE, and returning it for the `'.'` root silently prunes the whole walk so every checkpoint reports zero files. Use `undefined`. -> notes: Checkpoints
 - **Keep `refresh: false` on `statusMatrix` and the `deraceIndex` call after commit.** isomorphic-git has no racy-clean rule, so a same-second same-size write is otherwise invisible FOREVER -- the changes list silently omits a file that really changed. Both halves are required; do not "simplify" either. -> notes: Checkpoints
+- **Restore writes BYTES, never a decoded string.** `readBlobAt` returns a Buffer; `readFileAt` (string) is for the diff viewer only. Decoding a blob to a JS string and writing it back as `'utf8'` replaced every invalid-UTF-8 byte with U+FFFD and destroyed a user's PDF. Whole-tree restore also byte-compares via `writeIfDifferent` -- identical files are not rewritten. -> notes: Checkpoints
+- **A checkpoint's user-edited title is a sidecar (`.git/mde-titles.json`), never a commit rewrite.** Rewriting changes that commit's sha and every descendant's, stranding the `MDE-Restore:` trailers that name them, and isomorphic-git has no rebase to do it with. -> notes: Checkpoints
 - **The checkpoint index must stay COMPLETE between checkpoints** (never dirty, but never emptied) -- `git.commit` builds its tree from it. Do not delete `.git/index`. -> notes: Checkpoints
 
 ## Key decisions
@@ -105,6 +107,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 
 - The word "Git" appears in the UI never. No staging, no branches, no remotes, no merge conflicts -- the audience is non-technical writers reviewing what an AI agent did to their files.
 - Four attach states: `none` (dimmed tab + opt-in screen), `managed` (writable), `foreign` (read-only + adopt button), `steppedBack` (read-only, not adoptable). -> notes: Checkpoints
+- Full history browsing lives in a read-only TAB (`Tab.view === 'history'` -> `HistoryView`), not an app mode: inactive panes are hidden, not unmounted, so open buffers keep their unsaved edits and undo history. The sidebar panel stays the glance. Both share `src/components/vcRestore.ts` so they can't phrase an outcome differently. -> notes: Checkpoints
 - One cadence rule, source-agnostic: more than 10 minutes since the last checkpoint + uncommitted changes + a quiet period -> checkpoint everything. No separate behavior for agent writes vs. the user's own edits. `--vc-eligibility-ms` / `--vc-poll-ms` override the constants for tests. -> notes: Checkpoints
 - Detection polls `statusMatrix` (which excludes gitignored files); the watcher is demoted to an unfiltered dirty-flag gate. The poller gate is `!sawChange && lastSignature === null` -- the second half prevents a deadlock after a single burst of edits. -> notes: Checkpoints
 - The quiet signature MUST fold in mtime and size: `statusMatrix`'s WORKDIR field is a coarse enum, not a content hash, so a rewritten file looks identical across polls. -> notes: Checkpoints
@@ -147,7 +150,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-177 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+187 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

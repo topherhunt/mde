@@ -35,19 +35,23 @@ export function describeChanges(files: VcChangedFile[]): string {
   const modified = files.filter(f => f.kind === 'modified');
   const deleted = files.filter(f => f.kind === 'deleted');
 
-  if (files.length === 1) {
-    const f = files[0];
-    const verb = f.kind === 'added' ? 'Added' : f.kind === 'deleted' ? 'Deleted' : 'Updated';
-    return `${verb} ${f.path}`;
-  }
+  // ALWAYS NAME FILES. "6 files changed" is a label that tells the user nothing about which
+  // checkpoint they are looking at, which is the only question the history list has to answer.
+  // Two names plus a count is enough to recognise a moment ("oh, that's when I redid chapter
+  // four"), and the drill-down has the full list.
+  //
+  // The verb comes from the LARGEST group and the named files are drawn from it, so a mostly-
+  // edits checkpoint reads as edits. Anything left over -- including files of other kinds --
+  // is swept into "and N more" rather than spelled out, which keeps the subject one line.
+  const largest = [modified, added, deleted].sort((a, b) => b.length - a.length)[0];
+  const verb =
+    largest === added ? 'Added' : largest === deleted ? 'Deleted' : 'Updated';
 
-  const kinds = [added, modified, deleted].filter(g => g.length > 0);
-  if (kinds.length === 1) {
-    const verb = added.length ? 'Added' : deleted.length ? 'Deleted' : 'Updated';
-    return `${verb} ${files.length} files`;
-  }
+  const names = largest.slice(0, 2).map(f => f.path);
+  const remaining = files.length - names.length;
 
-  return `${files.length} files changed`;
+  if (remaining === 0) return `${verb} ${names.join(' and ')}`;
+  return `${verb} ${names.join(', ')} and ${remaining} more`;
 }
 
 function buildMessage(

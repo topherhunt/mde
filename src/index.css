@@ -2277,3 +2277,229 @@ body {
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
+
+/* The same diff, rendered into the history tab instead of floating over the sidebar. */
+.diff-inline {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* --- Checkpoint history tab --- */
+.history-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.history-empty {
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.history-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.history-crumb {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-crumb:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+/* The crumb for where you already are is not a destination. */
+.history-crumb:disabled,
+.history-crumb-current {
+  color: var(--text);
+  cursor: default;
+  font-weight: 600;
+}
+
+.history-crumb-sep {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.history-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 24px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-row-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.history-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-row-subject,
+.history-detail-subject {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.history-detail-subject {
+  font-size: 17px;
+}
+
+.history-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.history-title-link {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-title-link:hover {
+  color: var(--accent);
+}
+
+/* Revealed on hover so a list of twenty checkpoints isn't a column of pencils. */
+.history-title-pencil {
+  opacity: 0;
+  flex-shrink: 0;
+}
+
+.history-row:hover .history-title-pencil,
+.history-detail-header .history-title-pencil,
+.history-title-pencil:focus-visible {
+  opacity: 1;
+}
+
+.history-title-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.history-title-input {
+  flex: 1;
+  min-width: 200px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+}
+
+.history-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-detail-title {
+  min-width: 0;
+}
+
+.history-file-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-file-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 4px;
+  background: none;
+  border: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-file-main:hover {
+  color: var(--accent);
+}
+
+.history-file-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.history-file-counts {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.vc-browse-btn {
+  width: 100%;
+  margin-bottom: 8px;
+}

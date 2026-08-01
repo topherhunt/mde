@@ -4,8 +4,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import git from 'isomorphic-git';
+import { diffLines } from 'diff';
 import { VcCheckpoint, VcChangedFile, VcDiff } from '../types';
 import { TRAILER_KIND, TRAILER_RESTORE } from './checkpoint';
+import { readTitles, TitleMap } from './titles';
 
 function parseTrailer(message: string, key: string): string | undefined {
   const re = new RegExp(`^${key}:\\s*(.+)$`, 'm');
@@ -13,15 +15,26 @@ function parseTrailer(message: string, key: string): string | undefined {
   return match ? match[1].trim() : undefined;
 }
 
-function toCheckpoint(sha: string, message: string, timestampSec: number): VcCheckpoint {
-  const subject = message.split('\n')[0].trim();
+function toCheckpoint(
+  sha: string,
+  message: string,
+  timestampSec: number,
+  titles: TitleMap
+): VcCheckpoint {
+  const generated = message.split('\n')[0].trim();
   const rawKind = parseTrailer(message, TRAILER_KIND);
   const restoreOf = parseTrailer(message, TRAILER_RESTORE);
   const kind: VcCheckpoint['kind'] =
     restoreOf ? 'restore' : rawKind === 'manual' ? 'manual' : rawKind === 'auto' ? 'auto' : 'auto';
+  // A user-edited title wins wherever a checkpoint is displayed. Applying it HERE, in the one
+  // function every history read funnels through, is what keeps the sidecar from becoming a
+  // second thing each caller has to remember to consult.
+  const custom = titles[sha];
   return {
     sha,
-    subject,
+    subject: custom ?? generated,
+    generatedSubject: generated,
+    titleEdited: custom !== undefined,
     timestamp: timestampSec * 1000,
     kind,
     restoreOf,
@@ -48,8 +61,10 @@ export async function listCheckpoints(
       ref: opts.before || undefined,
     });
     const sliced = opts.before ? entries.slice(1) : entries;
+    // Read the sidecar once per page, not once per row.
+    const titles = readTitles(root);
     return sliced.map(e =>
-      toCheckpoint(e.oid, e.commit.message, e.commit.author.timestamp)
+      toCheckpoint(e.oid, e.commit.message, e.commit.author.timestamp, titles)
     );
   } catch {
     // No commits yet (unborn HEAD) is normal for a freshly created repo.
@@ -66,18 +81,39 @@ export async function hasCommits(root: string): Promise<boolean> {
   }
 }
 
-/** Read one file as it was at a commit. Returns null when it did not exist there. */
+/**
+ * Read one file as it was at a commit, as RAW BYTES. Returns null when it did not exist there.
+ *
+ * Anything that writes to the working tree must use this, never `readFileAt`. Decoding a blob
+ * to a JavaScript string and writing it back is lossy for every byte sequence that is not
+ * valid UTF-8: each one becomes U+FFFD and the file is destroyed. Markdown survives the round
+ * trip, which is what made this hide -- a PDF sitting untouched next to an edited note came
+ * back blank from a whole-folder restore. Bytes in, bytes out.
+ */
+export async function readBlobAt(
+  root: string,
+  sha: string,
+  filepath: string
+): Promise<Buffer | null> {
+  try {
+    const { blob } = await git.readBlob({ fs, dir: root, oid: sha, filepath });
+    return Buffer.from(blob);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read one file as it was at a commit, decoded as text. Returns null when it did not exist
+ * there. For DISPLAY only (the diff view) -- see `readBlobAt` before writing anything to disk.
+ */
 export async function readFileAt(
   root: string,
   sha: string,
   filepath: string
 ): Promise<string | null> {
-  try {
-    const { blob } = await git.readBlob({ fs, dir: root, oid: sha, filepath });
-    return Buffer.from(blob).toString('utf8');
-  } catch {
-    return null;
-  }
+  const blob = await readBlobAt(root, sha, filepath);
+  return blob === null ? null : blob.toString('utf8');
 }
 
 async function parentOf(root: string, sha: string): Promise<string | null> {
@@ -85,11 +121,40 @@ async function parentOf(root: string, sha: string): Promise<string | null> {
   return commit.parent.length > 0 ? commit.parent[0] : null;
 }
 
+/** Lines added / removed between two versions of one file. Either side may be absent. */
+function countLines(before: string | null, after: string | null): { added: number; removed: number } {
+  if (before === null && after === null) return { added: 0, removed: 0 };
+  if (before === null) return { added: after!.split('\n').length, removed: 0 };
+  if (after === null) return { added: 0, removed: before.split('\n').length };
+
+  let added = 0;
+  let removed = 0;
+  for (const part of diffLines(before, after)) {
+    if (part.added) added += part.count ?? 0;
+    else if (part.removed) removed += part.count ?? 0;
+  }
+  return { added, removed };
+}
+
+// Counting costs two blob reads plus a diff PER FILE, so it is opt-in and capped. A
+// checkpoint listing thousands of files is a folder-wide sweep nobody reads line counts for;
+// the ones people actually inspect are a handful of documents.
+const COUNT_FILE_LIMIT = 200;
+const COUNT_BYTE_LIMIT = 2 * 1024 * 1024;
+
 /**
  * Which files a checkpoint changed, by diffing its tree against its parent's.
  * A root commit (no parent) reports every file as added.
+ *
+ * With `counts`, each text file also carries how many lines it gained and lost. Binaries and
+ * very large files are left without counts rather than being read -- the caller renders the
+ * absence as no number, which is honest, instead of a zero, which would read as "no change".
  */
-export async function checkpointFiles(root: string, sha: string): Promise<VcChangedFile[]> {
+export async function checkpointFiles(
+  root: string,
+  sha: string,
+  opts: { counts?: boolean } = {}
+): Promise<VcChangedFile[]> {
   const parent = await parentOf(root, sha);
   const trees = parent
     ? [git.TREE({ ref: sha }), git.TREE({ ref: parent })]
@@ -125,6 +190,22 @@ export async function checkpointFiles(root: string, sha: string): Promise<VcChan
     (f): f is VcChangedFile => !!f && !!f.path
   );
   files.sort((a, b) => a.path.localeCompare(b.path));
+
+  if (opts.counts && files.length <= COUNT_FILE_LIMIT) {
+    for (const file of files) {
+      if (BINARY_EXT.has(path.extname(file.path).toLowerCase())) continue;
+      const beforeBytes = parent ? await readBlobAt(root, parent, file.path) : null;
+      const afterBytes = await readBlobAt(root, sha, file.path);
+      const tooBig =
+        (beforeBytes?.length ?? 0) > COUNT_BYTE_LIMIT || (afterBytes?.length ?? 0) > COUNT_BYTE_LIMIT;
+      if (tooBig) continue;
+      const before = beforeBytes === null ? null : beforeBytes.toString('utf8');
+      const after = afterBytes === null ? null : afterBytes.toString('utf8');
+      if (looksBinary(file.path, before) || looksBinary(file.path, after)) continue;
+      Object.assign(file, countLines(before, after));
+    }
+  }
+
   return files;
 }
 

@@ -232,7 +232,11 @@ chapter-4.md +212/-40, outline.md +3/-3, and 2 new files
 - Free tiers commonly log or train on submitted data, are aggressively rate-limited, and can disappear without notice.
 - The payload is diffs of someone's unpublished novel or private journal. For this audience, silently shipping that to a third party is a trust breach regardless of provider.
 
-If it is added later, the architecture that keeps it from becoming a liability: **commit immediately with the deterministic message and treat the nice title as a lazily-filled decoration.** Never block a checkpoint on a network call. Never amend, which would rewrite history. Store generated titles in a local sidecar keyed by SHA, and have the history list show the title if present and the commit message otherwise. Then a timeout, a rate limit, or being offline degrades to exactly v1 behavior. Cap the payload at file names plus truncated hunks. Prefer bring-your-own-key in Settings over a bundled one.
+**BUILT, and the first version was wrong.** The shipped generator wrote "6 files changed", which fails the one job a title has: letting someone scanning History recognise which moment this was. `describeChanges` now leads with the dominant kind of change and names files -- "Updated ch1.md, ch2.md and 4 more", "Added new1.md, new2.md and 2 more", "Deleted old.md and gone.md" -- so the verb tells you what kind of session it was and the names tell you where you were.
+
+**Also BUILT: the sidecar the paragraph below anticipated, for a different reason.** A pencil on any checkpoint lets the user replace the generated title with their own, stored in `.git/mde-titles.json` keyed by sha. The reasoning for not rewriting the commit is exactly as sketched here, and it holds whether the better title comes from a model or from a person: rewriting would change that commit's sha and every descendant's, stranding the `MDE-Restore:` trailers that name them, and isomorphic-git gives us no rebase to do it with. A missing or malformed sidecar degrades to the generated title, silently and by design.
+
+If an LLM title is added later, the architecture that keeps it from becoming a liability: **commit immediately with the deterministic message and treat the nice title as a lazily-filled decoration.** Never block a checkpoint on a network call. Never amend, which would rewrite history. Store generated titles in a local sidecar keyed by SHA, and have the history list show the title if present and the commit message otherwise. Then a timeout, a rate limit, or being offline degrades to exactly v1 behavior. Cap the payload at file names plus truncated hunks. Prefer bring-your-own-key in Settings over a bundled one.
 
 ## UI
 
@@ -299,6 +303,20 @@ Ship a line-level diff first (phase 5) and the prose renderer after (phase 7). T
 
 **BUILT: a modal overlay, not a tab.** This resolves the first open question at the bottom of this document, and the reasoning changed once the panel existed. A diff is something you glance at and dismiss, usually several in a row while scanning what an agent did; a tab is something you *keep*. Opening one tab per file inspected would bury the documents the user is actually working on within a minute. The overlay gets the same full width, closes on Escape or a backdrop click, and leaves the tab bar alone. It also keeps restore where the diff is -- the **Put this version back** button lives in the diff footer, so "look at it, then undo it" is one uninterrupted gesture instead of a trip back to the sidebar.
 
+### Browsing the whole history
+
+**BUILT.** The sidebar drill-down above is fine for "what did the last checkpoint touch", but working back through a folder's history in a 260px column is not. **Browse all checkpoints** in the History section opens a full-page view in a read-only tab, with three levels and a breadcrumb back:
+
+1. **Checkpoints** -- every checkpoint with its absolute time, relative time, and how it was made, paged 50 at a time.
+2. **One checkpoint** -- the files it touched, each with `+n −n` line counts so you can see at a glance whether a file was retouched or rewritten, plus **Restore everything to here**.
+3. **One file** -- the prose diff, at full page width, with **Put this version back**.
+
+A pencil on the title at levels 1 and 2 edits the description.
+
+It is a **tab, not an app mode**, and that is a correctness choice rather than a layout one. A mode that took over the main area would have to either unmount the open documents (losing unsaved buffers and their undo history) or keep a hidden editor alive receiving keystrokes and watcher events. As a tab, every existing question -- Cmd+W, Cmd+S, the conflict banner, drag-drop -- already has an answer, inactive panes are merely hidden, and you can leave an unsaved paragraph mid-sentence, go read three diffs, and come back to it untouched. There is a test for exactly that.
+
+Unlike a diff, this view is something you *keep* while you work, which is why the earlier "modal, not a tab" reasoning does not apply to it. Only one ever opens; clicking Browse again re-focuses it.
+
 ### Restore
 
 Two granularities, both append-only:
@@ -307,6 +325,12 @@ Two granularities, both append-only:
 - **Restore everything** to this checkpoint. The panic button.
 
 Both auto-checkpoint the current state first, then write, then checkpoint the result with an `MDE-Restore` trailer. Nothing is ever lost, so neither needs a frightening confirmation. A plain "Restore" with a one-line "your current version is saved first" is enough.
+
+**Two things went wrong here in practice, both now fixed and both worth remembering.**
+
+*Restoring corrupted an untouched PDF.* The blob was read as a decoded JS string and written back with `'utf8'`, which turns every byte that is not valid UTF-8 into U+FFFD -- invisible for Markdown, fatal for a PDF, an image, or a `.docx`. Restore now moves `Buffer`s end to end (`readBlobAt`), and the string form is reserved for the diff viewer. Compounding it, whole-folder restore rewrote every file in the tree unconditionally; it now byte-compares first and leaves identical files completely alone.
+
+*"Restore everything" on the newest checkpoint claimed to restore three files while doing nothing.* Because nothing needed restoring -- the folder already matched. Landing right after a real restore had damaged a file, that made it impossible to tell which of the two had just happened. A restore that writes and deletes nothing now says so: "This folder already matches that checkpoint -- nothing needed restoring." The sidebar and the history tab share one module for this wording so they cannot drift apart.
 
 Restore writes files directly from the main process. It deliberately does **not** go through `write-file-if-unchanged`, which is the guard for renderer buffers. The existing conflict machinery then does the right thing for free: the directory watchers fire, the renderer recomputes hashes, clean tabs silently reload with the blue proof banner, and dirty tabs raise the red conflict banner. That is exactly the desired behavior and it is already built.
 

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { VcChangedFile, VcCheckpoint, VcPreflight, VcState } from '../types';
 import DiffView from './DiffView';
+import { restoreEverything, restoreOneFile } from './vcRestore';
 import { basename } from '../utils/paths';
 
 // --- Shared state -----------------------------------------------------------------
@@ -15,6 +16,10 @@ export interface VersionControl {
   // Bumped on every checkpoint so the history list refetches.
   historyKey: number;
   refresh: () => Promise<void>;
+  // For changes that alter what history READS return without creating a checkpoint -- a
+  // retitle is the only one. Shared so the sidebar list and the history tab can't show two
+  // different names for the same moment.
+  bumpHistory: () => void;
 }
 
 export function useVersionControl(projectRoot: string | null): VersionControl {
@@ -53,7 +58,9 @@ export function useVersionControl(projectRoot: string | null): VersionControl {
     return () => { offStatus(); offCheckpoint(); offFiles(); };
   }, [projectRoot, refresh]);
 
-  return { state, files, historyKey, refresh };
+  const bumpHistory = useCallback(() => setHistoryKey(k => k + 1), []);
+
+  return { state, files, historyKey, refresh, bumpHistory };
 }
 
 // --- Formatting -------------------------------------------------------------------
@@ -97,6 +104,9 @@ interface VersionPanelProps {
   projectRoot: string | null;
   vc: VersionControl;
   onToast: (msg: string, variant?: string) => void;
+  // Opens the full-page history tab. The sidebar stays the glance; that tab is where
+  // browsing, diffing, and renaming actually happen.
+  onOpenHistory: () => void;
 }
 
 interface DiffTarget {
@@ -106,7 +116,7 @@ interface DiffTarget {
   restorable: boolean;
 }
 
-export default function VersionPanel({ projectRoot, vc, onToast }: VersionPanelProps) {
+export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }: VersionPanelProps) {
   const { state, files, historyKey, refresh } = vc;
   const [showHelp, setShowHelp] = useState(false);
   const [initPreflight, setInitPreflight] = useState<VcPreflight | null>(null);
@@ -183,22 +193,14 @@ export default function VersionPanel({ projectRoot, vc, onToast }: VersionPanelP
     }
   }, [projectRoot, message, onToast, refresh]);
 
-  const restoreOneFile = useCallback(async (sha: string, filePath: string) => {
+  const runRestoreFile = useCallback(async (sha: string, filePath: string) => {
     if (!projectRoot) return;
     setBusy(true);
     try {
-      const result = await window.mde.vcRestoreFile(projectRoot, sha, filePath);
-      if (!result.ok) {
-        onToast(result.error || 'Could not restore that file.', 'danger');
-        return;
-      }
-      setDiffTarget(null);
-      onToast(
-        result.filesDeleted
-          ? `${filePath} did not exist at that point, so it was removed. The version you had is still in your history.`
-          : `Restored ${filePath}. The version you had is still in your history.`
-      );
-      await refresh();
+      const outcome = await restoreOneFile(projectRoot, sha, filePath);
+      if (outcome.variant !== 'danger') setDiffTarget(null);
+      onToast(outcome.message, outcome.variant);
+      if (outcome.changed) await refresh();
     } finally {
       setBusy(false);
     }
@@ -208,17 +210,10 @@ export default function VersionPanel({ projectRoot, vc, onToast }: VersionPanelP
     if (!projectRoot || !restoreAllTarget) return;
     setBusy(true);
     try {
-      const result = await window.mde.vcRestoreAll(projectRoot, restoreAllTarget.sha);
-      if (!result.ok) {
-        onToast(result.error || 'Could not restore this folder.', 'danger');
-        return;
-      }
+      const outcome = await restoreEverything(projectRoot, restoreAllTarget.sha);
       setRestoreAllTarget(null);
-      onToast(
-        `Restored ${result.filesWritten} file${result.filesWritten === 1 ? '' : 's'}. ` +
-        'Everything you had before is still in your history.'
-      );
-      await refresh();
+      onToast(outcome.message, outcome.variant);
+      if (outcome.changed) await refresh();
     } finally {
       setBusy(false);
     }
@@ -297,6 +292,7 @@ export default function VersionPanel({ projectRoot, vc, onToast }: VersionPanelP
           projectRoot={projectRoot}
           historyKey={historyKey}
           writable={writable}
+          onOpenHistory={onOpenHistory}
           onOpenDiff={(path, sha, checkpointLabel) =>
             setDiffTarget({
               path,
@@ -318,7 +314,7 @@ export default function VersionPanel({ projectRoot, vc, onToast }: VersionPanelP
           onClose={() => setDiffTarget(null)}
           onRestore={
             diffTarget.restorable && diffTarget.sha
-              ? path => restoreOneFile(diffTarget.sha!, path)
+              ? path => runRestoreFile(diffTarget.sha!, path)
               : undefined
           }
           restoreLabel="Put this version back"
@@ -372,6 +368,11 @@ function HelpCard({ writable, onClose }: { writable: boolean; onClose: () => voi
         <li>
           Click any file to see <strong>exactly what changed</strong>. Added words are
           green, removed words are red.
+        </li>
+        <li>
+          <strong>Browse all checkpoints</strong> opens the full history in a tab, where you
+          can work back through every checkpoint, see how much each file changed, and give a
+          checkpoint a clearer description with the pencil.
         </li>
         {writable && (
           <li>
@@ -465,11 +466,12 @@ interface HistorySectionProps {
   projectRoot: string;
   historyKey: number;
   writable: boolean;
+  onOpenHistory: () => void;
   onOpenDiff: (path: string, sha: string, checkpointLabel: string) => void;
   onRestoreAll: (checkpoint: VcCheckpoint) => void;
 }
 
-function HistorySection({ projectRoot, historyKey, writable, onOpenDiff, onRestoreAll }: HistorySectionProps) {
+function HistorySection({ projectRoot, historyKey, writable, onOpenHistory, onOpenDiff, onRestoreAll }: HistorySectionProps) {
   const [checkpoints, setCheckpoints] = useState<VcCheckpoint[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -498,6 +500,10 @@ function HistorySection({ projectRoot, historyKey, writable, onOpenDiff, onResto
   return (
     <div className="vc-section qa-vc-history">
       <div className="vc-section-title">History</div>
+
+      <button className="btn btn-sm vc-browse-btn qa-vc-browse" onClick={onOpenHistory}>
+        <i className="bi bi-clock-history" /> Browse all checkpoints
+      </button>
 
       {loading && <div className="vc-empty small text-muted">Loading...</div>}
 
@@ -707,7 +713,7 @@ interface RestoreAllDialogProps {
   onCancel: () => void;
 }
 
-function RestoreAllDialog({ checkpoint, busy, onConfirm, onCancel }: RestoreAllDialogProps) {
+export function RestoreAllDialog({ checkpoint, busy, onConfirm, onCancel }: RestoreAllDialogProps) {
   const confirmRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {

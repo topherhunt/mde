@@ -9,6 +9,7 @@ import FindBar from './FindBar';
 import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
 import { useVersionControl } from './VersionPanel';
+import HistoryView from './HistoryView';
 import { DeleteConfirmDialog } from './FileContextMenu';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { FileEntry } from '../types';
@@ -160,6 +161,8 @@ const initialState: AppState = {
   projectRoot: null,
   findBarOpen: false,
 };
+
+const CHECKPOINT_HISTORY_TAB_ID = 'checkpoint-history';
 
 let tabIdCounter = 0;
 function nextTabId(): string {
@@ -374,6 +377,31 @@ export default function App() {
         : KEYBOARD_SHORTCUTS_CONTENT.replace(/\bCmd\b/g, 'Ctrl'),
     };
     dispatch({ type: 'OPEN_TAB', tab });
+  }, [state.tabs]);
+
+  // Checkpoint history opens as an ordinary read-only tab. Deliberately not an app-wide mode:
+  // open documents keep their buffers, their dirty flags, and their watchers while you browse.
+  const openCheckpointHistory = useCallback(() => {
+    const existing = state.tabs.find(t => t.id === CHECKPOINT_HISTORY_TAB_ID);
+    if (existing) {
+      dispatch({ type: 'SET_ACTIVE_TAB', index: state.tabs.indexOf(existing) });
+      return;
+    }
+    dispatch({
+      type: 'OPEN_TAB',
+      tab: {
+        id: CHECKPOINT_HISTORY_TAB_ID,
+        filePath: null,
+        fileName: 'Checkpoint History',
+        dirty: false,
+        diskMtime: null,
+        diskHash: null,
+        conflict: false,
+        tentative: false,
+        readOnly: true,
+        view: 'history',
+      },
+    });
   }, [state.tabs]);
 
   // Clicking a .docx/.pdf: if it has already been converted, the useful offer is to
@@ -923,6 +951,7 @@ export default function App() {
           onToast={showToast}
           onDeleteFile={handleDeleteFile}
           onFileRenamed={handleFileRenamedInSidebar}
+          onOpenHistory={openCheckpointHistory}
         />
         <div className="main-area">
           <TabBar
@@ -984,16 +1013,20 @@ export default function App() {
                 className="editor-tab-pane"
                 style={{ display: i === state.activeTabIndex ? 'flex' : 'none' }}
               >
-                <Editor
-                  tab={tab}
-                  onReady={(editor) => registerEditor(tab.id, editor)}
-                  onDestroy={() => unregisterEditor(tab.id)}
-                  onDirtyChange={(dirty) => {
-                    dispatch({ type: 'MARK_DIRTY', tabId: tab.id, dirty });
-                    if (dirty) triggerAutosave();
-                  }}
-                  onLinkClick={(href) => handleLinkClick(href, tab.filePath)}
-                />
+                {tab.view === 'history' ? (
+                  <HistoryView projectRoot={state.projectRoot} vc={vc} onToast={showToast} />
+                ) : (
+                  <Editor
+                    tab={tab}
+                    onReady={(editor) => registerEditor(tab.id, editor)}
+                    onDestroy={() => unregisterEditor(tab.id)}
+                    onDirtyChange={(dirty) => {
+                      dispatch({ type: 'MARK_DIRTY', tabId: tab.id, dirty });
+                      if (dirty) triggerAutosave();
+                    }}
+                    onLinkClick={(href) => handleLinkClick(href, tab.filePath)}
+                  />
+                )}
               </div>
             ))}
             {state.tabs.length === 0 && (
