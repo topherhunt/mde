@@ -637,16 +637,29 @@ export function RestoreAllDialog({ checkpoint, busy, onConfirm, onCancel }: Rest
     <div className="modal-backdrop qa-vc-restore-dialog" onMouseDown={onCancel}>
       <div className="modal-dialog" onMouseDown={e => e.stopPropagation()}>
         <div className="modal-header">
-          <span className="fw-bold">Restore everything to this checkpoint</span>
+          <span className="fw-bold">Restore the whole folder</span>
           <button className="btn-plain" aria-label="Close" onClick={onCancel}>
             <i className="bi bi-x-lg" />
           </button>
         </div>
         <div className="modal-body">
+          {/* Says WHICH SIDE of the checkpoint you land on, because that is the same question the
+              one-file dialog answers with two cards. It cannot be answered the same way here: for
+              a whole folder, "before this checkpoint" IS the next checkpoint down the list, so a
+              second button would just duplicate the neighbouring row inside every dialog. It is
+              answered in words instead, and the alternative is named and pointed at. */}
           <p className="small">
-            Every file in this folder goes back to how it was at{' '}
-            <strong>{checkpoint.subject}</strong> ({formatRelativeTime(checkpoint.timestamp)}).
+            A checkpoint is a snapshot of the whole folder, saved <em>after</em> a batch of
+            changes was finished. So this puts every file back to how it stood at the end of{' '}
+            <strong>{checkpoint.subject}</strong> ({formatRelativeTime(checkpoint.timestamp)}) --
+            that checkpoint's changes included.
           </p>
+          {checkpoint.parent && (
+            <p className="small text-muted mt-2 qa-vc-restore-before-hint">
+              Want the folder the way it was <em>before</em> those changes? Cancel, and restore to
+              the checkpoint just below this one instead -- that is the snapshot taken before it.
+            </p>
+          )}
           <p className="small text-muted mt-2">
             Files you have made since then will be removed from the folder. Nothing is lost:
             MDE saves a checkpoint of how things are right now first, so you can come

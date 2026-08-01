@@ -626,6 +626,43 @@ test.describe('Checkpoint restore', () => {
     await expect(page.locator('.toast')).toContainText('still in your history');
   });
 
+  test('the restore-everything dialog says which side of the checkpoint you land on', async () => {
+    ({ app, page } = await launchApp());
+    await seedCheckpoints(2);
+
+    await page.locator('.qa-vc-browse').click();
+    await page.locator('.qa-hist-checkpoint', { hasText: 'Edit 2' }).click();
+    await page.locator('.qa-hist-restore-all').click();
+
+    // A button reading "Restore everything to here" left it open whether "here" meant before or
+    // after that checkpoint's changes -- the same ambiguity the one-file dialog answers with two
+    // cards. It cannot be answered the same way for a folder, so it is answered in words.
+    const dialog = page.locator('.qa-vc-restore-dialog');
+    await expect(dialog).toContainText('at the end of');
+    await expect(dialog).toContainText('Edit 2');
+    // And the other direction is named rather than offered, because for a whole folder it is
+    // simply the next checkpoint down the list.
+    await expect(page.locator('.qa-vc-restore-before-hint')).toContainText('just below this one');
+
+    await page.locator('.qa-vc-restore-cancel').click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test('the oldest checkpoint does not point at a checkpoint below it', async () => {
+    ({ app, page } = await launchApp());
+    await seedCheckpoints(1);
+
+    await page.locator('.qa-vc-browse').click();
+    // The initial checkpoint is the root commit: there is no row below it to send anyone to.
+    await page.locator('.qa-hist-checkpoint').last().click();
+    await page.locator('.qa-hist-restore-all').click();
+
+    // Assert the dialog has actually rendered before asserting something is missing from it,
+    // or the absence below only means "not painted yet".
+    await expect(page.locator('.qa-vc-restore-dialog')).toContainText('at the end of');
+    await expect(page.locator('.qa-vc-restore-before-hint')).toHaveCount(0);
+  });
+
   test('restoring the whole folder removes files added since that point', async () => {
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();

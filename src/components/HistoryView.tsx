@@ -507,9 +507,12 @@ function CheckpointDetail({
             {formatRelativeTime(checkpoint.timestamp)} &middot; {KIND_LABEL[checkpoint.kind]}
           </div>
         </div>
+        {/* "to here" is dropped from the label for the same reason the one-file button says only
+            "Restore": WHICH side of the checkpoint you land on is the ambiguity, and a button
+            label is the wrong place to answer it. The dialog has room to. */}
         {writable && (
           <button className="btn btn-sm qa-hist-restore-all" disabled={busy} onClick={onRestoreAll}>
-            Restore everything to here
+            Restore everything
           </button>
         )}
       </div>
