@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.7.0
+
+### Checkpoints -- you decide when, and where the switch lives
+
+Turning checkpoints on used to be a single yes that answered two different questions: may MDE write history into this folder, and may it do that on a timer without asking. This release splits them. Permission still works exactly as before; acting on it unprompted is now a separate setting that starts **off**.
+
+- **Manual by default**: A folder you turn checkpoints on for today saves a checkpoint when *you* click Save checkpoint, and at no other time. If you'd rather not think about it, **Save checkpoints automatically** in Settings restores the old behavior (roughly once every ten minutes, when there are changes and things have gone quiet). The setting is per folder and lives in the folder, so it travels with the project rather than the machine. Folders you'd already turned checkpoints on in keep checkpointing automatically -- nothing goes quiet on you after upgrading.
+- **Flipping back to manual is the off switch**: There's deliberately no "turn checkpoints off" button. Manual mode is MDE not touching your folder unless asked, which is the thing an off switch is for; the only thing a real one could add is deleting a history you might want back.
+- **The on switch moved to Settings**: Activating checkpoints, adopting a folder that already has history, and the automatic toggle now live in a Checkpoints section at the bottom of Settings, which names the folder they apply to. The sidebar tab still carries the full explanation of what the feature is -- with an **Open Settings** button -- because that's where you actually meet it.
+- **Nothing is saved behind your back on quit**: In manual mode, closing a folder or quitting MDE no longer sweeps up your uncommitted work into a surprise checkpoint. In automatic mode it still does.
+- **The sidebar has one job now**: what has changed since the last checkpoint, and the button that captures it. Its own checkpoint list and diff overlay are gone -- they were a worse copy of the history tab's, over the same data, with no counts, no renaming and no restore. Every look at the past, including clicking a file with unsaved changes, now opens in the history tab under a breadcrumb (`Checkpoints > Unsaved changes > note.md`).
+- **Changed files show how much moved**: Each row in the changes list carries `+n -n` line counts on the right. A file whose diff can't be measured (a binary, something oversized) shows nothing at all rather than `+0 -0`, which would read as "this didn't really change".
+- **The tab badge is red only when it's asking for something**: In manual mode the count sits there until you act on it, so it's a call to action. In automatic mode, or on a read-only folder MDE will never write to, it's a neutral grey count.
+- **The how-it-works recap is a dialog**: Nine paragraphs never fit a 250px sidebar. Both `?` buttons open it, and it now tells you which side of the automatic/manual setting you're on.
+
+### Development
+
+- 208 -> 212 E2E tests. New coverage: manual mode never checkpoints on its own however long it waits; closing a folder saves the tail in automatic mode and stays out of the way in manual; the automatic toggle persists in the folder and survives reopening it; the badge is red in manual and neutral in automatic; per-file line counts appear, and a binary file shows none. Both "nothing happened" tests were mutation-verified, and the folder-close pair runs the automatic case first in the same app so the manual assertion can't be vacuous.
+- The suite is also more deterministic: with manual as the default, tests that save their own checkpoints no longer race the automatic poller for them.
+
+### Known issues
+
+Unchanged from v0.6.1:
+
+- **Opening and saving a file deletes any images in it.** The editor has no image node, so an `![alt](path)` reference is dropped on load and is simply absent when the file is written back. MDE warns before opening such a file, but that's a stopgap, not the fix. If you already saved over one, its checkpoint history is the way back.
+- **Export as DOCX** appears in the menu but isn't wired up. **Export as PDF** works, but it captures the visible page rather than rendering the whole document.
+
+---
+
 ## v0.6.1
 
 ### Checkpoints -- version history for a folder, without Git
