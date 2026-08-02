@@ -21,7 +21,9 @@ function makeTmpDir(): string {
 }
 
 test.afterEach(async () => {
-  if (app) await app.close();
+  // Some tests close the app themselves to exercise quit behaviour, so a second close here
+  // is expected rather than exceptional.
+  try { if (app) await app.close(); } catch {}
   for (const dir of tmpDirs) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
@@ -41,12 +43,66 @@ async function openCheckpoints(dir: string): Promise<void> {
   await expect(page.locator('.qa-vc-panel')).toBeVisible();
 }
 
-/** Run the full opt-in flow and wait for the first checkpoint to land. */
-async function enableCheckpoints(): Promise<void> {
-  await page.locator('.qa-vc-enable').click();
+/** Open the Settings dialog the same way the menu item does. */
+async function openSettings(): Promise<void> {
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('open-settings');
+  });
+  await expect(page.locator('.qa-settings-vc')).toBeVisible();
+}
+
+async function closeSettings(): Promise<void> {
+  await page.locator('.qa-settings-close').click();
+  await expect(page.locator('.qa-settings')).toHaveCount(0);
+}
+
+/**
+ * Run the full opt-in flow -- which lives in Settings now -- and wait for the first
+ * checkpoint to land.
+ *
+ * Checkpoints start MANUAL, so unless a test asks for `{ auto: true }` nothing here will ever
+ * checkpoint on its own. That makes most of this suite more deterministic than it used to be:
+ * a test that saves its own checkpoints can no longer race the poller for them.
+ */
+async function enableCheckpoints(opts: { auto?: boolean } = {}): Promise<void> {
+  await openSettings();
+  await page.locator('.qa-settings-vc-enable').click();
   await expect(page.locator('.qa-vc-init-dialog')).toBeVisible();
   await page.locator('.qa-vc-init-confirm').click();
-  await expect(page.locator('.qa-vc-checkpoint').first()).toBeVisible({ timeout: 10000 });
+  // First setup opens the recap unprompted; dismiss it so it is not covering Settings.
+  await expect(page.locator('.qa-vc-help')).toBeVisible({ timeout: 10000 });
+  await page.locator('.qa-vc-help-close').click();
+  if (opts.auto) {
+    await page.locator('.qa-settings-vc-auto').click();
+    await expect(page.locator('.qa-settings-vc-auto input')).toBeChecked();
+  }
+  await closeSettings();
+  // The initial checkpoint captured everything, so the sidebar's changes list must be empty.
+  // That is the proof it landed: the sidebar no longer lists checkpoints at all.
+  await expect(page.locator('.qa-vc-panel .qa-vc-changes-empty')).toBeVisible({ timeout: 10000 });
+}
+
+/**
+ * Save a checkpoint from the sidebar and wait for it to land.
+ *
+ * The sidebar has no checkpoint list any more, so the signal is the changes list emptying --
+ * which only happens after the commit succeeded and status was recomputed.
+ *
+ * Scoped to `.qa-vc-panel` because the very same `ChangesSection` is also mounted in the
+ * history tab's "Unsaved changes" level; unscoped selectors would be ambiguous whenever that
+ * level is open.
+ */
+async function saveCheckpoint(message: string): Promise<void> {
+  await page.locator('.qa-vc-panel .qa-vc-message').fill(message);
+  await page.locator('.qa-vc-panel .qa-vc-save').click();
+  await expect(page.locator('.qa-vc-panel .qa-vc-changes-empty')).toBeVisible({ timeout: 15000 });
+}
+
+/** Open (or zoom back out to) the full checkpoint list in the history tab. */
+async function openHistory(): Promise<void> {
+  await page.locator('.qa-vc-tab').click();
+  await page.locator('.qa-vc-browse').click();
+  await expect(page.locator('.qa-hist-view')).toBeVisible();
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +110,10 @@ async function enableCheckpoints(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 test.describe('Checkpoints opt-in', () => {
-  test('tab is dimmed and the panel explains checkpoints are off', async () => {
+  test('the tab is dimmed and the panel points at Settings rather than turning it on', async () => {
+    // Turning checkpoints on is a Settings decision, so the sidebar is a signpost. It keeps the
+    // EXPLANATION though: nobody browses Settings, and a bare button would hide the feature
+    // from exactly the people it was built for.
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
     fs.writeFileSync(path.join(dir, 'note.md'), '# Note\n');
@@ -63,12 +122,17 @@ test.describe('Checkpoints opt-in', () => {
 
     await expect(page.locator('.qa-vc-tab')).toHaveClass(/sidebar-tab-dim/);
     await expect(page.locator('.qa-vc-intro')).toContainText('Checkpoints are off for this folder');
-    await expect(page.locator('.qa-vc-enable')).toBeVisible();
+    await expect(page.locator('.qa-vc-intro')).toContainText('put any file');
     // Nothing to save into: the checkpoint controls must not exist yet.
     await expect(page.locator('.qa-vc-save')).toHaveCount(0);
+
+    // And the button opens the real Settings dialog, scrolled to a real Checkpoints section.
+    await page.locator('.qa-vc-open-settings').click();
+    await expect(page.locator('.qa-settings-vc')).toContainText('Checkpoints');
+    await expect(page.locator('.qa-settings-vc-enable')).toBeVisible();
   });
 
-  test('turning checkpoints on creates a repo, an initial checkpoint, and undims the tab', async () => {
+  test('turning checkpoints on creates a repo, an initial checkpoint, and starts in manual mode', async () => {
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
     fs.writeFileSync(path.join(dir, 'chapter1.md'), '# Chapter One\n');
@@ -80,15 +144,22 @@ test.describe('Checkpoints opt-in', () => {
     // The marker is what grants write mode; nothing else does.
     const config = fs.readFileSync(path.join(dir, '.git', 'config'), 'utf8');
     expect(config).toMatch(/managed\s*=\s*true/);
+    // Automatic is OPT-IN: turning checkpoints on and letting MDE write to the folder on a
+    // timer are two different consents, and the opt-in flow only asks for the first.
+    expect(config).toMatch(/auto\s*=\s*false/);
     // A .gitignore is seeded so OS junk never shows up as a "change".
     expect(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8')).toContain('.DS_Store');
 
     await expect(page.locator('.qa-vc-tab')).not.toHaveClass(/sidebar-tab-dim/);
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Started tracking changes');
     await expect(page.locator('.qa-vc-changes-empty')).toContainText('saved to history');
+
+    await openHistory();
+    await expect(page.locator('.qa-hist-checkpoint').first())
+      .toContainText('Started tracking changes');
   });
 
-  test('the how-it-works recap opens from the question mark and after first setup', async () => {
+  test('the how-it-works recap opens as a dialog from the question mark and after first setup', async () => {
+    // It used to be a card wedged into a 240px sidebar. It is nine paragraphs.
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
     fs.writeFileSync(path.join(dir, 'note.md'), 'hello\n');
@@ -100,15 +171,17 @@ test.describe('Checkpoints opt-in', () => {
     await expect(page.locator('.qa-vc-help')).toContainText('How checkpoints work');
     await expect(page.locator('.qa-vc-help')).toContainText('Added words are');
 
-    await page.locator('.qa-vc-help-toggle').click();
+    // An X in the corner, like every other dialog -- not a second press of the same button.
+    await page.locator('.qa-vc-help-close').click();
     await expect(page.locator('.qa-vc-help')).toHaveCount(0);
 
-    // Turning it on for the first time surfaces the recap unprompted.
+    // Turning it on for the first time surfaces the recap unprompted (enableCheckpoints waits
+    // for exactly that, then dismisses it).
     await enableCheckpoints();
-    await expect(page.locator('.qa-vc-help')).toBeVisible();
+    await expect(page.locator('.qa-vc-help')).toHaveCount(0);
   });
 
-  test('the recap credits Git and says how often checkpoints happen', async () => {
+  test('the recap credits Git and explains that saving is yours unless you say otherwise', async () => {
     // The only place in the whole UI that names Git. It is deliberate: the credit belongs
     // somewhere, and "your history is kept in a standard format" is reassurance, not jargon.
     ({ app, page } = await launchApp());
@@ -119,9 +192,12 @@ test.describe('Checkpoints opt-in', () => {
     await page.locator('.qa-vc-help-toggle').click();
     const first = page.locator('.qa-vc-help-git');
     await expect(first).toContainText('Git');
-    await expect(first).toContainText('ten to thirty minutes');
     // It leads the list -- this is the framing for everything below it.
     await expect(page.locator('.vc-help-list li').first()).toHaveClass(/qa-vc-help-git/);
+
+    // The cadence is now a setting, so the recap has to say which side of it you are on.
+    await expect(page.locator('.qa-vc-help')).toContainText('Save checkpoints automatically');
+    await expect(page.locator('.qa-vc-help')).toContainText('once every ten minutes');
   });
 
   test('the checkpoints sidebar never scrolls sideways', async () => {
@@ -135,12 +211,157 @@ test.describe('Checkpoints opt-in', () => {
 
     await openCheckpoints(dir);
     await enableCheckpoints();
-    await expect(page.locator('.qa-vc-help')).toBeVisible();
+    await expect(page.locator('.qa-vc-changes')).toBeVisible();
 
     const overflow = await page.locator('.sidebar-content').evaluate(
       el => el.scrollWidth - el.clientWidth
     );
     expect(overflow).toBeLessThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manual vs automatic
+// ---------------------------------------------------------------------------
+
+test.describe('Manual and automatic checkpointing', () => {
+  test('manual mode never checkpoints on its own, however long it waits', async () => {
+    // The off switch. Someone who does not want an app writing to their folder unasked has to
+    // be able to say so, and this is what saying so buys them.
+    //
+    // A "nothing happened" assertion, so it was mutation-verified: deleting the `if
+    // (!vcState.auto)` early return in checkpointer.ts turns this red within a second.
+    ({ app, page } = await launchApp(['--vc-eligibility-ms=0', '--vc-poll-ms=200']));
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'note.md');
+    fs.writeFileSync(file, 'start\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints(); // manual: the default
+
+    fs.writeFileSync(file, 'edited by an agent\n');
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+
+    // ~15 poll cycles, every one of them eligible and quiet. Under auto this commits in one.
+    const shaBefore = headSha(dir);
+    await page.waitForTimeout(3000);
+    expect(headSha(dir)).toBe(shaBefore);
+    // Still pending, and still saying so.
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(1);
+
+    // The button is the only thing that moves it, and it still works.
+    await saveCheckpoint('When I said so');
+    expect(headSha(dir)).not.toBe(shaBefore);
+  });
+
+  test('the automatic toggle is remembered in the folder, not in the app', async () => {
+    // It lives in .git/config so it travels with the folder. Keying it off a path in
+    // mde-state.json would silently reset the moment the folder was renamed or moved.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'start\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    await openSettings();
+    await expect(page.locator('.qa-settings-vc-auto input')).not.toBeChecked();
+    await page.locator('.qa-settings-vc-auto').click();
+    await expect(page.locator('.qa-settings-vc-auto input')).toBeChecked();
+    await closeSettings();
+
+    await expect.poll(() => fs.readFileSync(path.join(dir, '.git', 'config'), 'utf8'))
+      .toMatch(/auto\s*=\s*true/);
+
+    // Reopen the folder from scratch: the setting is read back off disk, not remembered.
+    await openProject(makeTmpDir());
+    await openProject(dir);
+    await openSettings();
+    await expect(page.locator('.qa-settings-vc-auto input')).toBeChecked();
+  });
+
+  test('closing a folder saves the tail in automatic mode and stays out of the way in manual mode', async () => {
+    // `flushRoot` -- the same function the quit handler calls -- fires when a folder is let go
+    // of. It exists because the 10-minute rule can legitimately leave that much work
+    // uncaptured, so shutting down is the last chance. It must not override the off switch: a
+    // surprise checkpoint is exactly what manual mode opted out of, and nothing is at risk
+    // either way, since the files are already on disk.
+    //
+    // Both halves in one test on purpose: the manual half is a "nothing happened" assertion,
+    // and the automatic half is what proves it is not vacuous. (The literal quit path can't be
+    // driven from here -- `before-quit` returns early under --test-headless so Playwright can
+    // close the app -- but it reaches this by the identical call.)
+    const closeFolder = async (auto: boolean): Promise<{ before: string; dir: string }> => {
+      const dir = makeTmpDir();
+      const file = path.join(dir, 'note.md');
+      fs.writeFileSync(file, 'start\n');
+
+      await openCheckpoints(dir);
+      await enableCheckpoints({ auto });
+
+      fs.writeFileSync(file, 'work done just before closing\n');
+      await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
+
+      const before = headSha(dir);
+      await openProject(makeTmpDir()); // lets go of `dir`, which is what triggers the flush
+      return { before, dir };
+    };
+
+    ({ app, page } = await launchApp());
+
+    const automatic = await closeFolder(true);
+    await expect.poll(() => headSha(automatic.dir), { timeout: 15000 })
+      .not.toBe(automatic.before);
+
+    const manual = await closeFolder(false);
+    await page.waitForTimeout(2000); // the automatic half needed well under this to land
+    expect(headSha(manual.dir)).toBe(manual.before);
+  });
+
+  test('the badge is a red call to action in manual mode and a neutral count in automatic', async () => {
+    // Red means "nothing but you is going to clear this". That is true in manual mode and only
+    // in manual mode: the poller clears the count on its own within minutes otherwise.
+    // Compared against probe elements rather than a literal colour so it holds in either theme.
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'chapter1.md');
+    fs.writeFileSync(file, '# Chapter One\n');
+
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    fs.writeFileSync(file, '# Chapter One\n\nRewritten by Claude.\n');
+    await expect(page.locator('.qa-vc-badge')).toHaveText('1', { timeout: 15000 });
+
+    const colors = async () => page.locator('.qa-vc-badge').evaluate(el => {
+      const probe = (value: string) => {
+        const d = document.createElement('div');
+        d.style.background = value;
+        document.body.appendChild(d);
+        const c = getComputedStyle(d).backgroundColor;
+        d.remove();
+        return c;
+      };
+      return {
+        badge: getComputedStyle(el).backgroundColor,
+        danger: probe('var(--danger)'),
+        muted: probe('var(--text-muted)'),
+      };
+    });
+
+    const manual = await colors();
+    expect(manual.badge).toBe(manual.danger);
+
+    // Flip to automatic and the same pending count goes quiet, because now it resolves itself.
+    await openSettings();
+    await page.locator('.qa-settings-vc-auto').click();
+    await expect(page.locator('.qa-settings-vc-auto input')).toBeChecked();
+    await closeSettings();
+
+    await expect.poll(async () => (await colors()).badge === (await colors()).muted)
+      .toBe(true);
+    const automatic = await colors();
+    expect(automatic.badge).not.toBe(automatic.danger);
   });
 });
 
@@ -158,7 +379,8 @@ test.describe('Checkpoints guardrails', () => {
     fs.writeFileSync(path.join(inner, 'ch1.md'), 'text\n');
 
     await openCheckpoints(inner);
-    await page.locator('.qa-vc-enable').click();
+    await openSettings();
+    await page.locator('.qa-settings-vc-enable').click();
 
     await expect(page.locator('.qa-vc-blocked')).toContainText("can't be tracked on its own");
     // The only guardrail that blocks: there must be no way through.
@@ -177,7 +399,8 @@ test.describe('Checkpoints guardrails', () => {
     fs.closeSync(fd);
 
     await openCheckpoints(dir);
-    await page.locator('.qa-vc-enable').click();
+    await openSettings();
+    await page.locator('.qa-settings-vc-enable').click();
 
     await expect(page.locator('.qa-vc-warning-large')).toContainText('big folder');
     await expect(page.locator('.qa-vc-warning-large')).toContainText('mileage may vary');
@@ -193,7 +416,8 @@ test.describe('Checkpoints guardrails', () => {
     fs.writeFileSync(path.join(dir, 'note.md'), 'hi\n');
 
     await openCheckpoints(dir);
-    await page.locator('.qa-vc-enable').click();
+    await openSettings();
+    await page.locator('.qa-settings-vc-enable').click();
 
     await expect(page.locator('.qa-vc-warning-child')).toContainText('vendor');
     await expect(page.locator('.qa-vc-init-confirm')).toBeVisible();
@@ -223,8 +447,12 @@ test.describe('Checkpoints guardrails', () => {
     await openProject(dir);
     await expect(page.locator('.qa-vc-readonly')).toContainText('MDE did not create');
     await expect(page.locator('.qa-vc-save')).toHaveCount(0);
-    // ...but it can be adopted deliberately.
-    await page.locator('.qa-vc-adopt').click();
+
+    // ...but it can be adopted deliberately, from the same place it would have been turned on.
+    await openSettings();
+    await expect(page.locator('.qa-settings-vc-readonly')).toContainText('MDE did not create');
+    await page.locator('.qa-settings-vc-adopt').click();
+    await closeSettings();
     await expect(page.locator('.qa-vc-save')).toBeVisible();
   });
 
@@ -251,9 +479,12 @@ test.describe('Checkpoints guardrails', () => {
     await expect(page.locator('.qa-vc-readonly')).toContainText('stepped back to read-only');
     await expect(page.locator('.qa-vc-save')).toHaveCount(0);
     // Not adoptable either -- adopting would be the same mistake by another route.
-    await expect(page.locator('.qa-vc-adopt')).toHaveCount(0);
+    await openSettings();
+    await expect(page.locator('.qa-settings-vc-adopt')).toHaveCount(0);
+    await closeSettings();
     // History stays readable, which is the whole point of read-only rather than off.
-    await expect(page.locator('.qa-vc-checkpoint').first()).toBeVisible();
+    await openHistory();
+    await expect(page.locator('.qa-hist-checkpoint').first()).toBeVisible();
   });
 
   test('the marker survives renaming the folder', async () => {
@@ -274,7 +505,8 @@ test.describe('Checkpoints guardrails', () => {
     await openProject(renamed);
     await expect(page.locator('.qa-vc-save')).toBeVisible();
     await expect(page.locator('.qa-vc-readonly')).toHaveCount(0);
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Started tracking');
+    await openHistory();
+    await expect(page.locator('.qa-hist-checkpoint').first()).toContainText('Started tracking');
   });
 });
 
@@ -300,39 +532,31 @@ test.describe('Checkpoint change detection', () => {
     await expect(page.locator('.qa-vc-changes')).toContainText('chapter2.md');
   });
 
-  test('the badge is a neutral count, not a red alert', async () => {
-    // Red reads as "do something about this". Nothing here needs doing: checkpointing is
-    // automatic, so the count clears itself within minutes -- and on a folder MDE only reads,
-    // it will never act on it at all. Compared against probe elements rather than a literal
-    // colour so this holds in either theme.
+  test('each changed file shows how many lines moved, and unmeasurable ones show nothing', async () => {
+    // The count answers "is this a typo fix or did an agent rewrite the chapter?" before you
+    // open anything. It is a SEPARATE call made after the list paints, so the list itself
+    // stays a cheap status walk -- and a file it cannot measure renders NOTHING rather than
+    // "+0 -0", which would read as "this did not really change".
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
-    fs.writeFileSync(path.join(dir, 'chapter1.md'), '# Chapter One\n');
+    fs.writeFileSync(path.join(dir, 'chapter1.md'), 'one\ntwo\nthree\n');
 
     await openCheckpoints(dir);
     await enableCheckpoints();
 
-    fs.writeFileSync(path.join(dir, 'chapter1.md'), '# Chapter One\n\nRewritten by Claude.\n');
-    await expect(page.locator('.qa-vc-badge')).toHaveText('1', { timeout: 15000 });
+    // Two lines replaced by three: +3 / -2.
+    fs.writeFileSync(dir + '/chapter1.md', 'one\nTWO\nTHREE\nFOUR\n');
+    // A binary file has no lines to count at all.
+    fs.writeFileSync(path.join(dir, 'cover.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]));
 
-    const colors = await page.locator('.qa-vc-badge').evaluate(el => {
-      const probe = (value: string) => {
-        const d = document.createElement('div');
-        d.style.background = value;
-        document.body.appendChild(d);
-        const c = getComputedStyle(d).backgroundColor;
-        d.remove();
-        return c;
-      };
-      return {
-        badge: getComputedStyle(el).backgroundColor,
-        danger: probe('var(--danger)'),
-        muted: probe('var(--text-muted)'),
-      };
-    });
+    await expect(page.locator('.qa-vc-change-row')).toHaveCount(2, { timeout: 15000 });
 
-    expect(colors.badge).toBe(colors.muted);
-    expect(colors.badge).not.toBe(colors.danger);
+    const chapter = page.locator('.qa-vc-change-row', { hasText: 'chapter1.md' });
+    await expect(chapter.locator('.qa-vc-change-counts')).toContainText('+3');
+    await expect(chapter.locator('.qa-vc-change-counts')).toContainText('2');
+
+    const cover = page.locator('.qa-vc-change-row', { hasText: 'cover.png' });
+    await expect(cover.locator('.qa-vc-change-counts')).toHaveCount(0);
   });
 
   test('ignored files never count as changes', async () => {
@@ -391,13 +615,12 @@ test.describe('Checkpoint change detection', () => {
     await expect(page.locator('.qa-vc-change-row .bi-dash-lg')).toBeVisible();
     await expect(page.locator('.qa-vc-changes')).toContainText('doomed.md');
 
-    await page.locator('.qa-vc-message').fill('Removed a chapter');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Removed a chapter');
+    await saveCheckpoint('Removed a chapter');
 
-    // The commit's own tree diff must show the deletion, not an empty change set. The sidebar
-    // row routes into the history tab, which is the only place that renders a checkpoint's files.
-    await page.locator('.qa-vc-checkpoint').first().click();
+    // The commit's own tree diff must show the deletion, not an empty change set.
+    await openHistory();
+    await expect(page.locator('.qa-hist-checkpoint').first()).toContainText('Removed a chapter');
+    await page.locator('.qa-hist-checkpoint').first().click();
     await expect(page.locator('.qa-hist-detail')).toBeVisible();
     await expect(page.locator('.qa-hist-file')).toHaveCount(1);
     await expect(page.locator('.qa-hist-file')).toContainText('doomed.md');
@@ -415,13 +638,12 @@ test.describe('Checkpoint change detection', () => {
     fs.writeFileSync(path.join(dir, 'note.md'), 'second\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
 
-    await page.locator('.qa-vc-message').fill('Finished the opening scene');
-    await page.locator('.qa-vc-save').click();
-
-    await expect(page.locator('.qa-vc-checkpoint').first())
-      .toContainText('Finished the opening scene');
-    await expect(page.locator('.qa-vc-changes-empty')).toBeVisible();
+    await saveCheckpoint('Finished the opening scene');
     await expect(page.locator('.qa-vc-badge')).toHaveCount(0);
+
+    await openHistory();
+    await expect(page.locator('.qa-hist-checkpoint').first())
+      .toContainText('Finished the opening scene');
   });
 });
 
@@ -430,7 +652,11 @@ test.describe('Checkpoint change detection', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Checkpoint diffs', () => {
-  test('clicking a changed file shows the words that changed', async () => {
+  test('clicking a changed file opens it in the history tab, under a breadcrumb', async () => {
+    // It used to be a modal over the sidebar -- a second drill-down over the same data as the
+    // history tab, which is how the two views ended up wording the same restore differently.
+    // Unsaved work is now just the bottom of the same ladder: it occupies the checkpoint slot
+    // in the breadcrumb, because that is exactly what it is about to become.
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
     fs.writeFileSync(path.join(dir, 'note.md'), 'The quick brown fox jumps over the lazy dog.\n');
@@ -441,9 +667,13 @@ test.describe('Checkpoint diffs', () => {
     fs.writeFileSync(path.join(dir, 'note.md'), 'The quick red fox leaps over the lazy dog.\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
 
-    await page.locator('.qa-vc-change-row').click();
-    await expect(page.locator('.qa-diff-view')).toBeVisible();
+    await page.locator('.qa-vc-panel .qa-vc-change-row').click();
+    await expect(page.locator('.qa-hist-diff')).toBeVisible();
+    await expect(page.locator('.qa-diff-view')).toHaveCount(0);
     await expect(page.locator('.qa-diff-path')).toHaveText('note.md');
+    await expect(page.locator('.qa-hist-crumb-root')).toHaveText('Checkpoints');
+    await expect(page.locator('.qa-hist-crumb-working')).toHaveText('Unsaved changes');
+    await expect(page.locator('.qa-hist-crumb-file')).toHaveText('note.md');
     // The content arrives over IPC; allTextContents() below does not retry, so wait for
     // the rendered diff first.
     await expect(page.locator('.qa-diff-summary')).toBeVisible();
@@ -462,8 +692,14 @@ test.describe('Checkpoint diffs', () => {
     // ...but it is still on screen as context within the row.
     await expect(page.locator('.diff-removed')).toContainText('over the lazy dog');
 
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.qa-diff-view')).toHaveCount(0);
+    // Restore is deliberately absent here: every other Restore button lands you on a version
+    // that IS in history, and there is nothing to go back to for work that was never saved.
+    await expect(page.locator('.qa-diff-restore')).toHaveCount(0);
+
+    // The breadcrumb goes back up to the full list of unsaved files.
+    await page.locator('.qa-hist-crumb-working').click();
+    await expect(page.locator('.qa-hist-working .qa-vc-change-row')).toHaveCount(1);
+    await expect(page.locator('.qa-hist-diff')).toHaveCount(0);
   });
 
   test('a history entry lists its files and diffs them against the previous checkpoint', async () => {
@@ -476,11 +712,10 @@ test.describe('Checkpoint diffs', () => {
 
     fs.writeFileSync(path.join(dir, 'note.md'), 'revised text\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Second pass');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Second pass');
+    await saveCheckpoint('Second pass');
 
-    await page.locator('.qa-vc-checkpoint').first().click();
+    await openHistory();
+    await page.locator('.qa-hist-checkpoint', { hasText: 'Second pass' }).click();
     await expect(page.locator('.qa-hist-file')).toHaveCount(1);
     await page.locator('.qa-hist-file').locator('.history-file-main').click();
 
@@ -506,16 +741,14 @@ test.describe('Checkpoint restore', () => {
 
     fs.writeFileSync(file, 'ruined by an agent\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Agent rewrite');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Agent rewrite');
+    await saveCheckpoint('Agent rewrite');
 
-    const countBefore = await page.locator('.qa-vc-checkpoint').count();
+    await openHistory();
+    const countBefore = await page.locator('.qa-hist-checkpoint').count();
 
-    // Go back to the FIRST checkpoint (the initial one) and put that version back. The sidebar
-    // row routes into the history tab; restore lives there and nowhere else. That checkpoint's
-    // file list also holds the seeded .gitignore, so pick note.md by name.
-    await page.locator('.qa-vc-checkpoint').last().click();
+    // Go back to the FIRST checkpoint (the initial one) and put that version back. That
+    // checkpoint's file list also holds the seeded .gitignore, so pick note.md by name.
+    await page.locator('.qa-hist-checkpoint').last().click();
     await page.locator('.qa-hist-file', { hasText: 'note.md' }).locator('.history-file-main').click();
     await expect(page.locator('.qa-hist-diff')).toBeVisible();
     await page.locator('.qa-diff-restore').click();
@@ -526,10 +759,11 @@ test.describe('Checkpoint restore', () => {
       .toBe('original text\n');
 
     // Append-only: history grew, and the ruined version is still reachable.
-    await expect.poll(() => page.locator('.qa-vc-checkpoint').count(), { timeout: 15000 })
+    await page.locator('.qa-hist-crumb-root').click();
+    await expect.poll(() => page.locator('.qa-hist-checkpoint').count(), { timeout: 15000 })
       .toBeGreaterThan(countBefore);
-    await expect(page.locator('.qa-vc-history')).toContainText('Agent rewrite');
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Restored note.md');
+    await expect(page.locator('.qa-hist-list')).toContainText('Agent rewrite');
+    await expect(page.locator('.qa-hist-checkpoint').first()).toContainText('Restored note.md');
   });
 
   // The restore dialog. It exists because "restore to this checkpoint" is ambiguous while you
@@ -546,9 +780,7 @@ test.describe('Checkpoint restore', () => {
     for (let i = 2; i <= count + 1; i++) {
       fs.writeFileSync(file, `version ${i}\n`);
       await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-      await page.locator('.qa-vc-message').fill(`Edit ${i}`);
-      await page.locator('.qa-vc-save').click();
-      await expect(page.locator('.qa-vc-checkpoint').first()).toContainText(`Edit ${i}`);
+      await saveCheckpoint(`Edit ${i}`);
     }
     return { dir, file };
   }
@@ -644,9 +876,7 @@ test.describe('Checkpoint restore', () => {
     const invented = path.join(dir, 'invented.md');
     fs.writeFileSync(invented, 'a file the agent invented\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Agent added a file');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Agent added a file');
+    await saveCheckpoint('Agent added a file');
 
     await page.locator('.qa-vc-browse').click();
     await page.locator('.qa-hist-checkpoint', { hasText: 'Agent added a file' }).click();
@@ -711,11 +941,10 @@ test.describe('Checkpoint restore', () => {
     fs.writeFileSync(kept, 'version two\n');
     fs.writeFileSync(added, 'a file the agent invented\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(2, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Agent went wild');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Agent went wild');
+    await saveCheckpoint('Agent went wild');
 
-    await page.locator('.qa-vc-checkpoint').last().click();
+    await openHistory();
+    await page.locator('.qa-hist-checkpoint').last().click();
     await page.locator('.qa-hist-restore-all').click();
     await expect(page.locator('.qa-vc-restore-dialog')).toBeVisible();
     await page.locator('.qa-vc-restore-confirm').click();
@@ -725,7 +954,8 @@ test.describe('Checkpoint restore', () => {
     // The union bug: forgetting the deletion half leaves this file behind.
     await expect.poll(() => fs.existsSync(added), { timeout: 15000 }).toBe(false);
     // Still recoverable -- the safety checkpoint captured it before the restore.
-    await expect(page.locator('.qa-vc-history')).toContainText('Agent went wild');
+    await openHistory();
+    await expect(page.locator('.qa-hist-list')).toContainText('Agent went wild');
   });
 
   test('restoring never corrupts a binary file it did not change', async () => {
@@ -756,12 +986,11 @@ test.describe('Checkpoint restore', () => {
     // One line of Markdown changes. The PDF is not touched.
     fs.writeFileSync(note, '# Details\n\nline one changed\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Update DETAILS.md');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Update DETAILS.md');
+    await saveCheckpoint('Update DETAILS.md');
 
     // Restore the checkpoint that represents the CURRENT state -- the exact reported case.
-    await page.locator('.qa-vc-checkpoint').first().click();
+    await openHistory();
+    await page.locator('.qa-hist-checkpoint').first().click();
     await page.locator('.qa-hist-restore-all').click();
     await expect(page.locator('.qa-vc-restore-dialog')).toBeVisible();
     await page.locator('.qa-vc-restore-confirm').click();
@@ -787,19 +1016,19 @@ test.describe('Checkpoint restore', () => {
 
     fs.writeFileSync(note, 'second\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Second pass');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    await saveCheckpoint('Second pass');
 
     const otherMtime = fs.statSync(other).mtimeMs;
 
-    await page.locator('.qa-vc-checkpoint').first().click();
+    await openHistory();
+    await page.locator('.qa-hist-checkpoint').first().click();
     await page.locator('.qa-hist-restore-all').click();
     await page.locator('.qa-vc-restore-confirm').click();
 
     await expect(page.locator('.toast')).toContainText('already', { timeout: 15000 });
     // No new checkpoint, no rewritten files, no disturbed mtimes.
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    await page.locator('.qa-hist-crumb-root').click();
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2);
     expect(fs.readFileSync(note, 'utf8')).toBe('second\n');
     expect(fs.statSync(other).mtimeMs).toBe(otherMtime);
   });
@@ -820,9 +1049,7 @@ test.describe('Checkpoint restore', () => {
 
     fs.writeFileSync(file, '# Agent version\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Agent rewrite');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Agent rewrite');
+    await saveCheckpoint('Agent rewrite');
 
     // Open it and leave unsaved edits in the buffer.
     await app.evaluate(({ BrowserWindow }, filePath) => {
@@ -836,8 +1063,8 @@ test.describe('Checkpoint restore', () => {
     await expect(page.locator('.tab-dirty-dot')).toBeVisible();
 
     // Restore the pre-agent version from the initial checkpoint, via the history tab.
-    await page.locator('.qa-vc-tab').click();
-    await page.locator('.qa-vc-checkpoint').last().click();
+    await openHistory();
+    await page.locator('.qa-hist-checkpoint').last().click();
     await page.locator('.qa-hist-file', { hasText: 'note.md' }).locator('.history-file-main').click();
     await expect(page.locator('.qa-hist-diff')).toBeVisible();
     await page.locator('.qa-diff-restore').click();
@@ -860,23 +1087,27 @@ test.describe('Checkpoint restore', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Automatic checkpoints', () => {
-  // The real cadence is "10 minutes since the last checkpoint, then 60s of quiet". The
-  // flags collapse both to a fraction of a second so the identical code path is exercised.
+  // Every test here opts IN with `{ auto: true }`, because that is the only way this code path
+  // runs at all now. The real cadence is "10 minutes since the last checkpoint, then 60s of
+  // quiet"; the flags collapse both to a fraction of a second so the identical path is
+  // exercised. The history tab is opened straight after enabling so the list is live: a new
+  // checkpoint broadcasts, which bumps the history key, which refetches.
   test('a quiet period after changes produces an automatic checkpoint', async () => {
     ({ app, page } = await launchApp(['--vc-eligibility-ms=0', '--vc-poll-ms=200']));
     const dir = makeTmpDir();
     fs.writeFileSync(path.join(dir, 'note.md'), 'start\n');
 
     await openCheckpoints(dir);
-    await enableCheckpoints();
+    await enableCheckpoints({ auto: true });
+    await openHistory();
 
     fs.writeFileSync(path.join(dir, 'note.md'), 'edited by an agent\n');
 
     // Two identical polls in a row are required before it commits, so this proves the
     // settle window ran, not just that a change was noticed.
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2, { timeout: 25000 });
-    await expect(page.locator('.qa-vc-checkpoint').first()).toContainText('Updated note.md');
-    await expect(page.locator('.qa-vc-changes-empty')).toBeVisible();
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2, { timeout: 25000 });
+    await expect(page.locator('.qa-hist-checkpoint').first()).toContainText('Updated note.md');
+    await expect(page.locator('.qa-vc-panel .qa-vc-changes-empty')).toBeVisible();
   });
 
   test('no automatic checkpoint is created while nothing has changed', async () => {
@@ -885,11 +1116,12 @@ test.describe('Automatic checkpoints', () => {
     fs.writeFileSync(path.join(dir, 'note.md'), 'start\n');
 
     await openCheckpoints(dir);
-    await enableCheckpoints();
+    await enableCheckpoints({ auto: true });
+    await openHistory();
 
     // Many poll cycles with an untouched folder must not manufacture empty checkpoints.
     await page.waitForTimeout(3000);
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(1);
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(1);
   });
 
   test('no checkpoint lands mid-burst while a file is being rewritten repeatedly', async () => {
@@ -907,7 +1139,8 @@ test.describe('Automatic checkpoints', () => {
     fs.writeFileSync(file, 'draft 000\n');
 
     await openCheckpoints(dir);
-    await enableCheckpoints();
+    await enableCheckpoints({ auto: true });
+    await openHistory();
 
     // ~14 writes over ~3.5s against a 400ms poll: several polls necessarily land inside it.
     for (let i = 1; i <= 14; i++) {
@@ -915,11 +1148,11 @@ test.describe('Automatic checkpoints', () => {
       await page.waitForTimeout(250);
     }
     // Still exactly the initial checkpoint: nothing was captured mid-rewrite.
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(1);
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(1);
 
     // And once the burst ends, the pending work is captured rather than stranded.
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2, { timeout: 25000 });
-    await expect(page.locator('.qa-vc-changes-empty')).toBeVisible();
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2, { timeout: 25000 });
+    await expect(page.locator('.qa-vc-panel .qa-vc-changes-empty')).toBeVisible();
     expect(fs.readFileSync(file, 'utf8')).toBe('draft 014\n');
   });
 
@@ -932,7 +1165,8 @@ test.describe('Automatic checkpoints', () => {
     fs.writeFileSync(path.join(dir, 'note.md'), 'start\n');
 
     await openCheckpoints(dir);
-    await enableCheckpoints();
+    await enableCheckpoints({ auto: true });
+    await openHistory();
 
     fs.writeFileSync(path.join(dir, 'note.md'), 'real work\n');
     // Let the poller commit this itself instead of racing it to the Save button. With
@@ -941,11 +1175,11 @@ test.describe('Automatic checkpoints', () => {
     // asserting a change row that was already gone. Nothing here needs a MANUAL checkpoint: the
     // subject is what happens after a commit, and an automatic one is the more relevant kind
     // anyway, since it is the poller's own .git writes that must not feed back into it.
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2, { timeout: 25000 });
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2, { timeout: 25000 });
 
     // ~15 poll cycles after a real commit. The count must not move.
     await page.waitForTimeout(3000);
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2);
   });
 });
 
@@ -1015,9 +1249,7 @@ test.describe('Checkpoint history tab', () => {
 
     fs.writeFileSync(file, 'one\ntwo CHANGED\nthree\nfour\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Second pass');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    await saveCheckpoint('Second pass');
 
     await page.locator('.qa-vc-browse').click();
     // It really is a tab, sitting alongside any documents -- not a mode that replaced the app.
@@ -1096,9 +1328,7 @@ test.describe('Checkpoint history tab', () => {
 
     fs.writeFileSync(file, '# Rewritten by an agent\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Agent rewrite');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    await saveCheckpoint('Agent rewrite');
 
     await page.locator('.qa-vc-browse').click();
     // The OLDEST checkpoint is the one holding the original text. It also carries the seeded
@@ -1114,10 +1344,11 @@ test.describe('Checkpoint history tab', () => {
     await expect(page.locator('.toast')).toContainText('still in your history');
   });
 
-  test('a checkpoint clicked in the sidebar opens in the tab instead of expanding in place', async () => {
+  test('the sidebar is the present tense only -- the past lives entirely in the tab', async () => {
     // The sidebar used to render its own, shallower drill-down over the same data. Two views
-    // of one thing is how they ended up wording the same restore differently, so the sidebar
-    // is now purely a glance that routes here.
+    // of one thing is how they ended up wording the same restore differently, so the past is
+    // now the tab's job alone and the sidebar answers exactly one question: what has moved
+    // since the last checkpoint.
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
     fs.writeFileSync(path.join(dir, 'note.md'), 'first\n');
@@ -1125,13 +1356,17 @@ test.describe('Checkpoint history tab', () => {
     await openCheckpoints(dir);
     await enableCheckpoints();
 
-    await page.locator('.qa-vc-checkpoint').first().click();
+    const panel = page.locator('.qa-vc-panel');
+    await expect(panel.locator('.qa-vc-changes')).toBeVisible();
+    // No checkpoint list, no per-checkpoint file list, no restore -- in the sidebar.
+    await expect(panel.locator('.qa-hist-checkpoint')).toHaveCount(0);
+    await expect(panel.locator('.qa-hist-file')).toHaveCount(0);
+    await expect(panel.locator('.qa-hist-restore-all')).toHaveCount(0);
 
+    // Everything past the present tense is one button away, and it opens a real tab.
+    await panel.locator('.qa-vc-browse').click();
     await expect(page.locator('.tab', { hasText: 'Checkpoint History' })).toBeVisible();
-    await expect(page.locator('.qa-hist-detail')).toBeVisible();
-    await expect(page.locator('.qa-hist-file', { hasText: 'note.md' })).toHaveCount(1);
-    // Nothing expanded in the sidebar: there is no second file list to disagree with this one.
-    await expect(page.locator('.qa-vc-checkpoint-file')).toHaveCount(0);
+    await expect(page.locator('.qa-hist-checkpoint').first()).toContainText('Started tracking');
   });
 
   test('Browse zooms back out when the tab is already open on a file diff', async () => {
@@ -1186,9 +1421,7 @@ test.describe('Checkpoint history tab', () => {
     fs.writeFileSync(file, Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n') + '\n');
     fs.writeFileSync(path.join(dir, 'second.md'), 'alpha\nbeta\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(2, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Big rewrite');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    await saveCheckpoint('Big rewrite');
 
     await page.locator('.qa-vc-browse').click();
     const row = page.locator('.qa-hist-checkpoint', { hasText: 'Big rewrite' });
@@ -1235,15 +1468,11 @@ test.describe("One file's change history", () => {
 
     fs.writeFileSync(path.join(dir, 'note.md'), 'draft two\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Second draft');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    await saveCheckpoint('Second draft');
 
     fs.writeFileSync(path.join(dir, 'other.md'), 'unrelated, revised\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Touched something else');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(3);
+    await saveCheckpoint('Touched something else');
   }
 
   test('right-clicking a file in the explorer lists only the checkpoints that touched it', async () => {
@@ -1281,9 +1510,7 @@ test.describe("One file's change history", () => {
     fs.writeFileSync(path.join(dir, 'note.md'), 'two\n');
     fs.writeFileSync(path.join(dir, 'sibling.md'), 'two\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(2, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Both at once');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    await saveCheckpoint('Both at once');
 
     await page.locator('[title="File Explorer"]').click();
     await page.locator('.tree-file', { hasText: 'note.md' }).click({ button: 'right' });
@@ -1331,19 +1558,16 @@ test.describe("One file's change history", () => {
     // confused with the unscoped one (3) -- including on a half-rendered frame.
     fs.writeFileSync(path.join(dir, 'other.md'), 'unrelated, revised\n');
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Touched something else');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(2);
+    await saveCheckpoint('Touched something else');
 
     fs.unlinkSync(file);
     await expect(page.locator('.qa-vc-change-row')).toHaveCount(1, { timeout: 15000 });
-    await page.locator('.qa-vc-message').fill('Deleted the draft');
-    await page.locator('.qa-vc-save').click();
-    await expect(page.locator('.qa-vc-checkpoint')).toHaveCount(3);
+    await saveCheckpoint('Deleted the draft');
 
     // The file is gone from the explorer, so reach it the way its own tab would: through the
     // checkpoint that deleted it.
-    await page.locator('.qa-vc-checkpoint').first().click();
+    await openHistory();
+    await page.locator('.qa-hist-checkpoint').first().click();
     await page.locator('.qa-hist-file', { hasText: 'gone.md' }).locator('.history-file-main').click();
     await page.locator('.qa-diff-file-history').click();
 
@@ -1402,9 +1626,11 @@ test.describe('Editing a checkpoint description', () => {
     const titles = JSON.parse(fs.readFileSync(path.join(dir, '.git', 'mde-titles.json'), 'utf8'));
     expect(titles[shaBefore]).toBe('Before Claude touched anything');
 
-    // And the sidebar list agrees -- one name for one moment, wherever it is shown.
-    await page.locator('.qa-vc-tab').click();
-    await expect(page.locator('.qa-vc-checkpoint').first())
+    // And it survives a reload: the name came off disk, not out of component state.
+    await openProject(makeTmpDir());
+    await openProject(dir);
+    await openHistory();
+    await expect(page.locator('.qa-hist-checkpoint').first())
       .toContainText('Before Claude touched anything');
   });
 

@@ -1,15 +1,21 @@
-// The sidebar panel: the GLANCE. What has moved since the last checkpoint, and a button to save
-// one. It deliberately does NOT drill into checkpoints -- clicking one routes to the history
-// tab, which is the only thing in the app that renders a checkpoint's files, a diff of one, or
-// a restore of either. Two drill-downs over the same data is how the two views ended up
-// describing the same restore differently; there is now exactly one.
+// The sidebar panel: the GLANCE, and nothing else.
 //
-// The one diff this panel still opens is for the CHANGES list, which is uncommitted work with
-// no checkpoint to route to -- and is genuinely a glance-and-dismiss modal.
+// It answers one question -- what has moved since the last checkpoint -- and offers the one
+// action that answers it (save a checkpoint). Every other checkpoint screen lives in the
+// history tab. There is deliberately no checkpoint list here any more: it was a worse copy of
+// the tab's list, with no counts, no rename, and no restore, over exactly the same data.
+//
+// The division of labour is now clean:
+//   - This panel is the PRESENT. Live, glanceable, visible while you work.
+//   - The history tab is the PAST. Every checkpoint, every diff, every restore.
+//   - "Browse all checkpoints" is the bridge, and clicking any changed file crosses it too.
+//
+// Turning checkpoints on, and choosing whether they save themselves, live in Settings
+// (`CheckpointSettings`, at the bottom of this file). Both are per-FOLDER settings sitting in
+// an otherwise app-global dialog, which is why that section names the folder in its header.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { HistoryTarget, VcChangedFile, VcCheckpoint, VcPreflight, VcState } from '../types';
-import DiffView from './DiffView';
+import React, { useCallback, useEffect, useState } from 'react';
+import { HistoryTarget, VcChangedFile, VcPreflight, VcState } from '../types';
 import { basename } from '../utils/paths';
 
 // --- Shared state -----------------------------------------------------------------
@@ -53,7 +59,8 @@ export function useVersionControl(projectRoot: string | null): VersionControl {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // The poller publishes status on every tick, which keeps the badge live on its own.
+  // The poller publishes status on every tick, which keeps the badge live on its own -- in
+  // manual mode too, where the poller no longer commits but still walks the status.
   // The project watcher (2s debounce in the main process) is what makes it feel immediate.
   useEffect(() => {
     const offStatus = window.mde.onVcStatus(payload => {
@@ -115,16 +122,336 @@ interface VersionPanelProps {
   // Opens the full-page history tab, pointed at whatever was clicked. The sidebar stays the
   // glance; that tab is where browsing, diffing, renaming, and restoring actually happen.
   onOpenHistory: (target: HistoryTarget) => void;
+  onOpenSettings: () => void;
 }
 
-export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }: VersionPanelProps) {
-  const { state, files, historyKey, refresh } = vc;
+export default function VersionPanel({
+  projectRoot, vc, onToast, onOpenHistory, onOpenSettings,
+}: VersionPanelProps) {
+  const { state, files } = vc;
+  const [showHelp, setShowHelp] = useState(false);
+
+  if (!projectRoot) {
+    return <div className="sidebar-empty qa-vc-no-folder">Open a folder to start saving checkpoints.</div>;
+  }
+
+  const writable = state.attach === 'managed';
+
+  return (
+    <div className="vc-panel qa-vc-panel">
+      <div className="vc-header">
+        <span className="vc-header-title">Checkpoints</span>
+        <button
+          className="btn-plain qa-vc-help-toggle"
+          data-tooltip="How checkpoints work"
+          aria-label="How checkpoints work"
+          onClick={() => setShowHelp(true)}
+        >
+          <i className="bi bi-question-circle" />
+        </button>
+      </div>
+
+      {showHelp && <CheckpointHelpDialog writable={writable} onClose={() => setShowHelp(false)} />}
+
+      {/* Turning it on lives in Settings, so this is a signpost rather than a control. The
+          explanation stays HERE rather than moving with the button: nobody browses Settings,
+          and a bare "Open Settings" button would make the feature vanish for the people it
+          was built for. */}
+      {state.attach === 'none' && (
+        <div className="vc-intro qa-vc-intro">
+          <p>Checkpoints are off for this folder.</p>
+          <p className="text-muted small">
+            Turn them on and MDE can save a snapshot of everything here as you work --
+            including changes made by Claude or any other program. You can look back at what
+            changed and put any file (or the whole folder) back the way it was.
+          </p>
+          <button className="btn btn-primary mt-2 qa-vc-open-settings" onClick={onOpenSettings}>
+            Open Settings to turn them on
+          </button>
+        </div>
+      )}
+
+      {(state.attach === 'foreign' || state.attach === 'steppedBack') && (
+        <div className="vc-notice qa-vc-readonly">
+          <div className="small">{state.reason}</div>
+          <button className="btn btn-sm mt-2 qa-vc-open-settings" onClick={onOpenSettings}>
+            Open Settings
+          </button>
+        </div>
+      )}
+
+      {writable && (
+        <ChangesSection
+          projectRoot={projectRoot}
+          files={files}
+          onToast={onToast}
+          onSaved={vc.refresh}
+          onOpenDiff={path => onOpenHistory({ kind: 'working', path })}
+        />
+      )}
+
+      {state.attach !== 'none' && (
+        <div className="vc-section">
+          <button
+            className="btn btn-sm vc-browse-btn qa-vc-browse"
+            onClick={() => onOpenHistory({ kind: 'all' })}
+          >
+            <i className="bi bi-clock-history" /> Browse all checkpoints
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Help ---------------------------------------------------------------------------
+
+/**
+ * The how-it-works recap. A dialog rather than an inline card in the sidebar, because it is
+ * nine paragraphs of explanation and the sidebar is 250px wide.
+ *
+ * Reachable from two places -- the "?" in the panel header and the same "?" in Settings --
+ * so someone deciding whether to turn the feature on can read what it does first.
+ */
+export function CheckpointHelpDialog({ writable, onClose }: { writable: boolean; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      // Both entry points can sit ON TOP of the Settings dialog, which has its own Escape
+      // handler on `window`. Document listeners run first, so stopping here is what makes
+      // Escape close the thing you are looking at instead of both at once.
+      e.stopPropagation();
+      onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop qa-vc-help" onMouseDown={onClose}>
+      <div className="modal-dialog modal-dialog-wide" onMouseDown={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="fw-bold">How checkpoints work</span>
+          <button className="btn-plain qa-vc-help-close" aria-label="Close" onClick={onClose}>
+            <i className="bi bi-x-lg" />
+          </button>
+        </div>
+        <div className="modal-body">
+          <ul className="vc-help-list small">
+            {/* The one place "Git" is named. Everywhere else in the UI it stays invisible on
+                purpose -- but the credit belongs here, and knowing the history is kept in a
+                standard, portable format is reassurance rather than jargon. */}
+            <li className="qa-vc-help-git">
+              Turn this on and MDE keeps a history of everything that changes in this folder. It
+              is a simplified front end to <strong>Git</strong>, the version-control system
+              programmers rely on -- you never have to touch Git itself.
+            </li>
+            <li>
+              A <strong>checkpoint</strong> is a snapshot of every file in this folder at one
+              moment.
+            </li>
+            <li>
+              You decide when they happen. Out of the box you save them yourself, with the{' '}
+              <em>Save checkpoint</em> button. Turn on{' '}
+              <strong>Save checkpoints automatically</strong> in Settings and MDE also saves one
+              on its own, at most about once every ten minutes, once things have been quiet for
+              a moment.
+            </li>
+            <li>
+              <strong>Changes</strong> lists everything that has moved since the last
+              checkpoint -- yours and anything Claude or another program did. The number on the
+              tab is that same count.
+            </li>
+            <li>
+              Click any file to see <strong>exactly what changed</strong>. Added words are
+              green, removed words are red.
+            </li>
+            <li>
+              <strong>Browse all checkpoints</strong> opens the full history in a tab, where you
+              can work back through every checkpoint, see how much each file changed, and give a
+              checkpoint a clearer description with the pencil.
+            </li>
+            {writable && (
+              <li>
+                Don't like a change? In that tab, find the file inside a checkpoint and press{' '}
+                <em>Restore</em>. MDE then asks which version you want: the way it was{' '}
+                <em>before</em> that change, or the way it came out <em>after</em> it. You can also
+                restore the whole folder to that point.
+              </li>
+            )}
+            <li>
+              To follow just one file, right-click it in the file list (or its tab) and choose{' '}
+              <strong>View change history</strong>.
+            </li>
+            <li>
+              Nothing is ever thrown away. Restoring adds a new checkpoint on top, so the
+              version you had a moment ago is still there to go back to.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Changes ------------------------------------------------------------------------
+
+interface ChangesSectionProps {
+  projectRoot: string;
+  files: VcChangedFile[];
+  onToast: (msg: string, variant?: string) => void;
+  onSaved: () => Promise<void> | void;
+  onOpenDiff: (path: string) => void;
+}
+
+/**
+ * What has moved since the last checkpoint, and the button that captures it.
+ *
+ * Mounted in TWO places -- the sidebar panel and the history tab's "Unsaved changes" level --
+ * and exported rather than duplicated for the same reason restore goes through vcRestore.ts:
+ * two implementations of one list is how the sidebar and the tab ended up wording the same
+ * outcome differently. The message box and the save call live in here, so both mounts get the
+ * same behaviour by construction; the only difference between them is the width they get.
+ */
+export function ChangesSection({
+  projectRoot, files, onToast, onSaved, onOpenDiff,
+}: ChangesSectionProps) {
+  const [counts, setCounts] = useState<Record<string, { added?: number; removed?: number }>>({});
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const onSave = useCallback(async () => {
+    setBusy(true);
+    try {
+      const result = await window.mde.vcCheckpoint(projectRoot, message.trim() || undefined);
+      if (!result.ok) {
+        onToast(result.error || 'Could not save a checkpoint.', 'danger');
+        return;
+      }
+      if (!result.sha) {
+        onToast('Nothing has changed since the last checkpoint.', 'info');
+        return;
+      }
+      setMessage('');
+      onToast('Checkpoint saved.');
+      await onSaved();
+    } finally {
+      setBusy(false);
+    }
+  }, [projectRoot, message, onToast, onSaved]);
+
+  // Fetched separately from the list, and re-fetched on every status update rather than only
+  // when the SET of paths changes -- editing the same file again moves its numbers without
+  // changing the list. `files` is a fresh array on every poll broadcast, which is exactly the
+  // cadence we want: the counts can never be stale, and the cost is bounded by the poll
+  // interval, not by typing speed.
+  useEffect(() => {
+    if (files.length === 0) {
+      setCounts({});
+      return;
+    }
+    let cancelled = false;
+    window.mde.vcStatusCounts(projectRoot, files.map(f => f.path)).then(result => {
+      if (!cancelled) setCounts(result);
+    });
+    return () => { cancelled = true; };
+  }, [projectRoot, files]);
+
+  return (
+    <div className="vc-section qa-vc-changes">
+      <div className="vc-section-title">
+        Changes{files.length > 0 ? ` (${files.length})` : ''}
+      </div>
+
+      {files.length === 0 ? (
+        <div className="vc-empty small text-muted qa-vc-changes-empty">
+          <i className="bi bi-check-circle text-success" /> Everything here is saved to history.
+        </div>
+      ) : (
+        <div className="vc-file-list">
+          {files.map(file => (
+            <button
+              key={file.path}
+              className="vc-file-row qa-vc-change-row"
+              title={file.path}
+              onClick={() => onOpenDiff(file.path)}
+            >
+              <i className={`bi ${KIND_ICON[file.kind]} ${KIND_CLASS[file.kind]}`} />
+              <span className="vc-file-name text-truncate">{basename(file.path) || file.path}</span>
+              <ChangeCounts count={counts[file.path]} />
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="vc-save-row">
+        <input
+          className="vc-message-input qa-vc-message"
+          placeholder="What changed? (optional)"
+          value={message}
+          disabled={busy}
+          onChange={e => setMessage(e.target.value)}
+          onKeyDown={e => {
+            e.stopPropagation();
+            if (e.key === 'Enter' && files.length > 0) void onSave();
+          }}
+        />
+        <button
+          className="btn btn-sm btn-primary qa-vc-save"
+          disabled={busy || files.length === 0}
+          onClick={() => void onSave()}
+        >
+          Save checkpoint
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * How far one uncommitted file has moved. Formatted exactly as the counts inside a checkpoint
+ * (`FileCounts` in HistoryView), so the same numbers never appear in two different shapes.
+ *
+ * An unmeasured file renders NOTHING rather than "+0 -0" -- absent means binary or oversized,
+ * and a zero would read as "this file did not really change", which is a lie.
+ */
+function ChangeCounts({ count }: { count: { added?: number; removed?: number } | undefined }) {
+  if (!count || (!count.added && !count.removed)) return null;
+  return (
+    <span className="vc-file-counts small qa-vc-change-counts">
+      {count.added ? <span className="text-success">+{count.added}</span> : null}
+      {count.removed ? <span className="text-danger">&minus;{count.removed}</span> : null}
+    </span>
+  );
+}
+
+// --- Settings -------------------------------------------------------------------------
+
+interface CheckpointSettingsProps {
+  projectRoot: string | null;
+  vc: VersionControl;
+  onToast: (msg: string, variant?: string) => void;
+}
+
+/**
+ * The Checkpoints section of the Settings dialog: turn the feature on for this folder, and
+ * decide whether MDE saves checkpoints by itself.
+ *
+ * Every other row in Settings is an app-wide preference in mde-state.json; these two live in
+ * this folder's .git/config and travel with the folder. That mismatch is real, so the header
+ * names the folder rather than pretending the setting is global.
+ *
+ * There is no "turn checkpoints off" button, and that is not an omission. Manual mode already
+ * means MDE writes nothing to the folder unless asked -- an extra off switch would be a second
+ * control for the same idea, and the only thing it could add is deleting the history, which
+ * this feature never does.
+ */
+export function CheckpointSettings({ projectRoot, vc, onToast }: CheckpointSettingsProps) {
+  const { state, refresh } = vc;
   const [showHelp, setShowHelp] = useState(false);
   const [initPreflight, setInitPreflight] = useState<VcPreflight | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  // Uncommitted changes only -- always working-copy-vs-last-checkpoint, never restorable.
-  const [diffPath, setDiffPath] = useState<string | null>(null);
 
   const startInit = useCallback(async () => {
     if (!projectRoot) return;
@@ -173,111 +500,104 @@ export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }
     }
   }, [projectRoot, onToast, refresh]);
 
-  const saveCheckpoint = useCallback(async () => {
+  const setAuto = useCallback(async (auto: boolean) => {
     if (!projectRoot) return;
-    setBusy(true);
-    try {
-      const result = await window.mde.vcCheckpoint(projectRoot, message.trim() || undefined);
-      if (!result.ok) {
-        onToast(result.error || 'Could not save a checkpoint.', 'danger');
-        return;
-      }
-      if (!result.sha) {
-        onToast('Nothing has changed since the last checkpoint.', 'info');
-        return;
-      }
-      setMessage('');
-      onToast('Checkpoint saved.');
-      await refresh();
-    } finally {
-      setBusy(false);
+    const result = await window.mde.vcSetAuto(projectRoot, auto);
+    if (!result.ok) {
+      onToast(result.error || 'Could not change that setting.', 'danger');
+      return;
     }
-  }, [projectRoot, message, onToast, refresh]);
+    await refresh();
+  }, [projectRoot, onToast, refresh]);
 
-  if (!projectRoot) {
-    return <div className="sidebar-empty qa-vc-no-folder">Open a folder to start saving checkpoints.</div>;
-  }
-
-  const writable = state.attach === 'managed';
   const canAdopt =
     state.attach === 'foreign' && !state.hasRemote && (state.branchCount ?? 1) <= 1;
 
   return (
-    <div className="vc-panel qa-vc-panel">
-      <div className="vc-header">
-        <span className="vc-header-title">Checkpoints</span>
+    <div className="qa-settings-vc">
+      <div className="settings-row">
+        <div>
+          <div className="fw-bold">
+            Checkpoints
+            {projectRoot && <> for <code>{basename(projectRoot) || projectRoot}</code></>}
+          </div>
+          <div className="small text-muted">
+            {/* Named per folder because it IS per folder. Someone who sets this on one project
+                and opens another would otherwise expect it to have carried. */}
+            An undo history for this whole folder. This setting applies to this folder only.
+          </div>
+        </div>
         <button
-          className="btn-plain qa-vc-help-toggle"
+          className="btn-plain qa-settings-vc-help"
           data-tooltip="How checkpoints work"
           aria-label="How checkpoints work"
-          onClick={() => setShowHelp(v => !v)}
+          onClick={() => setShowHelp(true)}
         >
-          <i className={showHelp ? 'bi bi-question-circle-fill' : 'bi bi-question-circle'} />
+          <i className="bi bi-question-circle" />
         </button>
       </div>
 
-      {showHelp && <HelpCard writable={writable} onClose={() => setShowHelp(false)} />}
+      {!projectRoot && (
+        <div className="small text-muted mt-2 qa-settings-vc-no-folder">
+          Open a folder to use checkpoints.
+        </div>
+      )}
 
-      {state.attach === 'none' && (
-        <div className="vc-intro qa-vc-intro">
-          <p>
-            Checkpoints are off for this folder.
-          </p>
-          <p className="text-muted small">
-            Turn them on and MDE quietly saves a snapshot of everything here as you work --
-            including changes made by Claude or any other program. You can look back at what
-            changed and put any file (or the whole folder) back the way it was.
-          </p>
-          <button className="btn btn-primary mt-2 qa-vc-enable" disabled={busy} onClick={startInit}>
+      {projectRoot && state.attach === 'none' && (
+        <div className="settings-row mt-2">
+          <div className="small text-muted">
+            MDE will start keeping a history of everything that changes here, including changes
+            made by Claude or any other program.
+          </div>
+          <button className="settings-btn qa-settings-vc-enable" disabled={busy} onClick={startInit}>
             Turn on checkpoints
           </button>
         </div>
       )}
 
-      {(state.attach === 'foreign' || state.attach === 'steppedBack') && (
-        <div className="vc-notice qa-vc-readonly">
-          <div className="small">{state.reason}</div>
+      {projectRoot && (state.attach === 'foreign' || state.attach === 'steppedBack') && (
+        <div className="settings-row mt-2">
+          <div className="small text-muted qa-settings-vc-readonly">{state.reason}</div>
           {canAdopt && (
-            <button className="btn btn-sm mt-2 qa-vc-adopt" disabled={busy} onClick={adopt}>
+            <button className="settings-btn qa-settings-vc-adopt" disabled={busy} onClick={adopt}>
               Let MDE save checkpoints here
             </button>
           )}
         </div>
       )}
 
-      {writable && (
-        <ChangesSection
-          files={files}
-          message={message}
-          busy={busy}
-          onMessageChange={setMessage}
-          onSave={saveCheckpoint}
-          onOpenDiff={setDiffPath}
+      {projectRoot && state.attach === 'managed' && (
+        <div className="settings-row mt-2">
+          <div>
+            <div className="fw-bold qa-settings-vc-on">Save checkpoints automatically</div>
+            <div className="small text-muted">
+              {/* Says what the cadence rule actually does. "Every 10-15 minutes" would promise a
+                  checkpoint on an idle folder, where the answer is zero. */}
+              Roughly every ten minutes, when something has changed and things have gone quiet.
+              With this off, checkpoints are saved only when you press <em>Save checkpoint</em>.
+            </div>
+          </div>
+          {/* The qa hook is on the LABEL, not the input: the input is opacity-0 and zero-sized,
+              so it is the label a person (or a test) actually clicks. */}
+          <label className="settings-toggle qa-settings-vc-auto">
+            <input
+              type="checkbox"
+              checked={state.auto === true}
+              onChange={e => void setAuto(e.target.checked)}
+            />
+            <span className="settings-toggle-slider" />
+          </label>
+        </div>
+      )}
+
+      {showHelp && (
+        <CheckpointHelpDialog
+          writable={state.attach === 'managed'}
+          onClose={() => setShowHelp(false)}
         />
       )}
 
-      {state.attach !== 'none' && (
-        <HistorySection
-          projectRoot={projectRoot}
-          historyKey={historyKey}
-          onOpenHistory={onOpenHistory}
-        />
-      )}
-
-      {diffPath && (
-        <DiffView
-          projectRoot={projectRoot}
-          filePath={diffPath}
-          subtitle="Compared with the last checkpoint"
-          onClose={() => setDiffPath(null)}
-          onViewFileHistory={() => {
-            setDiffPath(null);
-            onOpenHistory({ kind: 'file', path: diffPath });
-          }}
-        />
-      )}
-
-      {initPreflight && (
+      {initPreflight && projectRoot && (
         <InitDialog
           projectRoot={projectRoot}
           preflight={initPreflight}
@@ -286,228 +606,6 @@ export default function VersionPanel({ projectRoot, vc, onToast, onOpenHistory }
           onCancel={() => setInitPreflight(null)}
         />
       )}
-    </div>
-  );
-}
-
-// --- Help ---------------------------------------------------------------------------
-
-function HelpCard({ writable, onClose }: { writable: boolean; onClose: () => void }) {
-  return (
-    <div className="vc-help qa-vc-help">
-      <div className="d-flex justify-content-between align-items-center">
-        <span className="fw-semibold">How checkpoints work</span>
-        <button className="btn-plain" aria-label="Close" onClick={onClose}>
-          <i className="bi bi-x-lg" />
-        </button>
-      </div>
-      <ul className="vc-help-list small">
-        {/* The one place "Git" is named. Everywhere else in the UI it stays invisible on purpose
-            -- but the credit belongs here, and knowing the history is kept in a standard,
-            portable format is reassurance rather than jargon. */}
-        <li className="qa-vc-help-git">
-          Turn this on and MDE saves a checkpoint of everything you change in this folder, every
-          ten to thirty minutes, without being asked. It is a simplified, automatic front end to{' '}
-          <strong>Git</strong>, the version-control system programmers rely on -- you never have
-          to touch Git itself.
-        </li>
-        <li>
-          A <strong>checkpoint</strong> is a snapshot of every file in this folder at one
-          moment. MDE saves one automatically after things have been quiet for a bit, and
-          at most about once every ten minutes.
-        </li>
-        <li>
-          <strong>Changes</strong> lists everything that has moved since the last
-          checkpoint -- yours and anything Claude or another program did. The number on the
-          tab is that same count.
-        </li>
-        <li>
-          Click any file to see <strong>exactly what changed</strong>. Added words are
-          green, removed words are red.
-        </li>
-        <li>
-          <strong>Browse all checkpoints</strong> opens the full history in a tab, where you
-          can work back through every checkpoint, see how much each file changed, and give a
-          checkpoint a clearer description with the pencil.
-        </li>
-        {writable && (
-          <li>
-            Don't like a change? In that tab, find the file inside a checkpoint and press{' '}
-            <em>Restore</em>. MDE then asks which version you want: the way it was{' '}
-            <em>before</em> that change, or the way it came out <em>after</em> it. You can also
-            restore the whole folder to that point.
-          </li>
-        )}
-        <li>
-          To follow just one file, right-click it in the file list (or its tab) and choose{' '}
-          <strong>View change history</strong>.
-        </li>
-        <li>
-          Nothing is ever thrown away. Restoring adds a new checkpoint on top, so the
-          version you had a moment ago is still there to go back to.
-        </li>
-        {writable && (
-          <li>
-            Want to mark a moment yourself? Type a short note and press{' '}
-            <em>Save checkpoint</em>.
-          </li>
-        )}
-      </ul>
-    </div>
-  );
-}
-
-// --- Changes ------------------------------------------------------------------------
-
-interface ChangesSectionProps {
-  files: VcChangedFile[];
-  message: string;
-  busy: boolean;
-  onMessageChange: (value: string) => void;
-  onSave: () => void;
-  onOpenDiff: (path: string) => void;
-}
-
-function ChangesSection({ files, message, busy, onMessageChange, onSave, onOpenDiff }: ChangesSectionProps) {
-  return (
-    <div className="vc-section qa-vc-changes">
-      <div className="vc-section-title">
-        Changes{files.length > 0 ? ` (${files.length})` : ''}
-      </div>
-
-      {files.length === 0 ? (
-        <div className="vc-empty small text-muted qa-vc-changes-empty">
-          <i className="bi bi-check-circle text-success" /> Everything here is saved to history.
-        </div>
-      ) : (
-        <div className="vc-file-list">
-          {files.map(file => (
-            <button
-              key={file.path}
-              className="vc-file-row qa-vc-change-row"
-              title={file.path}
-              onClick={() => onOpenDiff(file.path)}
-            >
-              <i className={`bi ${KIND_ICON[file.kind]} ${KIND_CLASS[file.kind]}`} />
-              <span className="vc-file-name text-truncate">{basename(file.path) || file.path}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="vc-save-row">
-        <input
-          className="vc-message-input qa-vc-message"
-          placeholder="What changed? (optional)"
-          value={message}
-          disabled={busy}
-          onChange={e => onMessageChange(e.target.value)}
-          onKeyDown={e => {
-            e.stopPropagation();
-            if (e.key === 'Enter' && files.length > 0) onSave();
-          }}
-        />
-        <button
-          className="btn btn-sm btn-primary qa-vc-save"
-          disabled={busy || files.length === 0}
-          onClick={onSave}
-        >
-          Save checkpoint
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// --- History ------------------------------------------------------------------------
-
-const PAGE_SIZE = 30;
-
-interface HistorySectionProps {
-  projectRoot: string;
-  historyKey: number;
-  onOpenHistory: (target: HistoryTarget) => void;
-}
-
-function HistorySection({ projectRoot, historyKey, onOpenHistory }: HistorySectionProps) {
-  const [checkpoints, setCheckpoints] = useState<VcCheckpoint[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [exhausted, setExhausted] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    window.mde.vcHistory(projectRoot, { limit: PAGE_SIZE }).then(result => {
-      if (cancelled) return;
-      setCheckpoints(result);
-      setExhausted(result.length < PAGE_SIZE);
-      setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [projectRoot, historyKey]);
-
-  const loadMore = useCallback(async () => {
-    const last = checkpoints[checkpoints.length - 1];
-    if (!last) return;
-    const more = await window.mde.vcHistory(projectRoot, { limit: PAGE_SIZE, before: last.sha });
-    setCheckpoints(prev => [...prev, ...more]);
-    if (more.length < PAGE_SIZE) setExhausted(true);
-  }, [projectRoot, checkpoints]);
-
-  return (
-    <div className="vc-section qa-vc-history">
-      <div className="vc-section-title">History</div>
-
-      <button
-        className="btn btn-sm vc-browse-btn qa-vc-browse"
-        onClick={() => onOpenHistory({ kind: 'all' })}
-      >
-        <i className="bi bi-clock-history" /> Browse all checkpoints
-      </button>
-
-      {loading && <div className="vc-empty small text-muted">Loading...</div>}
-
-      {!loading && checkpoints.length === 0 && (
-        <div className="vc-empty small text-muted qa-vc-history-empty">
-          No checkpoints yet.
-        </div>
-      )}
-
-      {checkpoints.map(checkpoint => (
-        <CheckpointRow
-          key={checkpoint.sha}
-          checkpoint={checkpoint}
-          onOpen={() => onOpenHistory({ kind: 'checkpoint', checkpoint })}
-        />
-      ))}
-
-      {!loading && !exhausted && (
-        <button className="btn btn-sm mt-2 qa-vc-more" onClick={loadMore}>
-          Show older checkpoints
-        </button>
-      )}
-    </div>
-  );
-}
-
-const CHECKPOINT_ICON: Record<VcCheckpoint['kind'], string> = {
-  auto: 'bi-clock',
-  manual: 'bi-bookmark-fill',
-  restore: 'bi-arrow-counterclockwise',
-};
-
-/** A one-line summary that opens the history tab at this checkpoint. No expansion, by design. */
-function CheckpointRow({ checkpoint, onOpen }: { checkpoint: VcCheckpoint; onOpen: () => void }) {
-  return (
-    <div className="vc-checkpoint">
-      <button className="vc-checkpoint-row qa-vc-checkpoint" onClick={onOpen}>
-        <i className={`bi ${CHECKPOINT_ICON[checkpoint.kind]} vc-checkpoint-icon`} />
-        <span className="vc-checkpoint-text">
-          <span className="vc-checkpoint-subject text-truncate">{checkpoint.subject}</span>
-          <span className="small text-muted">{formatRelativeTime(checkpoint.timestamp)}</span>
-        </span>
-        <i className="bi bi-chevron-right vc-checkpoint-chevron" />
-      </button>
     </div>
   );
 }
@@ -531,7 +629,11 @@ function InitDialog({ projectRoot, preflight, busy, onConfirm, onCancel }: InitD
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      // Sits on top of the Settings dialog -- see the same note in CheckpointHelpDialog.
+      e.stopPropagation();
+      onCancel();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -550,6 +652,10 @@ function InitDialog({ projectRoot, preflight, busy, onConfirm, onCancel }: InitD
           <p className="small">
             MDE will start saving snapshots of <strong>{basename(projectRoot) || projectRoot}</strong>{' '}
             so you can see what changed and go back if you need to.
+          </p>
+          <p className="small text-muted">
+            You save them yourself to begin with. If you would rather MDE did it for you, turn on{' '}
+            <strong>Save checkpoints automatically</strong> afterwards.
           </p>
 
           {blocked && (
@@ -615,14 +721,14 @@ function InitDialog({ projectRoot, preflight, busy, onConfirm, onCancel }: InitD
 }
 
 interface RestoreAllDialogProps {
-  checkpoint: VcCheckpoint;
+  checkpoint: { subject: string; timestamp: number; parent?: string };
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
 export function RestoreAllDialog({ checkpoint, busy, onConfirm, onCancel }: RestoreAllDialogProps) {
-  const confirmRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = React.useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     confirmRef.current?.focus();

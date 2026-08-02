@@ -315,6 +315,57 @@ function looksBinary(filepath: string, content: string | null): boolean {
 }
 
 /**
+ * How far each UNCOMMITTED file has moved: lines gained and lost against the last checkpoint.
+ *
+ * A separate call from `computeStatus` for the same reason `checkpointStats` is separate from
+ * `listCheckpoints`. `computeStatus` is what the poller runs on every tick, on a timer, forever;
+ * it is a single status walk and it must stay one. This is two reads and a diff PER FILE, so it
+ * is only ever run by a renderer that has already painted the list and wants to fill in numbers.
+ *
+ * A file that could not be measured -- binary, oversized, unreadable -- is ABSENT from the
+ * result rather than present with zeros, so the caller renders nothing instead of claiming the
+ * file did not really change.
+ */
+export async function statusCounts(
+  root: string,
+  paths: string[]
+): Promise<Record<string, { added: number; removed: number }>> {
+  const counts: Record<string, { added: number; removed: number }> = {};
+  if (paths.length > COUNT_FILE_LIMIT) return counts;
+
+  let head: string | null = null;
+  try {
+    head = await git.resolveRef({ fs, dir: root, ref: 'HEAD' });
+  } catch {
+    head = null; // no checkpoints yet: everything reads as newly added
+  }
+
+  for (const filepath of paths) {
+    if (BINARY_EXT.has(path.extname(filepath).toLowerCase())) continue;
+    try {
+      const beforeBytes = head ? await readBlobAt(root, head, filepath) : null;
+      let afterBytes: Buffer | null = null;
+      try {
+        afterBytes = fs.readFileSync(path.join(root, filepath));
+      } catch {
+        afterBytes = null; // deleted in the working tree
+      }
+      const tooBig =
+        (beforeBytes?.length ?? 0) > COUNT_BYTE_LIMIT || (afterBytes?.length ?? 0) > COUNT_BYTE_LIMIT;
+      if (tooBig) continue;
+      const before = beforeBytes === null ? null : beforeBytes.toString('utf8');
+      const after = afterBytes === null ? null : afterBytes.toString('utf8');
+      if (looksBinary(filepath, before) || looksBinary(filepath, after)) continue;
+      counts[filepath] = countLines(before, after);
+    } catch {
+      // One unreadable file must not cost the rest of the list its counts.
+    }
+  }
+
+  return counts;
+}
+
+/**
  * Content before and after a change.
  *
  * With `sha`, compares that checkpoint against its parent (what this checkpoint did).

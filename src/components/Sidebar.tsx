@@ -20,11 +20,12 @@ interface SidebarProps {
   onDeleteFile: (filePath: string) => void;
   onFileRenamed?: (oldPath: string, newPath: string) => void;
   onOpenHistory: (target: HistoryTarget) => void;
+  onOpenSettings: () => void;
   // Undefined when the folder has no checkpoints; hides the context menu's history item.
   onViewFileHistory?: (relativePath: string) => void;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed, onOpenHistory, onViewFileHistory }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed, onOpenHistory, onOpenSettings, onViewFileHistory }: SidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const resizing = useRef(false);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -112,14 +113,24 @@ export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, 
           title="Checkpoints"
         >
           <i className="bi bi-clock-history" />
+          {/* Red exactly when the count is a CALL TO ACTION -- i.e. when nothing but the user
+              is ever going to clear it. In automatic mode the poller resolves it within
+              minutes whether or not anyone looks, and on a read-only folder MDE will never act
+              on it at all; both of those are status numbers, so both stay grey. */}
           {vc.files.length > 0 && vc.state.attach !== 'none' && (
-            <span className="sidebar-tab-badge qa-vc-badge">{vc.files.length}</span>
+            <span
+              className={`sidebar-tab-badge qa-vc-badge ${
+                vc.state.attach === 'managed' && vc.state.auto !== true ? 'sidebar-tab-badge-alert' : ''
+              }`}
+            >
+              {vc.files.length}
+            </span>
           )}
         </button>
       </div>
       <div className="sidebar-content">
         {mode === 'versions' ? (
-          <VersionPanel projectRoot={projectRoot} vc={vc} onToast={onToast} onOpenHistory={onOpenHistory} />
+          <VersionPanel projectRoot={projectRoot} vc={vc} onToast={onToast} onOpenHistory={onOpenHistory} onOpenSettings={onOpenSettings} />
         ) : mode === 'explorer' ? (
           <FileExplorer
             projectRoot={projectRoot}

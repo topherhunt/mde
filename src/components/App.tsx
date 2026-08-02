@@ -8,7 +8,7 @@ import ConflictBanner from './ConflictBanner';
 import FindBar from './FindBar';
 import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
-import { useVersionControl } from './VersionPanel';
+import { useVersionControl, VersionControl, CheckpointSettings } from './VersionPanel';
 import HistoryView, { HistoryNavRequest } from './HistoryView';
 import { DeleteConfirmDialog } from './FileContextMenu';
 import ImageWarningDialog from './ImageWarningDialog';
@@ -975,6 +975,7 @@ export default function App() {
           onDeleteFile={handleDeleteFile}
           onFileRenamed={handleFileRenamedInSidebar}
           onOpenHistory={openCheckpointHistory}
+          onOpenSettings={() => setSettingsOpen(true)}
           onViewFileHistory={viewFileHistory}
         />
         <div className="main-area">
@@ -1124,7 +1125,17 @@ export default function App() {
           onDismiss={() => setImageWarning(null)}
         />
       )}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} theme={theme} spellcheck={spellcheck} autosave={autosave} />}
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => setSettingsOpen(false)}
+          theme={theme}
+          spellcheck={spellcheck}
+          autosave={autosave}
+          projectRoot={state.projectRoot}
+          vc={vc}
+          onToast={showToast}
+        />
+      )}
       {wordCountOpen && <WordCountDialog editor={activeEditor} onClose={() => setWordCountOpen(false)} />}
       {toast && (
         <div className={`toast ${toast.variant ? `toast-${toast.variant}` : ''} ${toast.hiding ? 'toast-out' : ''}`}>{toast.msg}</div>
@@ -1133,7 +1144,20 @@ export default function App() {
   );
 }
 
-function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () => void; theme: string; spellcheck: boolean; autosave: boolean }) {
+interface SettingsDialogProps {
+  onClose: () => void;
+  theme: string;
+  spellcheck: boolean;
+  autosave: boolean;
+  // Checkpoints are a per-FOLDER setting living in an otherwise app-global dialog, which is why
+  // these three have to be threaded down here at all. `CheckpointSettings` names the folder so
+  // the mismatch is visible rather than misleading.
+  projectRoot: string | null;
+  vc: VersionControl;
+  onToast: (msg: string, variant?: string) => void;
+}
+
+function SettingsDialog({ onClose, theme, spellcheck, autosave, projectRoot, vc, onToast }: SettingsDialogProps) {
   const [status, setStatus] = useState<'checking' | 'idle' | 'installed' | 'installing' | 'done' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
   const [installNote, setInstallNote] = useState('');
@@ -1160,11 +1184,11 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop qa-settings" onClick={onClose}>
       <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <span className="fw-bold">Settings</span>
-          <button className="toolbar-btn" onClick={onClose}>&times;</button>
+          <button className="toolbar-btn qa-settings-close" onClick={onClose}>&times;</button>
         </div>
         <div className="modal-body">
           <div className="settings-row">
@@ -1242,6 +1266,8 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave }: { onClose: () 
           {status === 'error' && (
             <div className="settings-error">{errorMsg}</div>
           )}
+          <div className="settings-separator" />
+          <CheckpointSettings projectRoot={projectRoot} vc={vc} onToast={onToast} />
         </div>
       </div>
     </div>

@@ -1984,16 +1984,23 @@ body {
   height: 15px;
   padding: 0 4px;
   border-radius: 8px;
-  /* Deliberately neutral, never red. Red is a call to action, and there is no action to take:
-     checkpointing is automatic, so a pending count resolves itself within minutes whether or not
-     anyone looks at it. It is a status number, not an alert -- and on a folder MDE only reads
-     (foreign or stepped-back), it is not even something MDE will act on. */
+  /* Grey is the DEFAULT because the default mode resolves itself: in automatic mode the poller
+     clears this count within minutes whether or not anyone looks, and on a folder MDE only reads
+     (foreign or stepped-back) it is not something MDE will ever act on. Both are status numbers. */
   background: var(--text-muted);
   color: var(--bg);
   font-size: 10px;
   font-weight: 600;
   line-height: 15px;
   text-align: center;
+}
+
+/* Manual mode, and ONLY manual mode. Here the count is a genuine call to action: nothing but
+   the user pressing Save is ever going to clear it, so the colour is the difference between
+   "here is a number" and "this work is not in your history yet". */
+.sidebar-tab-badge-alert {
+  background: var(--danger);
+  color: #fff;
 }
 
 .vc-panel {
@@ -2022,16 +2029,9 @@ body {
   letter-spacing: 0.03em;
 }
 
-.vc-help {
-  margin: 0 8px 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-}
-
+/* Lives in a dialog, not the sidebar: it is nine paragraphs and the sidebar is 240px wide. */
 .vc-help-list {
-  margin: 6px 0 0;
+  margin: 0;
   padding-left: 16px;
   color: var(--text-muted);
   line-height: 1.5;
@@ -2119,6 +2119,15 @@ body {
   min-width: 0;
 }
 
+/* Right-aligned on the row, and allowed to keep its width when the filename has to truncate:
+   "+12 -3" is the reason to look at the row at all. */
+.vc-file-counts {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .vc-save-row {
   display: flex;
   flex-direction: column;
@@ -2140,57 +2149,6 @@ body {
 .vc-message-input:focus {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
-}
-
-.vc-checkpoint-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  width: 100%;
-  padding: 5px 4px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.vc-checkpoint-row:hover {
-  background: var(--bg-tertiary);
-}
-
-.vc-checkpoint-icon {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 2px;
-  flex-shrink: 0;
-}
-
-.vc-checkpoint-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-}
-
-.vc-checkpoint-subject {
-  font-weight: 500;
-}
-
-/* Says "this goes somewhere" -- the row is a link into the history tab, not an expander. */
-.vc-checkpoint-chevron {
-  font-size: 10px;
-  color: var(--text-muted);
-  margin-top: 3px;
-  flex-shrink: 0;
-  opacity: 0;
-}
-
-.vc-checkpoint-row:hover .vc-checkpoint-chevron {
-  opacity: 1;
 }
 
 .vc-warning {

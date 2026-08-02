@@ -16,6 +16,7 @@ import { VcState } from '../types';
 const KEY_MANAGED = 'mde.managed';
 const KEY_INITIALIZED = 'mde.initializedAt';
 const KEY_SCHEMA = 'mde.schemaVersion';
+const KEY_AUTO = 'mde.auto';
 const SCHEMA_VERSION = '1';
 
 export const DEFAULT_AUTHOR = { name: 'MDE', email: 'mde@localhost' };
@@ -60,10 +61,33 @@ export async function isManaged(root: string): Promise<boolean> {
   return (await getConfig(root, KEY_MANAGED)) === 'true';
 }
 
+/**
+ * Whether MDE checkpoints this folder on its own.
+ *
+ * A MISSING key reads as TRUE, and that asymmetry is the whole point: `writeMarker` writes the
+ * key explicitly on every new activation, so absence can only mean the folder was turned on
+ * before this setting existed -- back when automatic was the only behaviour there was. Those
+ * folders must keep checkpointing after an upgrade. Reading absence as false would silently
+ * switch off protection that someone is already relying on, and nothing in the UI would say so.
+ *
+ * This is NOT a second write permission. `mde.managed` still grants write mode and nothing else
+ * does; this only decides whether MDE acts on that permission unprompted.
+ */
+export async function isAuto(root: string): Promise<boolean> {
+  return (await getConfig(root, KEY_AUTO)) !== 'false';
+}
+
+export async function setAuto(root: string, auto: boolean): Promise<void> {
+  await git.setConfig({ fs, dir: root, path: KEY_AUTO, value: auto ? 'true' : 'false' });
+}
+
 export async function writeMarker(root: string): Promise<void> {
   await git.setConfig({ fs, dir: root, path: KEY_MANAGED, value: 'true' });
   await git.setConfig({ fs, dir: root, path: KEY_INITIALIZED, value: new Date().toISOString() });
   await git.setConfig({ fs, dir: root, path: KEY_SCHEMA, value: SCHEMA_VERSION });
+  // Automatic is OPT-IN. Turning checkpoints on and having the app start writing to the folder
+  // on a timer are two different consents, and this only asks for the first.
+  await git.setConfig({ fs, dir: root, path: KEY_AUTO, value: 'false' });
 }
 
 /**
@@ -99,7 +123,7 @@ export async function resolveState(root: string): Promise<VcState> {
   if (!managed) {
     // Heuristics change only the WORDING here, never the read-only decision.
     const reason = hasRemote
-      ? 'This folder is already set up for version control and syncs to another location, so it looks like a developer project. MDE is showing its history without making any changes.'
+      ? 'This folder is already set up for version control and syncs to a remote location, so it looks like a developer project. MDE is showing its history without making any changes.'
       : 'This folder already has version history that MDE did not create. MDE is showing it without making any changes.';
     return { attach: 'foreign', reason, branch, hasRemote, branchCount: branches.length };
   }
@@ -107,7 +131,7 @@ export async function resolveState(root: string): Promise<VcState> {
   if (hasRemote) {
     return {
       attach: 'steppedBack',
-      reason: 'This folder now syncs to another location, so MDE has stepped back to read-only to avoid interfering with it.',
+      reason: 'This folder now syncs to a remote location, so MDE has stepped back to read-only to avoid interfering with it.',
       branch,
       hasRemote,
     };
@@ -122,7 +146,7 @@ export async function resolveState(root: string): Promise<VcState> {
     };
   }
 
-  return { attach: 'managed', branch, hasRemote: false };
+  return { attach: 'managed', branch, hasRemote: false, auto: await isAuto(root) };
 }
 
 export async function canWrite(root: string): Promise<boolean> {

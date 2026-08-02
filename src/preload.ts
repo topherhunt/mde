@@ -273,6 +273,10 @@ const api = {
     ipcRenderer.invoke('vc-checkpoint-files', root, sha, opts),
   vcCheckpointStats: (root: string, shas: string[]) =>
     ipcRenderer.invoke('vc-checkpoint-stats', root, shas),
+  vcStatusCounts: (root: string, paths: string[]) =>
+    ipcRenderer.invoke('vc-status-counts', root, paths),
+  vcSetAuto: (root: string, auto: boolean) =>
+    ipcRenderer.invoke('vc-set-auto', root, auto),
   vcSetTitle: (root: string, sha: string, title: string) =>
     ipcRenderer.invoke('vc-set-title', root, sha, title),
   vcDiff: (root: string, filePath: string, sha?: string) =>

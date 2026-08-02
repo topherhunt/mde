@@ -2,11 +2,11 @@ import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme } from 'e
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
-import { resolveState, initRepo, adoptRepo, findParentRepo } from './git/repo';
+import { resolveState, initRepo, adoptRepo, findParentRepo, setAuto } from './git/repo';
 import { computeStatus } from './git/status';
 import { preflight, seedIgnoreFile } from './git/guards';
 import { createCheckpoint } from './git/checkpoint';
-import { listCheckpoints, listFileCheckpoints, checkpointFiles, checkpointStats, diffFile } from './git/history';
+import { listCheckpoints, listFileCheckpoints, checkpointFiles, checkpointStats, statusCounts, diffFile } from './git/history';
 import { restoreFile, restoreAll } from './git/restore';
 import { setTitle } from './git/titles';
 import {
@@ -1239,6 +1239,28 @@ ipcMain.handle('vc-checkpoint-stats', async (_event, root: string, shas: string[
     return await checkpointStats(root, shas || []);
   } catch {
     return {};
+  }
+});
+
+ipcMain.handle('vc-status-counts', async (_event, root: string, paths: string[]) => {
+  try {
+    return await statusCounts(root, paths || []);
+  } catch {
+    return {};
+  }
+});
+
+// Automatic checkpointing on/off. Managed-only, like every other write into .git -- and this
+// really is a write, into .git/config. The poller re-reads it through resolveState on every
+// tick, so there is nothing to notify: the next tick simply behaves differently.
+ipcMain.handle('vc-set-auto', async (_event, root: string, auto: boolean) => {
+  const blocked = await requireManaged(root);
+  if (blocked) return { ok: false, error: blocked };
+  try {
+    await setAuto(root, auto);
+    return { ok: true };
+  } catch (error: any) {
+    return { ok: false, error: error?.message || String(error) };
   }
 });
 

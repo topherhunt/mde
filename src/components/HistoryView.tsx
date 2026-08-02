@@ -5,10 +5,15 @@
 // checkpoint's changed files, and one file's diff. The list also has a SCOPE (see `Scope`) so
 // the same three levels serve "every checkpoint" and "just the ones that touched this file".
 //
+// Uncommitted work reuses the bottom two levels rather than getting a screen of its own
+// (`working` / `workingFile`): it is the checkpoint that has not happened yet, so it sits in
+// the checkpoint crumb's slot and drills into a file diff exactly like a real one does.
+//
 // This is the ONLY checkpoint drill-down in the app. The sidebar panel stays the glance
-// ("what has moved since the last checkpoint, save one now") and routes every click here;
-// everything you'd want a whole window for happens in this view, where a prose diff finally
-// has the width to be readable.
+// ("what has moved since the last checkpoint, save one now") and routes every click here --
+// including a click on a changed file, which lands on `workingFile`. Everything you'd want a
+// whole window for happens in this view, where a prose diff finally has the width to be
+// readable.
 //
 // Restore goes through src/components/vcRestore.ts rather than being re-implemented, so this
 // view and the sidebar can never disagree about what just happened to the user's files.
@@ -16,7 +21,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { HistoryTarget, VcChangedFile, VcChangeKind, VcCheckpoint, VcCheckpointStat } from '../types';
 import DiffView from './DiffView';
-import { VersionControl, formatRelativeTime, RestoreAllDialog } from './VersionPanel';
+import { VersionControl, formatRelativeTime, RestoreAllDialog, ChangesSection } from './VersionPanel';
 import { restoreEverything, restoreOneFile } from './vcRestore';
 import RestoreFileDialog from './RestoreFileDialog';
 import { basename } from '../utils/paths';
@@ -63,10 +68,16 @@ function formatAbsoluteTime(timestamp: number): string {
  */
 type Scope = { kind: 'all' } | { kind: 'file'; path: string };
 
+// `working` and `workingFile` are the checkpoint and file levels for work that has NOT been
+// checkpointed yet -- the same two shapes, one step to the left of the first checkpoint. They
+// carry no scope: "unsaved changes to this one file" is a diff, which is exactly `workingFile`,
+// so a scope would only ever filter a list of one.
 type Nav =
   | { level: 'list'; scope: Scope }
   | { level: 'checkpoint'; scope: Scope; checkpoint: VcCheckpoint }
-  | { level: 'file'; scope: Scope; checkpoint: VcCheckpoint; path: string };
+  | { level: 'file'; scope: Scope; checkpoint: VcCheckpoint; path: string }
+  | { level: 'working' }
+  | { level: 'workingFile'; path: string };
 
 const ALL: Scope = { kind: 'all' };
 
@@ -88,6 +99,9 @@ interface HistoryViewProps {
 function navFor(target: HistoryTarget | undefined): Nav {
   if (!target || target.kind === 'all') return { level: 'list', scope: ALL };
   if (target.kind === 'file') return { level: 'list', scope: { kind: 'file', path: target.path } };
+  if (target.kind === 'working') {
+    return target.path ? { level: 'workingFile', path: target.path } : { level: 'working' };
+  }
   return { level: 'checkpoint', scope: ALL, checkpoint: target.checkpoint };
 }
 
@@ -110,9 +124,11 @@ export default function HistoryView({ projectRoot, vc, onToast, navRequest }: Hi
     useState<{ checkpoint: VcCheckpoint; path: string; kind: VcChangeKind } | null>(null);
 
   const writable = vc.state.attach === 'managed';
+  // The working levels have no scope of their own; they sit under the unfiltered list.
+  const scope: Scope = 'scope' in nav ? nav.scope : ALL;
   // A plain string, not the scope object: the load effect depends on it, and a fresh object
   // identity on every render would refetch forever.
-  const scopePath = nav.scope.kind === 'file' ? nav.scope.path : '';
+  const scopePath = scope.kind === 'file' ? scope.path : '';
 
   // External navigation: the Browse button, a sidebar checkpoint, or "view change history" on a
   // file. Browse sends `all`, which is also what makes it ZOOM BACK OUT when the tab is already
@@ -138,7 +154,7 @@ export default function HistoryView({ projectRoot, vc, onToast, navRequest }: Hi
       // A checkpoint being viewed may have just been retitled, so re-read it from the fresh
       // page rather than leaving a stale subject in the breadcrumb and header.
       setNav(prev => {
-        if (prev.level === 'list') return prev;
+        if (prev.level !== 'checkpoint' && prev.level !== 'file') return prev;
         const fresh = result.find(c => c.sha === prev.checkpoint.sha);
         return fresh ? { ...prev, checkpoint: fresh } : prev;
       });
@@ -226,7 +242,7 @@ export default function HistoryView({ projectRoot, vc, onToast, navRequest }: Hi
       <div className="history-view history-empty qa-hist-off">
         <p>Checkpoints are off for this folder.</p>
         <p className="small text-muted">
-          Open the Checkpoints tab in the sidebar to turn them on.
+          Turn them on in Settings, under Checkpoints.
         </p>
       </div>
     );
@@ -242,31 +258,45 @@ export default function HistoryView({ projectRoot, vc, onToast, navRequest }: Hi
         >
           Checkpoints
         </button>
-        {nav.scope.kind === 'file' && (
+        {scope.kind === 'file' && (
           <>
             <i className="bi bi-chevron-right history-crumb-sep" />
             <button
               className="history-crumb qa-hist-crumb-scope"
               disabled={nav.level === 'list'}
-              onClick={() => setNav({ level: 'list', scope: nav.scope })}
+              onClick={() => setNav({ level: 'list', scope })}
             >
-              Changes to {basename(nav.scope.path) || nav.scope.path}
+              Changes to {basename(scope.path) || scope.path}
             </button>
           </>
         )}
-        {nav.level !== 'list' && (
+        {(nav.level === 'checkpoint' || nav.level === 'file') && (
           <>
             <i className="bi bi-chevron-right history-crumb-sep" />
             <button
               className="history-crumb qa-hist-crumb-checkpoint"
               disabled={nav.level === 'checkpoint'}
-              onClick={() => setNav({ level: 'checkpoint', scope: nav.scope, checkpoint: nav.checkpoint })}
+              onClick={() => setNav({ level: 'checkpoint', scope, checkpoint: nav.checkpoint })}
             >
               {nav.checkpoint.subject}
             </button>
           </>
         )}
-        {nav.level === 'file' && (
+        {/* Occupies the checkpoint crumb's slot, because that is what it is: the pending
+            checkpoint, the one that has not happened yet. */}
+        {(nav.level === 'working' || nav.level === 'workingFile') && (
+          <>
+            <i className="bi bi-chevron-right history-crumb-sep" />
+            <button
+              className="history-crumb qa-hist-crumb-working"
+              disabled={nav.level === 'working'}
+              onClick={() => setNav({ level: 'working' })}
+            >
+              Unsaved changes
+            </button>
+          </>
+        )}
+        {(nav.level === 'file' || nav.level === 'workingFile') && (
           <>
             <i className="bi bi-chevron-right history-crumb-sep" />
             <span className="history-crumb history-crumb-current qa-hist-crumb-file">{nav.path}</span>
@@ -279,11 +309,11 @@ export default function HistoryView({ projectRoot, vc, onToast, navRequest }: Hi
           <CheckpointList
             checkpoints={checkpoints}
             stats={stats}
-            scope={nav.scope}
+            scope={scope}
             loading={loading}
             exhausted={exhausted}
             writable={writable}
-            onOpen={checkpoint => setNav({ level: 'checkpoint', scope: nav.scope, checkpoint })}
+            onOpen={checkpoint => setNav({ level: 'checkpoint', scope, checkpoint })}
             onLoadMore={loadMore}
             onSaveTitle={saveTitle}
           />
@@ -295,7 +325,7 @@ export default function HistoryView({ projectRoot, vc, onToast, navRequest }: Hi
             checkpoint={nav.checkpoint}
             writable={writable}
             busy={busy}
-            onOpenFile={path => setNav({ level: 'file', scope: nav.scope, checkpoint: nav.checkpoint, path })}
+            onOpenFile={path => setNav({ level: 'file', scope, checkpoint: nav.checkpoint, path })}
             onRestoreFile={(path, kind) =>
               setRestoreFileTarget({ checkpoint: nav.checkpoint, path, kind })}
             onRestoreAll={() => setRestoreAllTarget(nav.checkpoint)}
@@ -310,7 +340,7 @@ export default function HistoryView({ projectRoot, vc, onToast, navRequest }: Hi
             filePath={nav.path}
             sha={nav.checkpoint.sha}
             subtitle={`As it was after "${nav.checkpoint.subject}"`}
-            onClose={() => setNav({ level: 'checkpoint', scope: nav.scope, checkpoint: nav.checkpoint })}
+            onClose={() => setNav({ level: 'checkpoint', scope, checkpoint: nav.checkpoint })}
             onRestore={
               writable
                 ? (path, kind) => setRestoreFileTarget({ checkpoint: nav.checkpoint, path, kind })
@@ -323,6 +353,44 @@ export default function HistoryView({ projectRoot, vc, onToast, navRequest }: Hi
                 ? undefined
                 : () => setNav({ level: 'list', scope: { kind: 'file', path: nav.path } })
             }
+          />
+        )}
+
+        {nav.level === 'working' && (
+          <div className="qa-hist-working">
+            <div className="history-detail-header">
+              <div className="history-detail-title">
+                <div className="history-detail-subject">Unsaved changes</div>
+                <div className="small text-muted">
+                  Everything that has moved since the last checkpoint. Save one and this list
+                  becomes the next entry in the history.
+                </div>
+              </div>
+            </div>
+            {/* The SAME component the sidebar renders, not a wider copy of it. */}
+            <ChangesSection
+              projectRoot={projectRoot}
+              files={vc.files}
+              onToast={onToast}
+              onSaved={vc.refresh}
+              onOpenDiff={path => setNav({ level: 'workingFile', path })}
+            />
+          </div>
+        )}
+
+        {nav.level === 'workingFile' && (
+          <DiffView
+            variant="inline"
+            projectRoot={projectRoot}
+            filePath={nav.path}
+            // No sha: DiffView compares the working copy against the last checkpoint.
+            subtitle="Compared with the last checkpoint -- not saved to history yet"
+            onClose={() => setNav({ level: 'working' })}
+            // Deliberately no Restore. Every restore in this app puts a file back to a version
+            // that IS in the history; throwing away work that was never checkpointed is a
+            // different and unrecoverable thing, and it is not what this button means anywhere
+            // else.
+            onViewFileHistory={() => setNav({ level: 'list', scope: { kind: 'file', path: nav.path } })}
           />
         )}
       </div>
@@ -392,7 +460,7 @@ function CheckpointList({ checkpoints, stats, scope, loading, exhausted, writabl
           </div>
         </div>
       )}
-      <div className="history-list">
+      <div className="history-list qa-hist-list">
         {checkpoints.map(checkpoint => (
           // The WHOLE row drills in -- there is no "see what changed" button, because a row that
           // is entirely clickable does not need one and the width is better spent on the title.

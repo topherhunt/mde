@@ -49,6 +49,12 @@ export type VcAttachState = 'none' | 'managed' | 'foreign' | 'steppedBack';
 
 export interface VcState {
   attach: VcAttachState;
+  // Only meaningful for 'managed'. False means MANUAL mode: MDE never creates a checkpoint on
+  // its own -- not on a timer, not on quit -- and only the Save button does. This is the off
+  // switch for the feature; there is deliberately no separate "un-adopt", because a folder MDE
+  // writes nothing to on its own is already off. See `isAuto` in src/git/repo.ts for why a
+  // MISSING key reads as true.
+  auto?: boolean;
   // Human-readable explanation for the non-writable states, shown verbatim in the panel.
   reason?: string;
   branch?: string | null;
@@ -132,6 +138,10 @@ export interface VcPreflight {
 export type HistoryTarget =
   | { kind: 'all' }
   | { kind: 'checkpoint'; checkpoint: VcCheckpoint }
+  // Work that has not been checkpointed yet, as a pseudo-checkpoint sitting at the same level as
+  // a real one. With a path it opens that file's working-copy diff directly, which is what
+  // clicking a row in the sidebar's Changes list does.
+  | { kind: 'working'; path?: string }
   // Repo-relative path. Only the LIST is filtered -- drilling into a checkpoint from here still
   // shows everything that checkpoint touched, because "what else moved at the same time" is the
   // next question and hiding it would make the checkpoint look smaller than it was.
@@ -255,6 +265,16 @@ export interface MdeAPI {
   // the list itself: it costs a diff per changed file, and the list must not wait on it.
   // A sha with nothing measurable is simply absent from the result.
   vcCheckpointStats: (root: string, shas: string[]) => Promise<Record<string, VcCheckpointStat>>;
+  // Turns automatic checkpointing on or off for this folder. Managed-only, and stored in
+  // .git/config so it travels with the folder rather than with this machine.
+  vcSetAuto: (root: string, auto: boolean) => Promise<{ ok: boolean; error?: string }>;
+  // Line counts for UNCOMMITTED changes, keyed by repo-relative path. Same rationale as
+  // vcCheckpointStats: `vcGetStatus` is the cheap walk the poller runs constantly, and it must
+  // never grow a per-file diff. A path with nothing measurable is absent, never zero.
+  vcStatusCounts: (
+    root: string,
+    paths: string[]
+  ) => Promise<Record<string, { added?: number; removed?: number }>>;
   // Stores a display title in a sidecar inside .git. Deliberately NOT a commit rewrite --
   // see the header of src/git/titles.ts. Pass '' to go back to the generated title.
   vcSetTitle: (root: string, sha: string, title: string) => Promise<{ ok: boolean; error?: string }>;

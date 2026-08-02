@@ -117,6 +117,20 @@ async function tick(state: RootState): Promise<void> {
     state.lastStatusMs = durationMs;
     events?.onStatus(state.root, files);
 
+    // Manual mode. The status walk above still runs and still publishes, because the badge is
+    // MORE useful here, not less: nothing is going to clear that count except the user. Only the
+    // commit is skipped.
+    //
+    // Clearing lastSignature is required, not tidiness. The poll gate keeps ticking while a
+    // signature is recorded ("there are changes, keep watching until they are committed"), and in
+    // manual mode that condition is never satisfied -- the poller would spin at its full rate
+    // forever on any folder with one uncommitted file. The watcher still sets sawChange on every
+    // filesystem event, so the badge stays live without it.
+    if (!vcState.auto) {
+      state.lastSignature = null;
+      return;
+    }
+
     // Guard: never commit nothing. Also resets the settle so a later change starts fresh.
     if (files.length === 0) {
       state.lastSignature = null;
@@ -192,12 +206,17 @@ export function noteCheckpoint(root: string): void {
  * This matters MORE under the 10-minute rule, not less, because that rule can legitimately
  * leave up to ten minutes of work uncaptured. Bypasses both the eligibility gate and the
  * settle window: we are shutting down, so there is no later opportunity.
+ *
+ * It does NOT bypass manual mode. Someone who turned automatic checkpointing off did so to
+ * decide for themselves when a checkpoint happens, and a surprise one on quit is exactly the
+ * behaviour they opted out of. Nothing is at risk either way: their files are already on disk.
  */
 export async function flushRoot(root: string): Promise<void> {
   const state = roots.get(root);
   if (!state) return;
   try {
-    if ((await resolveState(root)).attach !== 'managed') return;
+    const vcState = await resolveState(root);
+    if (vcState.attach !== 'managed' || !vcState.auto) return;
     const result = await createCheckpoint(root, 'auto');
     if (result) {
       state.lastCommitAt = Date.now();
