@@ -1,5 +1,6 @@
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { Editor as TipTapEditor } from '@tiptap/react';
+import { PALETTE, PaletteColor } from '../utils/colorMarks';
 
 // Platform-aware modifier label for shortcut hints in tooltips.
 const MOD = window.mde?.platform === 'darwin' ? 'Cmd' : 'Ctrl';
@@ -127,6 +128,28 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit, leav
           title="Highlight selection"
           active={editor.isActive('highlight')}
           onClick={() => editor.chain().focus().toggleHighlight().run()}
+          className="qa-highlight-toggle"
+        />
+        <ColorPicker
+          kind="text-color"
+          icon="fonts"
+          title="Text color"
+          current={editor.getAttributes('textColor').color ?? null}
+          onPick={(color) => {
+            const chain = editor.chain().focus();
+            (color ? chain.setMark('textColor', { color }) : chain.unsetMark('textColor')).run();
+          }}
+        />
+        <ColorPicker
+          kind="highlight"
+          icon="paint-bucket"
+          title="Highlight color"
+          current={editor.isActive('highlight') ? (editor.getAttributes('highlight').color ?? 'yellow') : null}
+          onPick={(color) => {
+            const chain = editor.chain().focus();
+            // Yellow is the plain `==text==` highlight, not a named `=={yellow}` one.
+            (color ? chain.setMark('highlight', { color: color === 'yellow' ? null : color }) : chain.unsetMark('highlight')).run();
+          }}
         />
       </div>
 
@@ -234,6 +257,78 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit, leav
           className="toolbar-collapse qa-toolbar-collapse"
         />
       </div>
+    </div>
+  );
+}
+
+interface ColorPickerProps {
+  kind: 'text-color' | 'highlight';
+  icon: string;
+  title: string;
+  current: PaletteColor | null;
+  onPick: (color: PaletteColor | null) => void;
+}
+
+// Swatches read the same theme variables the editor renders with, so they switch shade
+// with light/dark mode on their own.
+function ColorPicker({ kind, icon, title, current, onPick }: ColorPickerProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const shade = (color: PaletteColor) => `var(--${kind}-${color})`;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  // Every control acts on mousedown with preventDefault so the editor keeps its selection.
+  const pick = (e: React.MouseEvent, color: PaletteColor | null) => {
+    e.preventDefault();
+    onPick(color);
+    setOpen(false);
+  };
+
+  return (
+    <div className="color-picker" ref={ref}>
+      <button
+        className={`toolbar-btn qa-${kind}-btn ${open ? 'active' : ''}`}
+        data-tooltip={title}
+        aria-label={title}
+        aria-expanded={open}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          setOpen(o => !o);
+        }}
+      >
+        <i className={`bi bi-${icon}`} />
+        <span className="color-picker-bar" style={{ background: current ? shade(current) : 'transparent' }} />
+      </button>
+      {open && (
+        <div className={`color-picker-menu qa-${kind}-menu`} role="menu">
+          <div className="color-picker-grid">
+            {PALETTE.map(color => (
+              <button
+                key={color}
+                className={`color-swatch qa-swatch-${color} ${current === color ? 'active' : ''}`}
+                style={{ background: shade(color) }}
+                data-tooltip={color}
+                aria-label={color}
+                onMouseDown={(e) => pick(e, color)}
+              />
+            ))}
+          </div>
+          <button className="color-picker-none qa-swatch-none" onMouseDown={(e) => pick(e, null)}>
+            {kind === 'highlight' ? 'No highlight' : 'Default color'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

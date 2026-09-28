@@ -58,6 +58,7 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 
 - `tiptap-markdown` handles MD parse/serialize. The TipTap document model is the source of truth while editing. TipTap (ProseMirror) for the editor, not raw contenteditable.
 - tiptap-markdown runs with `html: false`, so raw HTML tags are literal text. The text node serializer skips `escapeHTML` so prose like "Apples > oranges." survives verbatim. A lone `~` is deliberately un-escaped on save. -> notes: Markdown serialization
+- Highlight and text color are MDE syntax (`==x==`, `=={blue}x==`, `[x]{red}`) in `utils/colorMarks.ts`; files store palette NAMES, CSS picks the per-theme shade. The text-color rule MUST decline in markdown-it's silent mode, or colored words inside link text break the link. Both marks outrank Link (so they render outside it) and are `mixable`. Inline code no longer excludes them. -> notes: Markdown serialization
 - `LeadingParagraph` guarantees a document never starts with a code fence. -> notes: Editor wiring
 - Syntax highlighting is deliberately OFF. Plain `CodeBlock`, not `CodeBlockLowlight`. The copy button is a NodeView. -> notes: Editor wiring
 - ProseMirror decorations power find-match highlighting and link-bar selection preservation. Always clean up decoration plugins on unmount.
@@ -163,7 +164,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-212 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+241 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 
@@ -188,7 +189,7 @@ CSS variables for theming (defined in `:root`, `[data-theme="dark"]`, and `@medi
 - Danger: `--danger`, `--danger-bg`, `--danger-border`, `--danger-text`
 - Info: `--info-text`
 - Code: `--code-bg`, `--code-text`
-- Highlight: `--highlight-bg`
+- Palette: `--highlight-<name>` and `--text-color-<name>` for each `PALETTE` name in `utils/colorMarks.ts` (gray, brown, red, orange, yellow, lime, green, blue, purple, pink). Pale highlights / saturated text in light mode, deep highlights / bright text in dark mode.
 
 When adding component styles:
 

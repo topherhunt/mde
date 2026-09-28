@@ -106,6 +106,19 @@ The real fix is a schema that can hold the node; until then `findImageReferences
 
 `prosemirror-markdown`'s `esc()` escapes every `~`, so prose like "approx ~5" hit disk as `approx \~5`; markdown-it only opens a strikethrough on a DOUBLED `~~`, so a single tilde needs no escape. The `TextNode` override in Editor.tsx un-escapes just the span `state.text()` appended (`state.out` is a mutable public field), using `/(?<!\\~)\\~(?!\\~)/g` so a `\~` adjacent to another `\~` is LEFT escaped -- under-escaping there would silently turn literal `~~text~~` into a real strike on the next load, and over-escaping is the safe direction. This is a serializer change, so it affects saved files as well as the clipboard.
 
+### Highlight and text color (`utils/colorMarks.ts`)
+
+MDE-specific syntax: `==text==` (yellow), `=={blue}text==` (named highlight), `[text]{red}` (text color). Only the ten `PALETTE` names are colors; anything else stays literal. Files store the NAME; CSS maps it to a per-theme shade (`--highlight-<name>` / `--text-color-<name>`), which is why the palette never has to be light- or dark-specific in the file. Stock Highlight had no Markdown serializer, and tiptap-markdown's HTML fallback emits `""` under `html: false`, so every highlight was silently dropped on save.
+
+- **`textColorRule` returns false in silent mode, deliberately.** markdown-it's `parseLinkLabel(..., disableNested=true)` probes the label with `skipToken` (silent mode) and rejects the link if any complete bracketed token appears inside it. If the rule matched there, `[read the [docs]{red}](a.md)` would stop being a link. Declining makes the inner brackets plain nesting, which the link rule allows, and the real (non-silent) pass still colors them.
+- **Priorities put both marks OUTSIDE links** (highlight 1200, textColor 1100, Link 1000): a highlight around a link is one continuous `<mark>` rather than three padded pieces, and a link inside colored text keeps its own color and underline. Cmd+click uses `closest('a')`, so nesting order doesn't matter to it.
+- **Both marks are `mixable`**, or prosemirror-markdown won't reorder them around links/bold and emits unbalanced delimiters. Highlight also has `expelEnclosingWhitespace`, since `== x==` cannot open.
+- **Inline code no longer excludes every mark** (`Code.extend({ excludes: 'bold italic strike underline link' })`). Stock `excludes: '_'` meant a loaded `==a `x` b==` lost the highlight on `x`. Markdown can express color around code because code is always the innermost mark.
+- **`parse.setup` is guarded by a WeakSet.** tiptap-markdown calls it on EVERY parse against the same markdown-it instance, so unguarded rules pile up.
+- **Escaping** (`escapeColorSyntax`, applied in the `TextNode` serializer): a `==` run not spaced on both sides becomes `\=\=` (a text-node edge counts as unspaced), and a leading `{palettename}` is escaped because it could land right after an opener. `a == b` is left alone. `[` / `]` are already escaped by `esc()`.
+- **The stock input rule is replaced and paste rules removed**: the stock rule would turn a typed `=={blue}x==` into a yellow highlight of `{blue}x`.
+- Palette contrast was checked against WCAG: body text passes on every highlight in both themes, and the link accent is >= 3.0 on every highlight.
+
 ---
 
 ## Lists and tasks
@@ -604,7 +617,7 @@ What exists today, for orientation. This list goes stale faster than the notes a
   - Folder expand/collapse state persists across explorer/outline view switches
 - Document outline sidebar (icon tabs with rounded bg, not text+underline). The heading at the current scroll position (top of the viewport) is highlighted blue; the rest are default color.
 - Tabbed editor with smart dirty tracking (undo back to original clears dirty), scroll position preserved across tab switches (saved via scroll event listeners, restored on tab activation)
-- Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, lists, todo list, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable. A right-aligned caret (or View > Toggle Toolbar, Cmd+Alt+T) slides it out and leaves a floating expand button in the editor's top-right; visibility persists as `toolbar` in `mde-state.json`. Each button shows a styled tooltip on hover hinting its keyboard shortcut (e.g. "Bold selection (Cmd + B)").
+- Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, text-color and highlight-color palette menus, lists, todo list, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable. A right-aligned caret (or View > Toggle Toolbar, Cmd+Alt+T) slides it out and leaves a floating expand button in the editor's top-right; visibility persists as `toolbar` in `mde-state.json`. Each button shows a styled tooltip on hover hinting its keyboard shortcut (e.g. "Bold selection (Cmd + B)").
 - Link editing via floating LinkBar (top-right of editor, like FindBar) -- preserves text selection highlight via ProseMirror decorations while editing URL
 - Link preview popup (top-right of editor area when cursor is in a link)
 - Cmd/Ctrl+click a link to follow it: relative file links open in a new tab (resolved against the current file's folder, per standard Markdown semantics); a missing target prompts to create the file; external URLs open in the browser. Plain click still positions the cursor for editing.

@@ -18,7 +18,7 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 
 ## Features
 
-- **WYSIWYG editing** -- formatting toolbar with headings, bold, italic, strikethrough, highlight, lists, todo lists, blockquotes, code, links, tables, and horizontal rules..
+- **WYSIWYG editing** -- formatting toolbar with headings, bold, italic, strikethrough, highlight and text color (a ten-color palette that adapts to light/dark mode), lists, todo lists, blockquotes, code, links, tables, and horizontal rules..
 - **Structured lists** -- Obsidian and VS Code both make it easy to produce invalid bullet/number/task lists. MDE gives you opinionated constraints.
 - **File Explorer & Document Outline sidebar** -- keyboard-navigable, resizable, with context menu (rename, delete, copy path)
 - **Tabbed editing** -- open multiple files, reorder by drag, tentative (preview) tabs on single-click

@@ -3828,7 +3828,7 @@ async function openMarkdown(content: string, name = 'tasks.md'): Promise<string>
   await app.evaluate(({ BrowserWindow }, fp) => {
     BrowserWindow.getAllWindows()[0].webContents.send('open-file', fp);
   }, tmpFile);
-  await expect(page.locator('.tiptap li, .tiptap p').first()).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.tiptap:visible').locator('li, p').first()).toBeVisible({ timeout: 5000 });
   return tmpFile;
 }
 
@@ -4020,6 +4020,157 @@ test.describe('Tilde escaping', () => {
     await page.keyboard.type('!');
 
     expect(await saveAndRead(tmpFile)).toBe('literal \\~\\~notstruck\\~\\~ and ~~struck~~ here!\n');
+  });
+});
+
+test.describe('Highlights and text colors', () => {
+  // Select the last n characters of the first paragraph ("beta" in "alpha beta").
+  async function selectLastChars(n: number) {
+    await page.locator('.tiptap p').first().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    for (let i = 0; i < n; i++) await page.keyboard.press('Shift+ArrowLeft');
+  }
+
+  test('a toolbar highlight is saved to disk as ==text==', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('alpha beta\n');
+
+    await selectLastChars(4);
+    await page.locator('.qa-highlight-toggle').click();
+
+    expect(await saveAndRead(tmpFile)).toBe('alpha ==beta==\n');
+  });
+
+  test('colored highlights, text colors, and their nesting with links and code round-trip unchanged', async () => {
+    ({ app, page } = await launchApp());
+    const source = [
+      '=={blue}blue hl== and ==plain hl== and =={yellow}named yellow==',
+      '[red text]{red} and **bold [red]{red}**',
+      'x [see [docs](a.md) here]{red} y',
+      '=={purple}see [docs](b.md) here==',
+      '[read the [docs]{green}](c.md)',
+      '==a `code` b== and [c `d`]{orange}',
+      'end',
+    ].join('\n\n') + '\n';
+    const tmpFile = await openMarkdown(source);
+    const ed = page.locator('.tiptap');
+
+    await expect(ed.locator('mark[data-color="blue"]')).toHaveText('blue hl');
+    await expect(ed.locator('mark:not([data-color])')).toHaveText(['plain hl', 'a code b']);
+    await expect(ed.locator('mark[data-color="yellow"]')).toHaveText('named yellow');
+    await expect(ed.locator('span[data-text-color="red"] strong')).toHaveText('red');
+    await expect(ed.locator('span[data-text-color="red"] a[href="a.md"]')).toHaveText('docs');
+    // ONE continuous highlight element with the link inside it, not three pieces around it.
+    await expect(ed.locator('mark[data-color="purple"]')).toHaveCount(1);
+    await expect(ed.locator('mark[data-color="purple"] a[href="b.md"]')).toHaveText('docs');
+    // A colored span inside link text leaves it a link: every word still carries the href.
+    await expect(ed.locator('a[href="c.md"]')).toHaveText(['read the ', 'docs']);
+    await expect(ed.locator('span[data-text-color="green"] a[href="c.md"]')).toHaveText('docs');
+    // Inline code keeps the highlight / color around it instead of excluding it.
+    await expect(ed.locator('mark code')).toHaveText('code');
+    await expect(ed.locator('span[data-text-color="orange"] code')).toHaveText('d');
+
+    await ed.locator('p').last().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type('!');
+
+    expect(await saveAndRead(tmpFile)).toBe(source.replace(/end\n$/, 'end!\n'));
+  });
+
+  test('a link inside colored text or a highlight keeps link styling and still follows on Cmd+click', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('[plain](a.md) then [red [inred](a.md) text]{red} then =={blue}[inhl](a.md)==\n');
+    fs.writeFileSync(path.join(path.dirname(tmpFile), 'a.md'), '# Target\n\nHello from a.\n');
+    const ed = page.locator('.tiptap');
+
+    const style = (sel: string) => ed.locator(sel).evaluate(el => {
+      const s = getComputedStyle(el);
+      return `${s.color} ${s.textDecorationLine}`;
+    });
+    const plain = await style('a:text("plain")');
+    expect(plain).toContain('underline');
+    expect(await style('span[data-text-color="red"] a')).toBe(plain);
+    expect(await style('mark[data-color="blue"] a')).toBe(plain);
+
+    await ed.locator('span[data-text-color="red"] a').click({ modifiers: ['ControlOrMeta'] });
+    await expect(page.locator('.tab')).toHaveCount(2);
+    await expect(page.locator('.tiptap:visible')).toContainText('Hello from a.');
+  });
+
+  test('an unknown color name is literal text, not a colored span', async () => {
+    ({ app, page } = await launchApp());
+    await openMarkdown('unknown [x]{chartreuse} stays\n');
+
+    await expect(page.locator('.tiptap p').first()).toHaveText('unknown [x]{chartreuse} stays');
+    await expect(page.locator('.tiptap span[data-text-color]')).toHaveCount(0);
+  });
+
+  test('literal == typed as prose is escaped on save so it never reloads as a highlight', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('x\n');
+
+    await page.locator('.tiptap p').first().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type('a==b==c and p == q');
+
+    // Spaced `==` can never open or close a highlight, so it is left alone.
+    const saved = await saveAndRead(tmpFile);
+    expect(saved).toBe('xa\\=\\=b\\=\\=c and p == q\n');
+
+    await openMarkdown(saved, 'reloaded.md');
+    await expect(page.locator('.tiptap:visible p').first()).toHaveText('xa==b==c and p == q');
+    await expect(page.locator('.tiptap:visible mark')).toHaveCount(0);
+  });
+
+  test('the palette menus set and clear text color and highlight color', async () => {
+    ({ app, page } = await launchApp());
+    const tmpFile = await openMarkdown('alpha beta\n');
+
+    await selectLastChars(4);
+
+    await page.locator('.qa-text-color-btn').click();
+    await page.locator('.qa-text-color-menu .qa-swatch-red').click();
+    await expect(page.locator('.qa-text-color-menu')).toHaveCount(0);
+    expect(await saveAndRead(tmpFile)).toBe('alpha [beta]{red}\n');
+
+    await page.locator('.qa-highlight-btn').click();
+    await page.locator('.qa-highlight-menu .qa-swatch-blue').click();
+    expect(await saveAndRead(tmpFile)).toBe('alpha =={blue}[beta]{red}==\n');
+
+    // Picking yellow is the plain highlight, not a named one.
+    await page.locator('.qa-highlight-btn').click();
+    await page.locator('.qa-highlight-menu .qa-swatch-yellow').click();
+    expect(await saveAndRead(tmpFile)).toBe('alpha ==[beta]{red}==\n');
+
+    await page.locator('.qa-text-color-btn').click();
+    await page.locator('.qa-text-color-menu .qa-swatch-none').click();
+    await page.locator('.qa-highlight-btn').click();
+    await page.locator('.qa-highlight-menu .qa-swatch-none').click();
+    expect(await saveAndRead(tmpFile)).toBe('alpha beta\n');
+  });
+
+  test('palette colors switch to theme-appropriate shades in dark mode', async () => {
+    ({ app, page } = await launchApp());
+    await openMarkdown('=={blue}blue== and [red]{red}\n');
+
+    const luminance = (sel: string, prop: 'backgroundColor' | 'color') => page.locator(sel).first().evaluate((el, p) => {
+      const [r, g, b] = getComputedStyle(el)[p as 'color'].match(/\d+/g)!.map(Number);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }, prop);
+    const setTheme = (t: string) => page.evaluate(th => document.documentElement.setAttribute('data-theme', th), t);
+
+    await page.locator('.qa-highlight-btn').click();
+    const swatch = '.qa-highlight-menu .qa-swatch-blue';
+
+    await setTheme('light');
+    const light = { mark: await luminance('.tiptap mark', 'backgroundColor'), swatch: await luminance(swatch, 'backgroundColor'), text: await luminance('.tiptap span[data-text-color]', 'color') };
+    await setTheme('dark');
+    const dark = { mark: await luminance('.tiptap mark', 'backgroundColor'), swatch: await luminance(swatch, 'backgroundColor'), text: await luminance('.tiptap span[data-text-color]', 'color') };
+
+    // Pale highlight in light mode, deep one in dark mode; text colors go the other way.
+    expect(dark.mark).toBeLessThan(light.mark - 60);
+    expect(dark.swatch).toBeLessThan(light.swatch - 60);
+    expect(dark.text).toBeGreaterThan(light.text + 30);
   });
 });
 

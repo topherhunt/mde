@@ -17,7 +17,6 @@
   --danger: #dc2626;
   --danger-bg: #fef2f2;
   --danger-border: #fecaca;
-  --highlight-bg: #fef08a;
   --code-bg: #1e1e1e;
   --code-text: #d4d4d4;
   --danger-text: #b91c1c;
@@ -33,6 +32,27 @@
   --diff-add-word: #a7f3b0;
   --diff-del-bg: #ffeef0;
   --diff-del-word: #fdb8c0;
+  /* Palette for ==highlights== and [text]{colors}: pale in light mode, deep in dark. */
+  --highlight-gray: #e5e7eb;
+  --highlight-brown: #ead8c8;
+  --highlight-red: #fecaca;
+  --highlight-orange: #fed7aa;
+  --highlight-yellow: #fef08a;
+  --highlight-lime: #d9f99d;
+  --highlight-green: #bbf7d0;
+  --highlight-blue: #cfe2fd;
+  --highlight-purple: #e9d5ff;
+  --highlight-pink: #fbcfe8;
+  --text-color-gray: #6b7280;
+  --text-color-brown: #8b5a3c;
+  --text-color-red: #dc2626;
+  --text-color-orange: #c2410c;
+  --text-color-yellow: #a16207;
+  --text-color-lime: #4d7c0f;
+  --text-color-green: #15803d;
+  --text-color-blue: #2563eb;
+  --text-color-purple: #9333ea;
+  --text-color-pink: #db2777;
 }
 
 [data-theme="dark"] {
@@ -47,7 +67,6 @@
   --danger: #f87171;
   --danger-bg: #3b1111;
   --danger-border: #7f1d1d;
-  --highlight-bg: #7a6318;
   --code-bg: #141414;
   --code-text: #d4d4d4;
   --danger-text: #fca5a5;
@@ -63,6 +82,26 @@
   --diff-add-word: #1d5a2e;
   --diff-del-bg: #2d1416;
   --diff-del-word: #6b2028;
+  --highlight-gray: #3d3f45;
+  --highlight-brown: #533a2e;
+  --highlight-red: #7a2222;
+  --highlight-orange: #6b3412;
+  --highlight-yellow: #5c4a12;
+  --highlight-lime: #34461a;
+  --highlight-green: #1a4a2f;
+  --highlight-blue: #1f3d70;
+  --highlight-purple: #4f2f7a;
+  --highlight-pink: #6e2248;
+  --text-color-gray: #a1a1aa;
+  --text-color-brown: #d4a27f;
+  --text-color-red: #f87171;
+  --text-color-orange: #fb923c;
+  --text-color-yellow: #eab308;
+  --text-color-lime: #84cc16;
+  --text-color-green: #4ade80;
+  --text-color-blue: #60a5fa;
+  --text-color-purple: #c084fc;
+  --text-color-pink: #f472b6;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -78,7 +117,6 @@
     --danger: #f87171;
     --danger-bg: #3b1111;
     --danger-border: #7f1d1d;
-    --highlight-bg: #7a6318;
     --code-bg: #141414;
     --code-text: #d4d4d4;
     --danger-text: #fca5a5;
@@ -94,6 +132,26 @@
     --diff-add-word: #1d5a2e;
     --diff-del-bg: #2d1416;
     --diff-del-word: #6b2028;
+    --highlight-gray: #3d3f45;
+    --highlight-brown: #533a2e;
+    --highlight-red: #7a2222;
+    --highlight-orange: #6b3412;
+    --highlight-yellow: #5c4a12;
+    --highlight-lime: #34461a;
+    --highlight-green: #1a4a2f;
+    --highlight-blue: #1f3d70;
+    --highlight-purple: #4f2f7a;
+    --highlight-pink: #6e2248;
+    --text-color-gray: #a1a1aa;
+    --text-color-brown: #d4a27f;
+    --text-color-red: #f87171;
+    --text-color-orange: #fb923c;
+    --text-color-yellow: #eab308;
+    --text-color-lime: #84cc16;
+    --text-color-green: #4ade80;
+    --text-color-blue: #60a5fa;
+    --text-color-purple: #c084fc;
+    --text-color-pink: #f472b6;
   }
 }
 
@@ -588,6 +646,67 @@ body {
   cursor: pointer;
 }
 
+/* Text color / highlight color: a toolbar button with a bar showing the current color,
+   opening a swatch grid. */
+.color-picker {
+  position: relative;
+}
+
+.color-picker-bar {
+  display: block;
+  height: 3px;
+  margin-top: 1px;
+  border-radius: 1px;
+}
+
+.color-picker-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.color-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 22px);
+  gap: 6px;
+}
+
+.color-swatch {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.color-swatch:hover,
+.color-swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.color-picker-none {
+  width: 100%;
+  margin-top: 8px;
+  padding: 3px 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.color-picker-none:hover {
+  background: var(--bg-tertiary);
+}
+
 /* The slide-out runs before App unmounts the toolbar; TOOLBAR_SLIDE_MS in App.tsx must match. */
 .toolbar.toolbar-leaving {
   transform: translateX(100%);
@@ -905,10 +1024,36 @@ body {
 }
 
 .editor-content .tiptap mark {
-  background: var(--highlight-bg);
+  background: var(--highlight-yellow);
   color: var(--text);
   padding: 0.1em 0.2em;
   border-radius: 2px;
+}
+
+.editor-content .tiptap mark[data-color="gray"] { background: var(--highlight-gray); }
+.editor-content .tiptap mark[data-color="brown"] { background: var(--highlight-brown); }
+.editor-content .tiptap mark[data-color="red"] { background: var(--highlight-red); }
+.editor-content .tiptap mark[data-color="orange"] { background: var(--highlight-orange); }
+.editor-content .tiptap mark[data-color="lime"] { background: var(--highlight-lime); }
+.editor-content .tiptap mark[data-color="green"] { background: var(--highlight-green); }
+.editor-content .tiptap mark[data-color="blue"] { background: var(--highlight-blue); }
+.editor-content .tiptap mark[data-color="purple"] { background: var(--highlight-purple); }
+.editor-content .tiptap mark[data-color="pink"] { background: var(--highlight-pink); }
+
+.editor-content .tiptap [data-text-color="gray"] { color: var(--text-color-gray); }
+.editor-content .tiptap [data-text-color="brown"] { color: var(--text-color-brown); }
+.editor-content .tiptap [data-text-color="red"] { color: var(--text-color-red); }
+.editor-content .tiptap [data-text-color="orange"] { color: var(--text-color-orange); }
+.editor-content .tiptap [data-text-color="yellow"] { color: var(--text-color-yellow); }
+.editor-content .tiptap [data-text-color="lime"] { color: var(--text-color-lime); }
+.editor-content .tiptap [data-text-color="green"] { color: var(--text-color-green); }
+.editor-content .tiptap [data-text-color="blue"] { color: var(--text-color-blue); }
+.editor-content .tiptap [data-text-color="purple"] { color: var(--text-color-purple); }
+.editor-content .tiptap [data-text-color="pink"] { color: var(--text-color-pink); }
+
+/* Inline code's own background would hide a highlight around it. */
+.editor-content .tiptap mark code {
+  background: transparent;
 }
 
 .editor-content .tiptap code {

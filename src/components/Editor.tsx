@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useLayoutEffect, useMemo } from 'react';
 import { useEditor, EditorContent, Editor as TipTapEditor, createNodeFromContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import Highlight from '@tiptap/extension-highlight';
+import Code from '@tiptap/extension-code';
 import Link from '@tiptap/extension-link';
 import { TableKit } from '@tiptap/extension-table';
 import CodeBlock from '@tiptap/extension-code-block';
@@ -16,6 +16,7 @@ import { Decoration, DecorationSet, EditorProps as PMEditorProps } from '@tiptap
 import { Fragment, DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { Tab } from '../types';
 import { findHeadingByAnchor, findImageReferences, markdownToHtml } from '../utils/markdown';
+import { ColorHighlight, TextColor, escapeColorSyntax } from '../utils/colorMarks';
 import TableMenu from './TableMenu';
 
 // Override tiptap-markdown's text serializer which blindly converts all < and >
@@ -34,12 +35,13 @@ const TextNode = Text.extend({
     return {
       markdown: {
         serialize(state: any, node: any) {
-          // state.text() runs esc() internally, so undo its tilde escaping on just the
-          // span of output this call appended.
+          // state.text() runs esc() internally, so undo its tilde escaping (and add the
+          // `==` / `{color}` escaping it knows nothing about) on just the span of output
+          // this call appended.
           const start = state.out.length;
           state.text(node.text);
           state.out = state.out.slice(0, start)
-            + state.out.slice(start).replace(LONE_ESCAPED_TILDE, '~');
+            + escapeColorSyntax(state.out.slice(start).replace(LONE_ESCAPED_TILDE, '~'));
         },
         parse: {},
       },
@@ -1164,9 +1166,10 @@ function stripInlineMarkdown(text: string): string {
     .replace(/\*(.+?)\*/g, '$1')        // *italic*
     .replace(/_(.+?)_/g, '$1')          // _italic_
     .replace(/~~(.+?)~~/g, '$1')        // ~~strike~~
-    .replace(/==(.+?)==/g, '$1')        // ==highlight==
+    .replace(/==(?:\{[a-z]+\})?(.+?)==/g, '$1') // ==highlight== / =={blue}highlight==
     .replace(/`(.+?)`/g, '$1')          // `code`
     .replace(/\[(.+?)\]\(.+?\)/g, '$1') // [link](url)
+    .replace(/(?<!\\)\[([^[\]]*)\]\{[a-z]+\}/g, '$1') // [text]{red}, after links so either may nest
     .replace(/\\(.)/g, '$1')            // backslash escapes (\> \\ \( etc.)
     .trim();
 }
@@ -1577,6 +1580,7 @@ export default function Editor({
   const extensions = useMemo(() => [
       StarterKit.configure({
         codeBlock: false,
+        code: false,
         text: false,
         listItem: false,
         // StarterKit bundles its own Link extension (autolink + paste rules on
@@ -1584,7 +1588,12 @@ export default function Editor({
         link: false,
       }),
       TextNode,
-      Highlight,
+      // Stock inline code excludes EVERY other mark, so highlighting a phrase skipped its code
+      // and a loaded `==a `x` b==` lost the highlight on `x`. Color marks may wrap code;
+      // Markdown can express that, since code is always the innermost mark.
+      Code.extend({ excludes: 'bold italic strike underline link' }),
+      ColorHighlight,
+      TextColor,
       Link.extend({
         // The Link extension's paste rule runs linkifyjs over pasted text and
         // marks anything URL-shaped as a link, regardless of the autolink /
