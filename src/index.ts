@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, webContents } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -225,8 +225,11 @@ function createWindow(projectRoot: string | null = null, pendingFile: string | n
   win.on('resize', saveBounds);
   win.on('move', saveBounds);
 
+  // webContents is already destroyed by 'closed', so take its id now.
+  const webContentsId = win.webContents.id;
   win.on('closed', () => {
     windowStates.delete(win);
+    unwatchAllForWindow(webContentsId);
   });
 
   win.webContents.on('will-navigate', (event) => {
@@ -457,6 +460,12 @@ function buildMenu(): void {
     {
       label: 'View',
       submenu: [
+        {
+          label: 'Toggle Toolbar',
+          accelerator: 'CmdOrCtrl+Alt+T',
+          click: () => setToolbarVisible(loadState().toolbar === false),
+        },
+        { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },
@@ -1037,53 +1046,69 @@ ipcMain.handle('get-pending-file', (event) => {
 
 // Watch the containing directory, not the file: fs.watch on a file follows the inode, so an
 // atomic save (write temp + rename over original -- what most editors/agents do) kills it.
-// One watcher per dir, refcounted by basename.
+// One watcher per dir. Each basename records WHICH windows (webContents ids) watch it, and
+// events go only to those: one window's unwatch must not silence the file in another, and
+// a window mid-save (unwatched) must not get the event for its own write.
 interface DirWatch {
   watcher: fs.FSWatcher;
-  basenames: Set<string>;
+  subscribers: Map<string, Set<number>>;
 }
 const dirWatchers = new Map<string, DirWatch>();
 
-ipcMain.on('watch-file', (_event, filePath: string) => {
+ipcMain.on('watch-file', (event, filePath: string) => {
   const dir = path.dirname(filePath);
   const base = path.basename(filePath);
   const existing = dirWatchers.get(dir);
   if (existing) {
-    existing.basenames.add(base);
+    const ids = existing.subscribers.get(base);
+    if (ids) ids.add(event.sender.id);
+    else existing.subscribers.set(base, new Set([event.sender.id]));
     return;
   }
   try {
-    const basenames = new Set([base]);
+    const subscribers = new Map([[base, new Set([event.sender.id])]]);
     const watcher = fs.watch(dir, (_eventType, changed) => {
       // `changed` is null on some platforms -- then notify all watched files here and let
       // the renderer's hash check decide (a no-op if nothing differs).
       const targets = changed
-        ? (basenames.has(changed) ? [changed] : [])
-        : [...basenames];
+        ? (subscribers.has(changed) ? [changed] : [])
+        : [...subscribers.keys()];
       for (const b of targets) {
         const full = path.join(dir, b);
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) win.webContents.send('file-changed', full);
+        for (const id of subscribers.get(b)!) {
+          const wc = webContents.fromId(id);
+          if (wc && !wc.isDestroyed()) wc.send('file-changed', full);
         }
       }
     });
-    dirWatchers.set(dir, { watcher, basenames });
+    dirWatchers.set(dir, { watcher, subscribers });
   } catch {
     // Directory may not exist
   }
 });
 
-ipcMain.on('unwatch-file', (_event, filePath: string) => {
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
+function unwatchFile(dir: string, base: string, webContentsId: number): void {
   const entry = dirWatchers.get(dir);
   if (!entry) return;
-  entry.basenames.delete(base);
-  if (entry.basenames.size === 0) {
+  const ids = entry.subscribers.get(base);
+  if (!ids) return;
+  ids.delete(webContentsId);
+  if (ids.size === 0) entry.subscribers.delete(base);
+  if (entry.subscribers.size === 0) {
     entry.watcher.close();
     dirWatchers.delete(dir);
   }
+}
+
+ipcMain.on('unwatch-file', (event, filePath: string) => {
+  unwatchFile(path.dirname(filePath), path.basename(filePath), event.sender.id);
 });
+
+function unwatchAllForWindow(webContentsId: number): void {
+  for (const [dir, entry] of [...dirWatchers]) {
+    for (const base of [...entry.subscribers.keys()]) unwatchFile(dir, base, webContentsId);
+  }
+}
 
 ipcMain.on('save-last-project-root', (_event, root: string) => {
   saveLastProjectRoot(root);
@@ -1382,6 +1407,16 @@ ipcMain.handle('set-autosave', (_event, enabled: boolean) => {
     }
   }
 });
+
+function setToolbarVisible(visible: boolean): void {
+  saveState({ toolbar: visible });
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('toolbar-changed', visible);
+  }
+}
+
+ipcMain.handle('get-toolbar', () => loadState().toolbar !== false);
+ipcMain.handle('set-toolbar', (_event, visible: boolean) => setToolbarVisible(visible));
 
 // Fold state persistence: stores folded list item line numbers per file.
 // Currently uses markdown line numbers only. If folds are frequently lost

@@ -13,6 +13,7 @@
 | Cmd + Alt + Left | Previous Tab |
 | Cmd + Alt + Right | Next Tab |
 | Cmd + , | Settings |
+| Cmd + Alt + T | Show / Hide Toolbar |
 | Cmd + F | Find & Replace |
 | Cmd + Shift + V | Paste as Plain Text |
 
@@ -42,7 +43,7 @@
 | Cmd + Alt + Down | Move Block Down |
 | Cmd + . | Toggle Fold (list item with children, or heading section) |
 | Cmd + Left / Right | To start/end of wrapped line, then of the paragraph or list item |
-| Cmd + Click | Follow a link (open a relative file in a new tab, or a URL in the browser) |
+| Cmd + Click | Follow a link (open a relative file in a new tab, a URL in the browser, or scroll to a `#heading` in this document) |
 | Tab | Indent List Item |
 | Shift + Tab | Outdent List Item |
 

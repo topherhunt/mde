@@ -670,6 +670,118 @@ test.describe('Following links', () => {
     await expect(page.locator('.tab')).toHaveCount(1);
     await expect(page.locator('.modal-dialog')).toHaveCount(0);
   });
+
+  // Distance from the scroller's top edge to the heading's top edge, in px.
+  async function headingOffset(heading: string): Promise<number> {
+    return page.evaluate((text) => {
+      const scroller = document.querySelector('.editor-content') as HTMLElement;
+      const h = [...scroller.querySelectorAll('h1, h2, h3')].find((el) => el.textContent === text) as HTMLElement;
+      return h.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    }, heading);
+  }
+
+  const filler = Array.from({ length: 30 }, (_, i) => `Filler paragraph ${i}.`).join('\n\n');
+
+  test('Cmd+click on an anchor link smooth-scrolls to the matching heading', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'index.md'), `[Jump down](#the-details)\n\n${filler}\n\n## The Details\n\nDetail body.\n\n${filler}\n`);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+    expect(await headingOffset('The Details')).toBeGreaterThan(500);
+
+    // An instant jump fires one scroll event; an animated one fires many.
+    await page.evaluate(() => {
+      (window as any).__scrollEvents = 0;
+      document.querySelector('.editor-content')!.addEventListener('scroll', () => (window as any).__scrollEvents++);
+    });
+
+    await editor.locator('a[href="#the-details"]').click({ modifiers: [MOD] });
+
+    await expect.poll(() => headingOffset('The Details'), { timeout: 3000 }).toBeLessThan(40);
+    expect(await page.evaluate(() => (window as any).__scrollEvents)).toBeGreaterThan(1);
+    await expect(page.locator('.tab')).toHaveCount(1);
+  });
+
+  test('anchor links use GitHub slugs, including punctuation and duplicate headings', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(
+      path.join(tmpDir, 'index.md'),
+      `[second setup](#setup-1) and [news](#whats-new-in-v2)\n\n## Setup\n\n${filler}\n\n## What's New in v2?\n\n${filler}\n\n## Setup\n\nThe second one.\n\n${filler}\n`,
+    );
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.locator('a[href="#whats-new-in-v2"]').click({ modifiers: [MOD] });
+    await expect.poll(() => headingOffset("What's New in v2?"), { timeout: 3000 }).toBeLessThan(40);
+
+    await editor.locator('a[href="#setup-1"]').click({ modifiers: [MOD] });
+    // The second "Setup" lands at the top; the first one is far above it.
+    const setupOffsets = () => page.evaluate(() => {
+      const scroller = document.querySelector('.editor-content') as HTMLElement;
+      const setups = [...scroller.querySelectorAll('h2')].filter((el) => el.textContent === 'Setup');
+      return setups.map((el) => el.getBoundingClientRect().top - scroller.getBoundingClientRect().top);
+    });
+    await expect.poll(async () => (await setupOffsets())[1], { timeout: 3000 }).toBeLessThan(40);
+    expect((await setupOffsets())[0]).toBeLessThan(0);
+  });
+
+  test('Cmd+click on an anchor into a folded section unfolds it and scrolls there', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'index.md'), `[inner](#inner)\n\n## Outer\n\n${filler}\n\n### Inner\n\nInner body.\n\n${filler}\n\n## After\n`);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.locator('h2', { hasText: 'Outer' }).click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press(`${MOD}+.`);
+    const inner = editor.locator('h3', { hasText: 'Inner' });
+    await expect(inner).toBeHidden();
+
+    await editor.locator('a[href="#inner"]').click({ modifiers: [MOD] });
+
+    await expect(inner).toBeVisible();
+    await expect.poll(() => headingOffset('Inner'), { timeout: 3000 }).toBeLessThan(40);
+  });
+
+  test('Cmd+click on an anchor with no matching heading says so', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'index.md'), `[broken](#nowhere)\n\n## Somewhere\n\nBody.\n`);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(tmpDir, 'index.md'));
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toBeVisible({ timeout: 5000 });
+
+    await editor.locator('a[href="#nowhere"]').click({ modifiers: [MOD] });
+
+    await expect(page.locator('.toast')).toContainText('#nowhere');
+    await expect(page.locator('.modal-dialog')).toHaveCount(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -735,6 +847,73 @@ test.describe('Toolbar', () => {
 
     await expect(editor.locator('h2')).toBeVisible();
 
+  });
+
+  // Visibility persists in the real mde-state.json the whole suite shares, so every
+  // test that hides the toolbar must show it again or later toolbar tests fail.
+  test('collapse caret hides the toolbar, expand button restores it, and the choice survives a relaunch', async () => {
+    ({ app, page } = await launchApp());
+    try {
+      await app.evaluate(({ BrowserWindow }, filePath) => {
+        BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+      }, fixturePath('sample.md'));
+      await expect(page.locator('.toolbar-select')).toBeVisible({ timeout: 10000 });
+      await expect(page.locator('.qa-toolbar-expand')).toHaveCount(0);
+
+      const editorTop = () => page.locator('.tiptap').evaluate(el => el.getBoundingClientRect().top);
+      const toolbarHeight = await page.locator('.toolbar').evaluate(el => el.getBoundingClientRect().height);
+      const topWithToolbar = await editorTop();
+
+      await page.locator('.qa-toolbar-collapse').click();
+      await expect(page.locator('.toolbar')).toHaveCount(0);
+      await expect(page.locator('.qa-toolbar-expand')).toBeVisible();
+
+      // The expand button floats over the text: it reclaims the toolbar's full height
+      // and stays button-sized rather than stretching across the editor.
+      expect(topWithToolbar - await editorTop()).toBeCloseTo(toolbarHeight, 0);
+      const expandBox = (await page.locator('.qa-toolbar-expand').boundingBox())!;
+      expect(expandBox.width).toBeLessThan(60);
+
+      await app.close();
+      ({ app, page } = await launchApp());
+      await app.evaluate(({ BrowserWindow }, filePath) => {
+        BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+      }, fixturePath('sample.md'));
+      await expect(page.locator('.tiptap')).toBeVisible({ timeout: 10000 });
+      await expect(page.locator('.qa-toolbar-expand')).toBeVisible();
+      await expect(page.locator('.toolbar')).toHaveCount(0);
+
+      await page.locator('.qa-toolbar-expand').click();
+      await expect(page.locator('.toolbar-select')).toBeVisible();
+      await expect(page.locator('.qa-toolbar-expand')).toHaveCount(0);
+    } finally {
+      await page.evaluate(() => window.mde.setToolbar(true));
+    }
+  });
+
+  test('View > Toggle Toolbar hides and shows the toolbar', async () => {
+    ({ app, page } = await launchApp());
+    try {
+      await app.evaluate(({ BrowserWindow }, filePath) => {
+        BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+      }, fixturePath('sample.md'));
+      await expect(page.locator('.toolbar-select')).toBeVisible({ timeout: 10000 });
+
+      const clickToggle = () => app.evaluate(({ Menu }) => {
+        const view = Menu.getApplicationMenu()!.items.find(i => i.label === 'View')!;
+        view.submenu!.items.find(i => i.label === 'Toggle Toolbar')!.click();
+      });
+
+      await clickToggle();
+      await expect(page.locator('.toolbar')).toHaveCount(0);
+      await expect(page.locator('.qa-toolbar-expand')).toBeVisible();
+
+      await clickToggle();
+      await expect(page.locator('.toolbar-select')).toBeVisible();
+      await expect(page.locator('.qa-toolbar-expand')).toHaveCount(0);
+    } finally {
+      await page.evaluate(() => window.mde.setToolbar(true));
+    }
   });
 });
 
@@ -1174,6 +1353,45 @@ test.describe('File conflict detection', () => {
     await expect(editor).toContainText('After Atomic Replace', { timeout: 10000 });
     await expect(page.locator('.conflict-banner')).toBeHidden();
     await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
+    await expect(page.locator('.reload-notice')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('closing a file in one window does not stop another window from auto-reloading it', async () => {
+    // Watches are shared by every window. If one window's unwatch drops the file for all of
+    // them, the other window silently shows a stale buffer from then on.
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'shared.md');
+    fs.writeFileSync(tmpFile, '# Before\n\nOriginal body.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+    await expect(page.locator('.tiptap')).toContainText('Before', { timeout: 5000 });
+
+    // A second window on the same folder, with the same file open.
+    const secondWindowPromise = app.waitForEvent('window');
+    await app.evaluate(({ app: electronApp }, dir) => {
+      electronApp.emit('open-file', { preventDefault() {} }, dir);
+    }, tmpDir);
+    const page2 = await secondWindowPromise;
+    await page2.waitForSelector('.app', { timeout: 10000 });
+    const win2 = await app.browserWindow(page2);
+    await win2.evaluate((w, filePath) => w.webContents.send('open-file', filePath), tmpFile);
+    await expect(page2.locator('.tiptap')).toContainText('Before', { timeout: 5000 });
+
+    // The second window closes its tab.
+    await page2.locator('.tab-close').click();
+    await expect(page2.locator('.tab')).toHaveCount(0);
+
+    // Replace the file atomically, and let the REAL watcher report it.
+    await page.waitForTimeout(300);
+    const tmpNew = path.join(tmpDir, '.shared.md.tmp');
+    fs.writeFileSync(tmpNew, '# After\n\nWritten by someone else.\n');
+    fs.renameSync(tmpNew, tmpFile);
+
+    await expect(page.locator('.tiptap')).toContainText('After', { timeout: 10000 });
     await expect(page.locator('.reload-notice')).toBeVisible({ timeout: 5000 });
   });
 });
@@ -2489,6 +2707,38 @@ test.describe('Heading folding', () => {
 
     // Hidden is a rendering state, not a content state: nothing was dropped.
     expect(fs.readFileSync(tmpFile, 'utf8')).toBe(DOC.replace('# Title', '# Title!'));
+  });
+
+  test('the hover caret on a heading that just fits its line does not reflow the page', async () => {
+    const { editor } = await openDoc();
+
+    const heading = editor.locator('h2', { hasText: 'Section B' });
+    // Narrow the scroller so the heading's text fills its line with 3px to spare. (Styling
+    // the <h2> itself does nothing: ProseMirror rewrites its attributes on hover.)
+    await heading.evaluate((h) => {
+      const range = document.createRange();
+      range.selectNodeContents(h);
+      const spare = h.clientWidth - parseFloat(getComputedStyle(h).paddingRight) - range.getBoundingClientRect().width;
+      const scroller = h.closest('.editor-content') as HTMLElement;
+      scroller.style.boxSizing = 'border-box';
+      scroller.style.maxWidth = `${scroller.offsetWidth - spare + 3}px`;
+    });
+    const layout = () => heading.evaluate((h) => ({
+      height: h.getBoundingClientRect().height,
+      nextTop: (h.nextElementSibling as HTMLElement).getBoundingClientRect().top,
+    }));
+    const before = await layout();
+
+    await heading.hover();
+    await expect(page.locator('.fold-caret')).toBeVisible({ timeout: 3000 });
+
+    expect(await layout()).toEqual(before);
+    // Nor may the caret or its (invisible but laid-out) tooltip widen the scroll area.
+    const overflow = await heading.evaluate((h) => {
+      const scroller = h.closest('.editor-content') as HTMLElement;
+      return scroller.scrollWidth - scroller.clientWidth;
+    });
+    expect(overflow).toBe(0);
   });
 
   test('hovering a heading shows a fold caret that folds its section on click', async () => {

@@ -15,7 +15,7 @@ import { TextSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, EditorProps as PMEditorProps } from '@tiptap/pm/view';
 import { Fragment, DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { Tab } from '../types';
-import { findImageReferences, markdownToHtml } from '../utils/markdown';
+import { findHeadingByAnchor, findImageReferences, markdownToHtml } from '../utils/markdown';
 import TableMenu from './TableMenu';
 
 // Override tiptap-markdown's text serializer which blindly converts all < and >
@@ -1695,6 +1695,15 @@ export default function Editor({
         const href = anchor.getAttribute('href');
         if (!href) return false;
         event.preventDefault();
+        const headingPos = href.startsWith('#') ? findHeadingByAnchor(view.state.doc, href.slice(1)) : null;
+        if (headingPos !== null) {
+          // Selecting the heading also releases any fold hiding it (see the fold plugin),
+          // which must happen before scrolling: a display:none block has no position.
+          // No tr.scrollIntoView() -- that would jump instantly instead of animating.
+          view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, headingPos + 1)));
+          (view.nodeDOM(headingPos) as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return true;
+        }
         onLinkClickRef.current(href);
         return true;
       },

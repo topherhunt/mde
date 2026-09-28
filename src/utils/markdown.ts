@@ -1,4 +1,5 @@
 import { Editor, createNodeFromContent } from '@tiptap/react';
+import type { Node as PMNode } from '@tiptap/pm/model';
 
 const SEPARATOR = '{LIST_SEPARATOR}';
 
@@ -117,6 +118,35 @@ export function findImageReferences(md: string): string[] {
     }
   });
 
+  return found;
+}
+
+// GitHub's heading slug (github-slugger): lowercase, drop punctuation, each space -> '-'.
+function headingSlug(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, '').replace(/ /g, '-');
+}
+
+// Position of the heading an in-page `#anchor` link points at, or null. Repeated
+// slugs get GitHub's `-1`, `-2` suffixes in document order, so `#setup-1` is the second "Setup".
+export function findHeadingByAnchor(doc: PMNode, anchor: string): number | null {
+  let wanted = anchor.toLowerCase();
+  try {
+    wanted = decodeURIComponent(wanted);
+  } catch {
+    // A malformed %-escape is matched literally.
+  }
+  const seen = new Set<string>();
+  let found: number | null = null;
+  doc.descendants((node, pos) => {
+    if (found !== null) return false;
+    if (node.type.name !== 'heading') return;
+    const base = headingSlug(node.textContent);
+    let slug = base;
+    for (let n = 1; seen.has(slug); n++) slug = `${base}-${n}`;
+    seen.add(slug);
+    if (slug === wanted) found = pos;
+    return false;
+  });
   return found;
 }
 

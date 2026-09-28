@@ -15,6 +15,7 @@ import { execFileSync } from 'child_process';
 
 import { mainConfig, externalPackages } from './webpack.main.config';
 import { rendererConfig } from './webpack.renderer.config';
+import { buildQuickLookExtension, verifyQuickLookExtension } from './quicklook/build';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const pkg = require('./package.json');
@@ -70,6 +71,20 @@ const config: ForgeConfig = {
           LSItemContentTypes: ['public.folder'],
         },
       ],
+      // Nothing on a stock Mac declares the markdown UTI, so .md files get a dynamic
+      // `dyn.*` type and the Quick Look extension (which matches by UTI) never fires.
+      // An import loses to any installed app that EXPORTS the type, so this is harmless.
+      UTImportedTypeDeclarations: [
+        {
+          UTTypeIdentifier: 'net.daringfireball.markdown',
+          UTTypeDescription: 'Markdown Document',
+          UTTypeConformsTo: ['public.plain-text'],
+          UTTypeTagSpecification: {
+            'public.filename-extension': ['md', 'markdown'],
+            'public.mime-type': ['text/markdown'],
+          },
+        },
+      ],
     },
   },
   rebuildConfig: {},
@@ -107,17 +122,25 @@ const config: ForgeConfig = {
     // because macOS is reporting tampering, not unknown provenance. The only way out
     // is `xattr -dr com.apple.quarantine`, which is not a thing we can ask users to do.
     //
+    // Signing is inside-out: --deep repairs Electron's nested helpers, THEN the Quick
+    // Look appex is added and signed with its own sandbox entitlements, THEN the app
+    // is re-sealed WITHOUT --deep. A --deep pass after the appex would strip its
+    // entitlements and the preview would silently never load.
+    //
     // Runs for `make`, `package`, and `pretest` alike, since postPackage is part of
     // the package step. Guarded on darwin: `codesign` does not exist on the Windows
     // runner, which builds via the same `npm run release`.
-    postPackage: async (_forgeConfig, { platform, outputPaths }) => {
+    postPackage: async (_forgeConfig, { platform, arch, outputPaths }) => {
       if (platform !== 'darwin') return;
       for (const outputPath of outputPaths) {
         const appPath = path.join(outputPath, 'MDE.app');
         execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' });
+        buildQuickLookExtension(appPath, arch);
+        execFileSync('codesign', ['--force', '--sign', '-', appPath], { stdio: 'inherit' });
         // Fail the build loudly rather than shipping a "damaged" app. Without this
         // the breakage is invisible until it reaches a user's Downloads folder.
         execFileSync('codesign', ['--verify', '--deep', '--strict', appPath], { stdio: 'inherit' });
+        verifyQuickLookExtension(appPath);
       }
     },
   },

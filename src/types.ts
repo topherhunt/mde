@@ -218,6 +218,9 @@ export interface MdeAPI {
   getSpellcheck: () => Promise<boolean>;
   setSpellcheck: (enabled: boolean) => Promise<void>;
   onSpellcheckChanged: (callback: (enabled: boolean) => void) => () => void;
+  getToolbar: () => Promise<boolean>;
+  setToolbar: (visible: boolean) => Promise<void>;
+  onToolbarChanged: (callback: (visible: boolean) => void) => () => void;
   getAutosave: () => Promise<boolean>;
   setAutosave: (enabled: boolean) => Promise<void>;
   onAutosaveChanged: (callback: (enabled: boolean) => void) => () => void;

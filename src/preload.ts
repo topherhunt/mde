@@ -184,6 +184,13 @@ const api = {
     return () => ipcRenderer.removeListener('spellcheck-changed', handler);
   },
 
+  getToolbar: (): Promise<boolean> => ipcRenderer.invoke('get-toolbar'),
+  setToolbar: (visible: boolean): Promise<void> => ipcRenderer.invoke('set-toolbar', visible),
+  onToolbarChanged: (callback: (visible: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, visible: boolean) => callback(visible);
+    ipcRenderer.on('toolbar-changed', handler);
+    return () => ipcRenderer.removeListener('toolbar-changed', handler);
+  },
   getAutosave: (): Promise<boolean> => ipcRenderer.invoke('get-autosave'),
   setAutosave: (enabled: boolean): Promise<void> => ipcRenderer.invoke('set-autosave', enabled),
   onAutosaveChanged: (callback: (enabled: boolean) => void) => {

@@ -36,6 +36,7 @@ Break these and something silently corrupts, clobbers, or infinite-loops.
 - **Keep** `webpack.main.config.ts`**'s** `externalPackages` **in sync with** `externals`**.** A main-process external not listed there throws `Cannot find module` in the packaged app while working fine in dev. -> notes: Packaging and webpack
 - **Keep** `EnableCookieEncryption` **false while the app is ad-hoc signed.** It makes Chromium create a keychain item, and an ad-hoc designated requirement is pinned to one exact binary hash -- so every release would prompt the user for their login keychain password. MDE uses neither cookies nor `safeStorage`. Revisit only if we get a Developer ID cert. -> notes: Packaging and webpack
 - **Never remove** `forge.config.ts`**'s** `postPackage` **ad-hoc re-sign hook.** Forge leaves the macOS bundle with a signature that no longer matches it, and a BROKEN signature means "damaged, move to Trash" with no Open Anyway button -- strictly worse than no signature. The hook's `codesign --verify` gate must stay too, or the breakage is invisible until a user hits it. -> notes: Packaging and webpack
+- **No** `codesign --deep` **after** `buildQuickLookExtension` **in** `postPackage`. It re-signs the appex without its sandbox entitlement, macOS then silently never loads it, and `codesign --verify --deep --strict` STILL PASSES -- only `verifyQuickLookExtension` and `tests/packaged.spec.ts` notice. -> notes: Quick Look preview
 - **Import never mutates the source file.** No renaming, moving, or hiding, and no code path overwrites an already-converted Markdown. -> notes: Import (DOCX / PDF)
 - `confirm()` **and** `alert()` **don't work in Electron's renderer.** Use in-app toasts or inline confirmation UI.
 - **Renderer webpack config must NOT use** `@vercel/webpack-asset-relocator-loader` -- it breaks ESM imports from TipTap packages. Main process only.
@@ -91,7 +92,7 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 ### Links
 
 - The Link extension runs with `autolink: false`, `linkOnPaste: false`, `addPasteRules: () => []`, and a custom `isAllowedUri` that is REQUIRED -- TipTap's default validator rejects relative links containing a slash, which silently drops their marks on load. -> notes: Links
-- Cmd/Ctrl+click follows a link; plain click places the cursor. Relative paths resolve against the source file's folder (CommonMark / GitHub / VS Code semantics), and a missing target offers to create the file. -> notes: Links
+- Cmd/Ctrl+click follows a link; plain click places the cursor. Relative paths resolve against the source file's folder (CommonMark / GitHub / VS Code semantics), and a missing target offers to create the file. A `#anchor` smooth-scrolls to the heading with that GitHub slug, unfolding it if needed. -> notes: Links
 
 ### Sidebar
 
@@ -107,7 +108,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 
 - The word "Git" appears in the UI exactly ONCE: the first bullet of the how-it-works recap, which credits it and says you never have to touch it. No button, label, menu item, dialog, or toast may name Git -- a second mention is a regression, not a precedent. No staging, no branches, no remotes, no merge conflicts -- the audience is non-technical writers reviewing what an AI agent did to their files. -> notes: Checkpoints
 - Four attach states: `none` (dimmed tab + signpost to Settings), `managed` (writable), `foreign` (read-only + adopt button), `steppedBack` (read-only, not adoptable). -> notes: Checkpoints
-- **`mde.auto` is a second, ORTHOGONAL axis, not a second write permission.** `mde.managed` says MDE may write to this folder; `mde.auto` says whether it acts on that unprompted. Manual is the default (`writeMarker` writes `auto = false`), automatic is opt-in from Settings, and a MISSING key reads as `true` -- absence can only mean a folder activated before the setting existed. -> notes: Checkpoints
+- `mde.auto` **is a second, ORTHOGONAL axis, not a second write permission.** `mde.managed` says MDE may write to this folder; `mde.auto` says whether it acts on that unprompted. Manual is the default (`writeMarker` writes `auto = false`), automatic is opt-in from Settings, and a MISSING key reads as `true` -- absence can only mean a folder activated before the setting existed. -> notes: Checkpoints
 - **Turning checkpoints on lives in Settings, and there is deliberately no "turn off" button.** Flipping back to manual is the whole off switch; deleting a history the user might want back is not a thing a checkbox should do. The sidebar's `none` state is a signpost with the EXPLANATION plus an "Open Settings" button -- do not move the explanation into Settings, since nobody browses Settings. -> notes: Checkpoints
 - Full history browsing lives in a read-only TAB (`Tab.view === 'history'` -> `HistoryView`), not an app mode: inactive panes are hidden, not unmounted, so open buffers keep their unsaved edits and undo history. The sidebar panel stays the glance. Both share `src/components/vcRestore.ts` so they can't phrase an outcome differently. -> notes: Checkpoints
 - `HistoryView` **is the ONLY checkpoint drill-down, and the sidebar is the PRESENT TENSE only.** The sidebar renders the changes list and two buttons; every drill-down -- including a click on an uncommitted file -- routes into the tab. Two drill-downs over the same data is how the two views ended up wording the same restore differently. -> notes: Checkpoints
@@ -117,7 +118,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 - The per-file view (right-click -> View Change History, in the file explorer or a tab) is a SCOPE on the list level, not a fourth nav level; drilling into a checkpoint from it still shows every file that checkpoint changed. `listFileCheckpoints` needs `force: true` or `log` throws on a deleted file. -> notes: Checkpoints
 - `FileContextMenu` **is shared by the file explorer and the tab bar** -- add a menu item once and both get it. It is mounted inside `FileExplorer`, not `Sidebar`, so its props thread one level deeper than they look.
 - One cadence rule, source-agnostic, and only in automatic mode: more than 10 minutes since the last checkpoint + uncommitted changes + a quiet period -> checkpoint everything. No separate behavior for agent writes vs. the user's own edits. `--vc-eligibility-ms` / `--vc-poll-ms` override the constants for tests. -> notes: Checkpoints
-- **In manual mode `tick()` must clear `lastSignature` before returning, and `flushRoot` must return early.** Not clearing it deadlocks the poll gate open and the poller spins at full rate forever; not gating the flush means closing a folder or quitting produces exactly the surprise checkpoint manual mode opted out of. Both are "nothing happened" tests, both mutation-verified. -> notes: Checkpoints
+- **In manual mode** `tick()` **must clear** `lastSignature` **before returning, and** `flushRoot` **must return early.** Not clearing it deadlocks the poll gate open and the poller spins at full rate forever; not gating the flush means closing a folder or quitting produces exactly the surprise checkpoint manual mode opted out of. Both are "nothing happened" tests, both mutation-verified. -> notes: Checkpoints
 - Detection polls `statusMatrix` (which excludes gitignored files); the watcher is demoted to an unfiltered dirty-flag gate. The poller gate is `!sawChange && lastSignature === null` -- the second half prevents a deadlock after a single burst of edits. -> notes: Checkpoints
 - The quiet signature MUST fold in mtime and size: `statusMatrix`'s WORKDIR field is a coarse enum, not a content hash, so a rewritten file looks identical across polls. -> notes: Checkpoints
 - isomorphic-git has no `add -A` -- walk the status and call `remove` for deletions, or they silently vanish from checkpoints. Whole-tree restore must delete files that did not exist at the target, or you get a union of both states. -> notes: Checkpoints
@@ -129,6 +130,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 
 - DOCX: mammoth + turndown, with HTML preprocessing so turndown-plugin-gfm's table rule fires. PDF: `pdfjs-dist` legacy build in fake-worker mode, with position-based line grouping, column detection, heading detection by font height, and table detection. -> notes: Import (DOCX / PDF)
 - `forge.config.ts`'s `packageAfterCopy` hook copies main-process externals plus their transitive prod deps into the packaged app, because electron-forge ships an empty `node_modules` inside `app.asar`. -> notes: Packaging and webpack
+- Finder Quick Look preview is a Swift appex in `quicklook/` (no Xcode project), rendering with the editor's markdown-it via `render.js` in JavaScriptCore. It only fires because `forge.config.ts` imports the `net.daringfireball.markdown` UTI. The extension itself can't be E2E tested -- hand-check spacebar in Finder each release. -> notes: Quick Look preview
 - Bootstrap Icons are self-hosted in `src/fonts/`, imported via CSS in renderer.tsx.
 - Tooltips use a shared CSS `[data-tooltip]::after` bubble; buttons set `data-tooltip` + `aria-label`, not `title`. -> notes: UI details
 
@@ -169,7 +171,6 @@ For what exists today, see the **Feature inventory** in `docs/architecture-notes
 
 - DOCX export: menu item exists but handler is not wired in the renderer (Export as PDF *is* wired)
 - **Images are DESTROYED on save.** There is no image node in the editor schema, so an `![](path)` reference is dropped when the document loads and is simply absent when it is serialized back. Confirmed by probe, not inferred. Opening such a file now raises a blocking warning (`ImageWarningDialog`, fed by `findImageReferences` in `utils/markdown.ts`) -- that is a STOPGAP, not the fix, and it must be removed in the same change that adds a real image node. See TASKS.md. -> notes: Images are dropped, and the warning that says so
-- Toolbar hide/show setting not yet implemented
 
 ## CSS conventions
 

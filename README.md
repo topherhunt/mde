@@ -28,6 +28,7 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 - **DOCX and PDF import/export** -- converts to Markdown on click, preserving structure (tables, headings, columns) where possible (not perfect!)
 - **File conflict detection** -- detects external changes; silent reload or warning banner
 - **Checkpoints** -- opt-in version history for a folder. Snapshots save themselves automatically once things go quiet (or on demand, with a note). Clicking a changed file shows a word-level diff in plain prose -- added words green, removed words red -- and **Restore** asks which version you actually want: the way the file was *before* that change, or the way it came out *after* it. **Browse all checkpoints** opens the full history in a tab, where you can work back through every checkpoint, see how much each file changed, and rename a checkpoint to something you will recognise later. To follow a single document, right-click it in the file list (or right-click its tab) and choose **View Change History** -- the same tab, filtered to just the checkpoints that touched that file, which still works after the file has been deleted. Restoring never overwrites your history; it adds to it, so you can always go forward again. Folders that already have version history set up by other tools stay read-only unless you say otherwise.
+- **Finder Quick Look** -- press spacebar on a `.md` file in Finder to see it rendered, not as raw Markdown (macOS; launch MDE once so macOS picks it up)
 - **Dark mode** -- light, dark, or follow system preference
 - **Terminal launcher** -- `mde .` to open a folder from the command line
 
@@ -45,7 +46,7 @@ Download the latest build for your platform from the [releases page](https://git
 
 That's it -- MDE opens normally from then on, and you never have to repeat it.
 
-> **Older instructions said to run `xattr -d com.apple.quarantine`. You don't need that anymore.** Builds before v0.5.0 shipped with a corrupted code signature, which made macOS report *tampering* ("MDE is damaged and can't be opened") instead of the ordinary unverified-developer warning -- and the damaged error has no Open Anyway button, leaving Terminal as the only way through. That's fixed as of v0.5.0. If you're stuck on an older build, just download the current release rather than running the command.
+> **Older instructions said to run** `xattr -d com.apple.quarantine`**. You don't need that anymore.** Builds before v0.5.0 shipped with a corrupted code signature, which made macOS report *tampering* ("MDE is damaged and can't be opened") instead of the ordinary unverified-developer warning -- and the damaged error has no Open Anyway button, leaving Terminal as the only way through. That's fixed as of v0.5.0. If you're stuck on an older build, just download the current release rather than running the command.
 
 Right-click > Open also no longer works on macOS Sequoia (15) or later; Apple removed that shortcut. System Settings is the way.
 

@@ -180,6 +180,7 @@ body {
 .mt-3 { margin-top: 1rem; }
 .mb-2 { margin-bottom: 0.5rem; }
 .mb-3 { margin-bottom: 1rem; }
+.ms-auto { margin-left: auto; }
 
 /* Buttons. `.settings-btn` predates these and carries its own copy of the base shape;
    new code should compose `.btn` + a variant. */
@@ -587,6 +588,23 @@ body {
   cursor: pointer;
 }
 
+/* The slide-out runs before App unmounts the toolbar; TOOLBAR_SLIDE_MS in App.tsx must match. */
+.toolbar.toolbar-leaving {
+  transform: translateX(100%);
+  opacity: 0;
+  transition: transform 0.2s ease-in, opacity 0.2s ease-in;
+}
+
+/* Doubled class so `position` beats the later `[data-tooltip] { position: relative }`. */
+.toolbar-btn.toolbar-expand {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  z-index: 10;
+  background: var(--bg-secondary);
+  border-color: var(--border);
+}
+
 /* --- Tooltips (toolbar buttons, fold caret) --- */
 /* Shared styled tooltip shown after a short hover delay. Defaults to below-center;
    the fold caret overrides to the right so it isn't clipped at the editor's left edge. */
@@ -637,6 +655,14 @@ body {
   transform: none;
   max-width: 200px;
   white-space: normal;
+}
+
+/* Pinned to the window's right edge, so a centred bubble would be clipped. */
+.toolbar-collapse[data-tooltip]::after,
+.toolbar-expand[data-tooltip]::after {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 .editor-content .tiptap .fold-caret[data-tooltip]::after {
@@ -1059,15 +1085,22 @@ body {
 }
 
 /* A top-level heading has no indent to hang a caret in -- at the gutter offset the list
-   items use it would land on the sidebar. So a heading's caret sits inline after its
-   text, in the same spot the "..." badge takes once the section is folded. */
+   items use it would land on the sidebar. So a heading's caret sits after its text, in the
+   same spot the "..." badge takes once the section is folded. It is absolute with auto
+   offsets -- its static position, right after the text, but out of flow -- because an
+   in-flow caret wraps on a nearly-full line, so hovering reflowed the page. The heading's
+   padding-right reserves room for it; overflow-x: clip cuts off whatever still sticks out
+   (its laid-out-while-invisible tooltip) instead of widening the editor's scroll area. */
+.editor-content .tiptap :is(h1, h2, h3, h4, h5, h6) {
+  padding-right: 1.25rem;
+  overflow-x: clip;
+}
+
 .editor-content .tiptap .fold-caret-inline {
-  position: relative;
   left: auto;
   top: auto;
-  display: inline-block;
-  margin-left: 0.4rem;
-  vertical-align: middle;
+  margin-left: 0.25rem;
+  margin-top: calc(0.5lh - 8px);
 }
 
 .editor-content .tiptap li[data-checked].fold-hoverable .fold-caret {
@@ -1475,6 +1508,11 @@ body {
 /* Two side-by-side choices do not fit the standard 480px dialog. */
 .modal-dialog-wide {
   width: 620px;
+}
+
+/* Room for a long filename inside a button label. */
+.modal-dialog-xl {
+  width: 720px;
 }
 
 /* The list of image references a file is about to lose. Scrolls rather than growing the dialog

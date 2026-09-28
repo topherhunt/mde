@@ -46,7 +46,7 @@ Opt-in, disabled by default. When enabled via Settings, saves after 1s of inacti
 
 ### Watch the directory, not the file
 
-File watching watches the *containing directory* (filtered by basename, refcounted per dir in `dirWatchers`), NOT the file inode. `fs.watch` on a single file follows the inode, so an atomic save by another program (write temp + rename over original -- what most editors and Claude's file tools do) silently kills the watcher. Watching the directory survives atomic replaces. When the platform reports a null filename, the handler notifies all watched files in that dir and lets the renderer's hash comparison decide.
+File watching watches the *containing directory* (one watcher per dir in `dirWatchers`, filtered by basename), NOT the file inode. Each basename records which windows (webContents ids) watch it, and events go only to those: a shared per-file flag let one window's unwatch (closing a tab, replacing a preview tab) silently stop another window with the same file open from ever reloading it, and a window mid-save must not receive the event for its own write. A closing window releases its watches. `fs.watch` on a single file follows the inode, so an atomic save by another program (write temp + rename over original -- what most editors and Claude's file tools do) silently kills the watcher. Watching the directory survives atomic replaces. When the platform reports a null filename, the handler notifies all watched files in that dir and lets the renderer's hash comparison decide.
 
 ### Auto-reload proof banner
 
@@ -186,7 +186,7 @@ The hovered item is found by COORDINATES, not DOM target: `view.posAtCoords({lef
 
 When hovering an unfolded foldable item (innermost only), a dim gray `.fold-caret` widget renders to its left -- no parents, no children. The caret carries a `data-tooltip` ("Fold sub-list" / "Fold section" + "(Cmd + .)") and its `mousedown` toggles the node's `folded` attr.
 
-Headings are hovered the same way (via `$pos.parent.type.name === 'heading'` when no listItem ancestor is found), but their caret is rendered INLINE after the heading text (`.fold-caret-inline`, the same spot the `...` badge takes) -- `.editor-content`'s left padding is only 12px, so at the list gutter offset (`left: -33px`) a top-level heading's caret would land on the sidebar and be unclickable. `.fold-caret-inline` must stay AFTER `.fold-caret` in index.css: same specificity, so source order decides. The blue `::after` chevron remains list-item-only for the same reason.
+Headings are hovered the same way (via `$pos.parent.type.name === 'heading'` when no listItem ancestor is found), but their caret is rendered after the heading text (`.fold-caret-inline`, the same spot the `...` badge takes) -- absolutely positioned with `auto` offsets, so it sits at its static position but takes no space in the line, into a `padding-right` every heading reserves for it. Headings also carry `overflow-x: clip`: the caret's tooltip is laid out even while invisible, and on a full-width heading it stuck ~124px out and gave the editor a horizontal scrollbar. Clip (unlike hidden) makes no scroll container and leaves vertical overflow visible. An in-flow caret wrapped onto a new line whenever a heading nearly filled its line, so just moving the mouse down the headings reflowed the whole page -- `.editor-content`'s left padding is only 12px, so at the list gutter offset (`left: -33px`) a top-level heading's caret would land on the sidebar and be unclickable. `.fold-caret-inline` must stay AFTER `.fold-caret` in index.css: same specificity, so source order decides. The blue `::after` chevron remains list-item-only for the same reason.
 
 ### Fold state persistence
 
@@ -259,6 +259,8 @@ A custom `isAllowedUri` (`ctx.defaultValidate(url) || !/^[a-z][a-z0-9+.-]*:/i.te
 Cmd/Ctrl+click on a link in the editor follows it (plain click is left alone so the cursor can be placed inside link text to edit). Implemented as `handleClick` in the Editor's `editorProps` -- it reads the raw `href` via `getAttribute('href')` (the `.href` property would resolve to an absolute `file://` URL) and calls an `onLinkClick` prop.
 
 App's `handleLinkClick(href, sourceFilePath)` opens scheme URLs (`http:` / `mailto:` etc.) via `openExternal`; for relative paths it strips any `#anchor` / `?query` and resolves with `resolvePath()` from `utils/paths.ts` against the source file's folder (CommonMark / GitHub / VS Code semantics -- a bare path like `docs/foo.md` is relative to the current file, same as `./docs/foo.md`; `projectRoot` is used only as a fallback for an unsaved buffer). Then `getFileStats` decides: existing file -> `openFile`, directory -> toast, missing -> a `CreateFileDialog` that `createDirectory` + `createFile` + `openFile` on confirm.
+
+A pure `#anchor` link is handled inside the Editor's `handleClick`, before `onLinkClick`: `findHeadingByAnchor()` (`utils/markdown.ts`) matches it against GitHub-style heading slugs (lowercase, punctuation dropped, spaces -> `-`, repeats suffixed `-1`, `-2` in document order), puts the cursor at the heading, then calls `scrollIntoView({ behavior: 'smooth' })` on its DOM node. The selection must be set FIRST: the fold plugin releases any fold whose hidden span contains the selection, and a `display: none` heading has nothing to scroll to. The transaction deliberately omits `tr.scrollIntoView()`, which would jump instantly. An unmatched anchor falls through to App, which toasts. `doc.md#section` opens the file but does not yet scroll to the section.
 
 The `onLinkClick` prop is bound per-tab in the Editor map; inside the Editor a ref (`onLinkClickRef`) bridges it into the once-created ProseMirror click closure.
 
@@ -347,7 +349,7 @@ $ codesign -dvvv MDE.app
 Info.plist=not bound          <-- the plist was never sealed
 ```
 
-This is [electron/forge#3757](https://github.com/electron/forge/issues/3757), closed as not planned, so the repair is ours to own. `forge.config.ts`'s `postPackage` hook re-signs the whole bundle ad-hoc (`codesign --force --deep --sign -`) and then runs `codesign --verify --deep --strict` as a gate, so the build FAILS rather than silently producing a "damaged" app. `--deep` is deprecated for real Developer ID signing but is the correct tool for a blanket ad-hoc repair.
+This is [electron/forge#3757](https://github.com/electron/forge/issues/3757), closed as not planned, so the repair is ours to own. `forge.config.ts`'s `postPackage` hook re-signs the whole bundle ad-hoc (`codesign --force --deep --sign -`), adds and signs the Quick Look appex, re-seals the app WITHOUT `--deep` (see Quick Look preview for why the order is fixed), and then runs `codesign --verify --deep --strict` as a gate, so the build FAILS rather than silently producing a "damaged" app. `--deep` is deprecated for real Developer ID signing but is the correct tool for a blanket ad-hoc repair.
 
 Ordering works because `postPackage` runs inside the package step, which completes before makers run (`@electron-forge/core/dist/api/make.js` runs the package listr at line 129 and "Making distributables" at 153). Neither maker re-breaks it: MakerDMG hands the `.app` to `electron-installer-dmg` to build a filesystem image, and MakerZIP's `cross-zip` runs `zip -r -y`, where `-y` stores symlinks as symlinks (Electron frameworks are full of them, and a symlink-flattening zip is a classic way to re-corrupt a signature).
 
@@ -375,6 +377,34 @@ This is a consequence of ad-hoc signing, not of the re-sign hook -- a Developer 
 ### Renderer config
 
 Renderer webpack config does NOT use the `@vercel/webpack-asset-relocator-loader`. That loader breaks ESM imports from TipTap packages. It's only needed for native node modules in the main process.
+
+## Quick Look preview
+
+Spacebar on a `.md` in Finder shows a rendered preview, from a native app extension at `MDE.app/Contents/PlugIns/MDEQuickLook.appex`. Source lives in `quicklook/`; `quicklook/build.ts` compiles and signs it from `postPackage`. No Xcode project: an appex is a plist plus a Mach-O linked with `-e _NSExtensionMain`, and `swiftc` from the Command Line Tools is enough.
+
+### Ad-hoc signing is sufficient
+
+Verified by spike before building anything: an ad-hoc-signed, sandboxed appex inside an ad-hoc-signed host that lives outside `/Applications` is discovered by PlugInKit, launched by runningboard, granted its sandbox, and shown by Finder on spacebar. No Developer ID needed. macOS picks the extension up once LaunchServices has registered the app, which happens on first launch.
+
+### Signing order is fixed, and `--verify` cannot see it go wrong
+
+`codesign --force --deep` re-signs nested code, and it re-signs the appex WITHOUT its entitlements. An unsandboxed preview extension is silently never loaded -- and `codesign --verify --deep --strict` still passes, because the signature is valid, just wrong. Mutation-verified: adding `--deep` back to the final re-seal left strict verify green and stripped the entitlements. So `postPackage` goes: `--deep` repair of Electron's helpers -> `buildQuickLookExtension` (signs the appex with `quicklook/entitlements.plist`) -> re-seal the app without `--deep` -> strict verify -> `verifyQuickLookExtension`, which fails the build if the sandbox entitlement is gone. `tests/packaged.spec.ts` asserts the same thing.
+
+The appex's `CFBundleIdentifier` is derived from the host's at build time (`<host id>.quicklook`); macOS rejects an extension whose ID is not prefixed by its host's.
+
+### The host must import the markdown UTI
+
+Extensions match files by UTI, and on a stock Mac nothing declares `net.daringfireball.markdown`, so `.md` files get a dynamic `dyn.*` type and the extension never fires. `forge.config.ts`'s `extendInfo` carries a `UTImportedTypeDeclarations` entry for it. An import loses to any installed app that EXPORTS the type, so it cannot fight another app's declaration.
+
+If another app also ships a markdown Quick Look extension, macOS chooses between them (which one wins is unverified); the user can disable either under System Settings > General > Login Items & Extensions > Quick Look. There is no declarative way for an extension to defer to others.
+
+### Rendering: the editor's markdown-it, in JavaScriptCore
+
+`PreviewProvider.swift` is a data-based `QLPreviewProvider` (`QLIsDataBasedPreview`) that returns an HTML page. It evaluates markdown-it's UMD build (copied from `node_modules` at build time, the same copy tiptap-markdown uses) plus `quicklook/render.js` in a `JSContext`, with the editor's options (`html: false`, `breaks: true`), so a file previews the way it parses on open. `render.js` also tags `- [ ]` / `- [x]` items with `data-checked` (styled like the editor's checkboxes) and replaces images with their alt text, since a data-based preview has no base URL to resolve a relative path against. JS errors, a missing resource, or non-UTF-8 input throw, and Quick Look falls back to its own preview.
+
+### Testing
+
+The extension runs in `QuickLookUIService`, out of Playwright's reach, so the Finder spacebar check is manual, once per release. Everything around it is automated: `tests/quicklook.spec.ts` runs `render.js` through JXA (`osascript -l JavaScript`), which IS JavaScriptCore, so syntax Node accepts but JSC rejects would fail there; `tests/packaged.spec.ts` checks the built appex's entitlements, ID, architecture, the host's UTI import, and renders with the bundled copies of the JS.
 
 Bootstrap Icons are self-hosted in `src/fonts/` (woff/woff2), imported via CSS in renderer.tsx.
 
@@ -574,7 +604,7 @@ What exists today, for orientation. This list goes stale faster than the notes a
   - Folder expand/collapse state persists across explorer/outline view switches
 - Document outline sidebar (icon tabs with rounded bg, not text+underline). The heading at the current scroll position (top of the viewport) is highlighted blue; the rest are default color.
 - Tabbed editor with smart dirty tracking (undo back to original clears dirty), scroll position preserved across tab switches (saved via scroll event listeners, restored on tab activation)
-- Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, lists, todo list, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable. Each button shows a styled tooltip on hover hinting its keyboard shortcut (e.g. "Bold selection (Cmd + B)").
+- Toolbar with Bootstrap Icons (headings dropdown, bold, italic, strike, highlight, lists, todo list, blockquote, code, link, table, HR) -- wraps on narrow windows, undo/redo gray out when unavailable. A right-aligned caret (or View > Toggle Toolbar, Cmd+Alt+T) slides it out and leaves a floating expand button in the editor's top-right; visibility persists as `toolbar` in `mde-state.json`. Each button shows a styled tooltip on hover hinting its keyboard shortcut (e.g. "Bold selection (Cmd + B)").
 - Link editing via floating LinkBar (top-right of editor, like FindBar) -- preserves text selection highlight via ProseMirror decorations while editing URL
 - Link preview popup (top-right of editor area when cursor is in a link)
 - Cmd/Ctrl+click a link to follow it: relative file links open in a new tab (resolved against the current file's folder, per standard Markdown semantics); a missing target prompts to create the file; external URLs open in the browser. Plain click still positions the cursor for editing.
@@ -586,6 +616,7 @@ What exists today, for orientation. This list goes stale faster than the notes a
 - Quick Open command palette (Cmd+O) with fuzzy search, file indexing (10s TTL cache)
 - DOCX/PDF import: converts to `.{ext}.md` on click (e.g. `report.pdf.md` -- preserves original extension). The source file is never renamed, moved, or hidden. Clicking a source that already has its Markdown beside it opens an "Already converted" dialog (`.qa-import-exists`) offering to open that Markdown (primary) or convert again into a new numbered copy (`report.pdf.2.md`, `.3.md`, ...) -- conversion never overwrites.
 - PDF export (via Electron printToPDF)
+- Finder Quick Look (spacebar) preview of `.md` files, macOS only: a native appex rendering with the editor's markdown-it options, task checkboxes styled like the editor's, light/dark aware, images shown as alt text
 - Tools -> Word Count: a modal (`.qa-word-count`) showing word count, character count, and estimated page count (300 words/page) as `selection / whole document` -- or, when nothing is selected, the document figure alone with no `0 / ` prefix. Counts are snapshotted when the dialog opens. Escape or clicking the backdrop closes it. No keyboard shortcut -- menu only.
 - Dark mode support (light / dark / system default, stored in user state file)
 - Settings dialog (Cmd+,) with theme selector, spellcheck toggle, auto-save toggle (1s debounce), terminal launcher installer

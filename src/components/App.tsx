@@ -2,7 +2,10 @@ import React, { useReducer, useEffect, useCallback, useRef, useState, useMemo } 
 import { Tab, SidebarMode, HistoryTarget } from '../types';
 import Sidebar from './Sidebar';
 import TabBar from './TabBar';
-import Toolbar from './Toolbar';
+import Toolbar, { TOGGLE_TOOLBAR_HINT } from './Toolbar';
+
+// Must match the .toolbar-leaving transition in index.css.
+const TOOLBAR_SLIDE_MS = 200;
 import Editor, { getFoldedPositions, applyFoldPositions, foldPosToLineNumbers, lineNumbersToFoldPositions } from './Editor';
 import ConflictBanner from './ConflictBanner';
 import FindBar from './FindBar';
@@ -195,6 +198,9 @@ export default function App() {
   const [linkTrigger, setLinkTrigger] = useState(0);
   const [spellcheck, setSpellcheck] = useState(true);
   const [autosave, setAutosave] = useState(false);
+  const [toolbarVisible, setToolbarVisible] = useState(true);
+  const [toolbarLeaving, setToolbarLeaving] = useState(false);
+  const toolbarLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [importConfirm, setImportConfirm] = useState<string | null>(null);
@@ -337,7 +343,11 @@ export default function App() {
     }
     // Drop any in-page anchor / query so "doc.md#section" resolves to the file.
     const filePart = href.replace(/[#?].*$/, '');
-    if (!filePart) return; // pure anchor like "#section" -- nothing to open
+    // A pure "#section" only reaches here when the Editor found no heading to jump to.
+    if (!filePart) {
+      showToast(`No heading in this document matches ${href}.`, 'danger');
+      return;
+    }
     // Relative links resolve against the source file's folder (CommonMark / GitHub /
     // VS Code semantics), regardless of any ./ or ../ prefix. For an unsaved buffer
     // with no folder, fall back to the project root.
@@ -834,14 +844,33 @@ export default function App() {
     window.mde.getTheme().then(applyTheme);
     window.mde.getSpellcheck().then(setSpellcheck);
     window.mde.getAutosave().then(setAutosave);
+    window.mde.getToolbar().then(setToolbarVisible);
     const cleanupTheme = window.mde.onThemeChanged(applyTheme);
+    const cleanupToolbar = window.mde.onToolbarChanged(applyToolbarVisible);
     const cleanupSpell = window.mde.onSpellcheckChanged(setSpellcheck);
     const cleanupAutosave = window.mde.onAutosaveChanged(setAutosave);
     const cleanupProjectFiles = window.mde.onProjectFilesChanged(() => setSidebarRefreshKey(n => n + 1));
-    return () => { cleanupTheme(); cleanupSpell(); cleanupAutosave(); cleanupProjectFiles(); };
+    return () => { cleanupTheme(); cleanupSpell(); cleanupAutosave(); cleanupToolbar(); cleanupProjectFiles(); };
   }, []);
 
   useEffect(() => { findBarOpenRef.current = state.findBarOpen; }, [state.findBarOpen]);
+
+  // Hiding slides the toolbar out before unmounting it; showing is immediate.
+  function applyToolbarVisible(visible: boolean) {
+    if (toolbarLeaveTimerRef.current) clearTimeout(toolbarLeaveTimerRef.current);
+    toolbarLeaveTimerRef.current = null;
+    if (visible) {
+      setToolbarLeaving(false);
+      setToolbarVisible(true);
+      return;
+    }
+    setToolbarLeaving(true);
+    toolbarLeaveTimerRef.current = setTimeout(() => {
+      toolbarLeaveTimerRef.current = null;
+      setToolbarLeaving(false);
+      setToolbarVisible(false);
+    }, TOOLBAR_SLIDE_MS);
+  }
 
   function applyTheme(t: string) {
     setTheme(t);
@@ -1001,8 +1030,8 @@ export default function App() {
             onRequestDeleteFile={setTabDeleteTarget}
             onViewFileHistory={viewFileHistory}
           />
-          {!activeTab?.readOnly && (
-            <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} />
+          {!activeTab?.readOnly && toolbarVisible && (
+            <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} leaving={toolbarLeaving} />
           )}
           {state.findBarOpen && activeEditor && (
             <FindBar
@@ -1016,6 +1045,16 @@ export default function App() {
             />
           )}
           <div className="editor-area">
+            {!activeTab?.readOnly && !toolbarVisible && (
+              <button
+                className="toolbar-btn toolbar-expand qa-toolbar-expand"
+                data-tooltip={`Show toolbar (${TOGGLE_TOOLBAR_HINT})`}
+                aria-label="Show toolbar"
+                onMouseDown={(e) => { e.preventDefault(); window.mde.setToolbar(true); }}
+              >
+                <i className="bi bi-chevron-bar-left" />
+              </button>
+            )}
             {reloadNotice && (
               <div className={`reload-notice${reloadNotice.hiding ? ' reload-notice-out' : ''}`}>
                 <i className="bi bi-arrow-clockwise" />
@@ -1494,7 +1533,7 @@ function ImportExistsDialog({ filePath, mdPath, onOpen, onReconvert, onCancel }:
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal-dialog qa-import-exists" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-dialog modal-dialog-xl qa-import-exists" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header" style={{ justifyContent: 'center' }}>
           <span className="fw-bold">Already converted</span>
         </div>

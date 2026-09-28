@@ -9,9 +9,12 @@ interface ToolbarProps {
   linkTrigger?: number;
   onToast?: (msg: string, variant?: string) => void;
   onLinkEdit?: () => void;
+  leaving: boolean;
 }
 
-export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: ToolbarProps) {
+export const TOGGLE_TOOLBAR_HINT = `${MOD} + Alt + T`;
+
+export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit, leaving }: ToolbarProps) {
   const [, forceUpdate] = useState(0);
 
   useEffect(() => {
@@ -48,7 +51,7 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
   }
 
   return (
-    <div className="toolbar">
+    <div className={`toolbar${leaving ? ' toolbar-leaving' : ''}`}>
       <div className="toolbar-group">
         <ToolbarButton
           icon="arrow-counterclockwise"
@@ -219,6 +222,16 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit }: To
           title="Horizontal rule"
           active={false}
           onClick={() => editor.chain().focus().setHorizontalRule().run()}
+        />
+      </div>
+
+      <div className="toolbar-group ms-auto">
+        <ToolbarButton
+          icon="chevron-bar-right"
+          title={`Hide toolbar (${TOGGLE_TOOLBAR_HINT})`}
+          active={false}
+          onClick={() => window.mde.setToolbar(false)}
+          className="toolbar-collapse qa-toolbar-collapse"
         />
       </div>
     </div>
