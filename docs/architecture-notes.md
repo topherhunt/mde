@@ -30,6 +30,8 @@ Three fixes, all required, after users hit a red banner on files nothing else ha
 2. The renderer's `diskHash` is read from a synchronous `diskHashRef` Map (`recordDiskHash` / `knownDiskHash`), not from `activeTab.diskHash`: an autosave `setTimeout` closure captured before a manual Cmd+S quoted the PRE-save hash and self-conflicted. `tabsRef` does the same for `state.tabs` in the `file-changed` handler.
 3. `saveActiveTab` holds a `savingRef` in-flight lock, cancels any pending autosave timer before writing, and the autosave timer re-checks `tab.dirty` / `tab.conflict` from `tabsRef` before firing.
 
+`saveActiveTab` needs `activeEditor`, and a missing one THROWS (surfacing in the red error banner) instead of returning. `registerEditor` / `unregisterEditor` compare against `activeTabIdRef`, never a captured `activeTab`: each Editor calls the `onDestroy` it captured at mount, when its own tab was active, so closing a background tab used to null the active tab's editor and turn every save into a silent no-op.
+
 Relatedly, edits that land WHILE a write is in flight (`activeEditor.state.doc !== docAtWrite`) leave the tab dirty and re-arm autosave instead of being marked clean.
 
 On a real conflict the renderer deliberately does NOT adopt the on-disk hash -- it belongs to a version the user has not seen, and adopting it would let the next Cmd+S clobber it.

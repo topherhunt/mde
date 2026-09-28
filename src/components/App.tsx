@@ -258,6 +258,10 @@ export default function App() {
   // Latest tab list, readable from callbacks that were created in an earlier render.
   const tabsRef = useRef(state.tabs);
   tabsRef.current = state.tabs;
+  // An Editor calls the onDestroy it captured at mount, when ITS tab was active. Checking
+  // that stale activeTab let closing a background tab null out the active tab's editor.
+  const activeTabIdRef = useRef<string | null>(null);
+  activeTabIdRef.current = activeTab?.id ?? null;
   // Only one write per buffer may be in flight; a second would quote the first's
   // pre-write hash.
   const savingRef = useRef(false);
@@ -464,7 +468,10 @@ export default function App() {
   }, [importExisting, runConvert]);
 
   const saveActiveTab = useCallback(async () => {
-    if (!activeTab || !activeEditor) return;
+    if (!activeTab || activeTab.view === 'history') return;
+    // Never return silently: a buffer that cannot save must say so. The throw reaches the
+    // red error banner via the unhandledrejection listener.
+    if (!activeEditor) throw new Error(`Save failed: "${activeTab.fileName}" has no connected editor. Copy your text somewhere safe, then close and reopen the file.`);
     if (activeTab.conflict) return;
     if (savingRef.current) return;
 
@@ -604,7 +611,7 @@ export default function App() {
 
   const registerEditor = useCallback((tabId: string, editor: TipTapEditor) => {
     editorsRef.current.set(tabId, editor);
-    if (activeTab && tabId === activeTab.id) {
+    if (tabId === activeTabIdRef.current) {
       setActiveEditor(editor);
     }
     requestAnimationFrame(() => {
@@ -617,17 +624,17 @@ export default function App() {
         scrollListenersRef.current.set(tabId, () => el.removeEventListener('scroll', handler));
       }
     });
-  }, [activeTab]);
+  }, []);
 
   const unregisterEditor = useCallback((tabId: string) => {
     editorsRef.current.delete(tabId);
     scrollPositionsRef.current.delete(tabId);
     const cleanup = scrollListenersRef.current.get(tabId);
     if (cleanup) { cleanup(); scrollListenersRef.current.delete(tabId); }
-    if (activeTab && tabId === activeTab.id) {
+    if (tabId === activeTabIdRef.current) {
       setActiveEditor(null);
     }
-  }, [activeTab]);
+  }, []);
 
   const handleDeleteFile = useCallback((filePath: string) => {
     const tabIndex = state.tabs.findIndex(t => t.filePath === filePath);

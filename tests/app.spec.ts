@@ -384,6 +384,40 @@ test.describe('Editing', () => {
     // Cleanup
   });
 
+  test('save still works after closing a different, inactive tab', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const first = path.join(tmpDir, 'first.md');
+    const second = path.join(tmpDir, 'second.md');
+    fs.copyFileSync(fixturePath('test-project/doc1.md'), first);
+    fs.copyFileSync(fixturePath('test-project/doc2.md'), second);
+
+    for (const filePath of [first, second]) {
+      await app.evaluate(({ BrowserWindow }, p) => {
+        BrowserWindow.getAllWindows()[0].webContents.send('open-file', p);
+      }, filePath);
+      await expect(page.locator('.tab')).toHaveCount(filePath === first ? 1 : 2);
+    }
+
+    // second.md is active; close first.md from its own close button.
+    await page.locator('.tab').nth(0).locator('.tab-close').click();
+    await expect(page.locator('.tab')).toHaveCount(1);
+
+    const editor = page.locator('.tiptap');
+    await editor.click();
+    await editor.press('End');
+    await editor.type(' saved after close');
+    await expect(page.locator('.tab-dirty-dot')).toBeVisible();
+
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('save-file');
+    });
+
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0, { timeout: 5000 });
+    expect(fs.readFileSync(second, 'utf-8')).toContain('saved after close');
+  });
+
   test('preserves existing relative links through a load/save round-trip', async () => {
     ({ app, page } = await launchApp());
 
