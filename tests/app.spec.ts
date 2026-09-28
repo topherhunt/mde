@@ -418,6 +418,28 @@ test.describe('Editing', () => {
     expect(fs.readFileSync(second, 'utf-8')).toContain('saved after close');
   });
 
+  test('closing a tab left of the active one keeps the same file active', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const names = ['left.md', 'middle.md', 'right.md'];
+    for (const [i, name] of names.entries()) {
+      const filePath = path.join(tmpDir, name);
+      fs.copyFileSync(fixturePath('test-project/doc1.md'), filePath);
+      await app.evaluate(({ BrowserWindow }, p) => {
+        BrowserWindow.getAllWindows()[0].webContents.send('open-file', p);
+      }, filePath);
+      await expect(page.locator('.tab')).toHaveCount(i + 1);
+    }
+
+    await page.locator('.tab').nth(1).click();
+    await expect(page.locator('.tab.active .tab-name')).toHaveText('middle.md');
+
+    await page.locator('.tab').nth(0).locator('.tab-close').click();
+    await expect(page.locator('.tab')).toHaveCount(2);
+    await expect(page.locator('.tab.active .tab-name')).toHaveText('middle.md');
+  });
+
   test('preserves existing relative links through a load/save round-trip', async () => {
     ({ app, page } = await launchApp());
 

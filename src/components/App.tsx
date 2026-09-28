@@ -74,6 +74,8 @@ function reducer(state: AppState, action: Action): AppState {
     case 'CLOSE_TAB': {
       const tabs = state.tabs.filter((_, i) => i !== action.index);
       let activeTabIndex = state.activeTabIndex;
+      // Removing a tab to the left shifts the active one down a slot.
+      if (action.index < activeTabIndex) activeTabIndex--;
       if (activeTabIndex >= tabs.length) activeTabIndex = tabs.length - 1;
       if (activeTabIndex < 0) activeTabIndex = 0;
       return { ...state, tabs, activeTabIndex };
