@@ -3,14 +3,14 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 
-// Run the Quick Look renderer (markdown-it + quicklook/render.js) through JXA
-// (osascript -l JavaScript), which is JavaScriptCore -- the same engine
-// PreviewProvider.swift evaluates it in. Returns the full HTML page.
-export function renderInJSC(markdownItPath: string, renderPath: string, src: string): string {
+// Call a global function of the Quick Look renderer (markdown-it + quicklook/render.js)
+// through JXA (osascript -l JavaScript), which is JavaScriptCore -- the same engine
+// Shared.swift evaluates it in. Returns the function's string result.
+export function renderInJSC(markdownItPath: string, renderPath: string, src: string, fn = 'renderMarkdown'): string {
   const script = [
     fs.readFileSync(markdownItPath, 'utf8'),
     fs.readFileSync(renderPath, 'utf8'),
-    `renderMarkdown(${JSON.stringify(src)})`,
+    `${fn}(${JSON.stringify(src)})`,
   ].join('\n;\n');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mde-ql-'));
   const file = path.join(dir, 'render.js');

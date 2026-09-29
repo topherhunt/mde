@@ -123,9 +123,9 @@ const config: ForgeConfig = {
     // is `xattr -dr com.apple.quarantine`, which is not a thing we can ask users to do.
     //
     // Signing is inside-out: --deep repairs Electron's nested helpers, THEN the Quick
-    // Look appex is added and signed with its own sandbox entitlements, THEN the app
-    // is re-sealed WITHOUT --deep. A --deep pass after the appex would strip its
-    // entitlements and the preview would silently never load.
+    // Look appexes are added and signed with their own sandbox entitlements, THEN the
+    // app is re-sealed WITHOUT --deep. A --deep pass after the appexes would strip
+    // their entitlements and they would silently never load.
     //
     // Runs for `make`, `package`, and `pretest` alike, since postPackage is part of
     // the package step. Guarded on darwin: `codesign` does not exist on the Windows

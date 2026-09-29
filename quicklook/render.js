@@ -1,7 +1,7 @@
-// Markdown -> standalone HTML page for the Quick Look preview. Evaluated in
-// JavaScriptCore by PreviewProvider.swift after markdown-it's UMD build has defined
-// the global `markdownit`. Plain ES5-style script with no module syntax, so the same
-// file also runs under Node's vm and JXA in the tests.
+// Markdown -> an HTML page for the spacebar preview (renderMarkdown) and plain-text
+// blocks for the Finder thumbnail (thumbnailBlocks). Evaluated in JavaScriptCore by
+// Shared.swift after markdown-it's UMD build has defined the global `markdownit`.
+// Plain ES5-style script with no module syntax, so the tests can run it under JXA.
 
 // Same options as the editor's tiptap-markdown (Editor.tsx), so a file previews the
 // way it opens: raw HTML is literal text, single newlines are line breaks.
@@ -58,6 +58,46 @@ md.core.ruler.push('mde_tasks', function (state) {
     t[i + 1].hidden = false;
   }
 });
+
+// Plain text of an inline token: syntax gone, breaks as spaces, images as alt text.
+function inlineText(token) {
+  return token.children.map(function (c) {
+    if (c.type === 'softbreak' || c.type === 'hardbreak') return ' ';
+    return c.type === 'text' || c.type === 'code_inline' || c.type === 'image' ? c.content : '';
+  }).join('');
+}
+
+// The first `max` blocks as JSON [{kind, text, checked?, n?}] for the Finder thumbnail
+// (ThumbnailProvider.swift), where kind is h1..h6 | p | bullet | ordered | task |
+// quote | code.
+function thumbnailBlocks(src, max) {
+  var t = md.parse(src, {});
+  var blocks = [];
+  var lists = [];
+  var quoteDepth = 0;
+  for (var i = 0; i < t.length && blocks.length < (max || 40); i++) {
+    var tok = t[i];
+    if (tok.type === 'bullet_list_open' || tok.type === 'ordered_list_open') lists.push(tok.type);
+    else if (tok.type === 'bullet_list_close' || tok.type === 'ordered_list_close') lists.pop();
+    else if (tok.type === 'blockquote_open') quoteDepth++;
+    else if (tok.type === 'blockquote_close') quoteDepth--;
+    else if (tok.type === 'fence' || tok.type === 'code_block') {
+      blocks.push({ kind: 'code', text: tok.content.replace(/\n$/, '') });
+    } else if (tok.type === 'inline' && t[i - 1]) {
+      var text = inlineText(tok);
+      var open = t[i - 1];
+      if (open.type === 'heading_open') blocks.push({ kind: open.tag, text: text });
+      else if (t[i - 2] && t[i - 2].type === 'list_item_open') {
+        var checked = t[i - 2].attrGet('data-checked');
+        if (checked !== null) blocks.push({ kind: 'task', text: text, checked: checked === 'true' });
+        else if (lists[lists.length - 1] === 'ordered_list_open') blocks.push({ kind: 'ordered', text: text, n: t[i - 2].info });
+        else blocks.push({ kind: 'bullet', text: text });
+      } else if (open.type === 'paragraph_open') blocks.push({ kind: quoteDepth ? 'quote' : 'p', text: text });
+      // Table cells are inline tokens too; skipped, a thumbnail has no room for a grid.
+    }
+  }
+  return JSON.stringify(blocks);
+}
 
 function renderMarkdown(src) {
   return '<!doctype html><html><head><meta charset="utf-8"><style>' + CSS + '</style></head><body>'

@@ -154,52 +154,64 @@ test.describe('Packaged app code signature', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Quick Look extension: built, sandboxed, declared, and able to render
+// Quick Look extensions: built, sandboxed, declared, and able to render
 //
-// macOS loads the appex only if it is sandboxed, so the entitlements check is the
+// macOS loads an appex only if it is sandboxed, so the entitlements check is the
 // one that catches a --deep re-sign landing after quicklook/build.ts signed it.
 // ---------------------------------------------------------------------------
 
-test.describe('Packaged Quick Look extension', () => {
+test.describe('Packaged Quick Look extensions', () => {
   test.skip(process.platform !== 'darwin', 'Quick Look is macOS-only');
 
   const appPath = () => path.resolve(findPackagedAsar(), '..', '..', '..');
-  const appexPath = () => path.join(appPath(), 'Contents', 'PlugIns', 'MDEQuickLook.appex');
   const plistValue = (plist: string, key: string) =>
     execFileSync('plutil', ['-extract', key, 'raw', plist], { encoding: 'utf8' }).trim();
 
-  test('the appex keeps its sandbox entitlement and its own valid signature', () => {
-    expect(() => {
-      execFileSync('codesign', ['--verify', '--strict', appexPath()], { stdio: 'pipe' });
-    }).not.toThrow();
-    const entitlements = execFileSync('codesign', ['-d', '--entitlements', '-', '--xml', appexPath()], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    expect(entitlements).toMatch(/<key>com\.apple\.security\.app-sandbox<\/key>\s*<true\/>/);
-  });
+  const appexes = [
+    { name: 'MDEQuickLook', idSuffix: '.quicklook', point: 'com.apple.quicklook.preview' },
+    { name: 'MDEThumbnail', idSuffix: '.thumbnail', point: 'com.apple.quicklook.thumbnail' },
+  ];
 
-  test('the appex is a markdown preview extension with an ID under the host app', () => {
-    const plist = path.join(appexPath(), 'Contents', 'Info.plist');
-    const hostId = plistValue(path.join(appPath(), 'Contents', 'Info.plist'), 'CFBundleIdentifier');
-    expect(plistValue(plist, 'CFBundleIdentifier')).toBe(`${hostId}.quicklook`);
-    expect(plistValue(plist, 'NSExtension.NSExtensionPointIdentifier')).toBe('com.apple.quicklook.preview');
-    expect(plistValue(plist, 'NSExtension.NSExtensionAttributes.QLSupportedContentTypes.0')).toBe('net.daringfireball.markdown');
-  });
+  for (const ext of appexes) {
+    const appexPath = () => path.join(appPath(), 'Contents', 'PlugIns', `${ext.name}.appex`);
 
-  test('the appex binary is built for the same architecture as the app', () => {
-    const archs = (bin: string) => execFileSync('lipo', ['-archs', bin], { encoding: 'utf8' }).trim();
-    expect(archs(path.join(appexPath(), 'Contents', 'MacOS', 'MDEQuickLook')))
-      .toBe(archs(path.join(appPath(), 'Contents', 'MacOS', 'MDE')));
-  });
+    test(`${ext.name} keeps its sandbox entitlement and its own valid signature`, () => {
+      expect(() => {
+        execFileSync('codesign', ['--verify', '--strict', appexPath()], { stdio: 'pipe' });
+      }).not.toThrow();
+      const entitlements = execFileSync('codesign', ['-d', '--entitlements', '-', '--xml', appexPath()], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      expect(entitlements).toMatch(/<key>com\.apple\.security\.app-sandbox<\/key>\s*<true\/>/);
+    });
 
-  test('the host app imports the markdown UTI for .md, so the appex can match files', () => {
+    test(`${ext.name} is a markdown ${ext.point} extension with an ID under the host app`, () => {
+      const plist = path.join(appexPath(), 'Contents', 'Info.plist');
+      const hostId = plistValue(path.join(appPath(), 'Contents', 'Info.plist'), 'CFBundleIdentifier');
+      expect(plistValue(plist, 'CFBundleIdentifier')).toBe(`${hostId}${ext.idSuffix}`);
+      expect(plistValue(plist, 'NSExtension.NSExtensionPointIdentifier')).toBe(ext.point);
+      expect(plistValue(plist, 'NSExtension.NSExtensionAttributes.QLSupportedContentTypes.0')).toBe('net.daringfireball.markdown');
+    });
+
+    test(`${ext.name} binary is built for the same architecture as the app`, () => {
+      const archs = (bin: string) => execFileSync('lipo', ['-archs', bin], { encoding: 'utf8' }).trim();
+      expect(archs(path.join(appexPath(), 'Contents', 'MacOS', ext.name)))
+        .toBe(archs(path.join(appPath(), 'Contents', 'MacOS', 'MDE')));
+    });
+  }
+
+  test('the host app imports the markdown UTI for .md, so the appexes can match files', () => {
     const plist = path.join(appPath(), 'Contents', 'Info.plist');
     expect(plistValue(plist, 'UTImportedTypeDeclarations.0.UTTypeIdentifier')).toBe('net.daringfireball.markdown');
     expect(plistValue(plist, 'UTImportedTypeDeclarations.0.UTTypeTagSpecification.public\\.filename-extension.0')).toBe('md');
   });
 
   test('the bundled renderer files render markdown in JavaScriptCore', () => {
-    const resources = path.join(appexPath(), 'Contents', 'Resources');
-    const html = renderInJSC(path.join(resources, 'markdown-it.min.js'), path.join(resources, 'render.js'), '# Hi\n\n- [x] done');
+    const resources = (name: string) => path.join(appPath(), 'Contents', 'PlugIns', `${name}.appex`, 'Contents', 'Resources');
+    const preview = resources('MDEQuickLook');
+    const html = renderInJSC(path.join(preview, 'markdown-it.min.js'), path.join(preview, 'render.js'), '# Hi\n\n- [x] done');
     expect(html).toContain('<h1>Hi</h1>');
     expect(html).toMatch(/<li class="task" data-checked="true">\s*<p>done<\/p>/);
+    const thumb = resources('MDEThumbnail');
+    const json = renderInJSC(path.join(thumb, 'markdown-it.min.js'), path.join(thumb, 'render.js'), '# Hi', 'thumbnailBlocks');
+    expect(JSON.parse(json)).toEqual([{ kind: 'h1', text: 'Hi' }]);
   });
 });

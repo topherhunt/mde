@@ -64,3 +64,45 @@ test.describe('Quick Look preview renderer', () => {
     expect(html).toContain('<span class="image-ref">[a &lt;pic&gt;]</span>');
   });
 });
+
+// The Finder thumbnail draws these blocks natively (ThumbnailProvider.swift).
+const blocks = (src: string) => JSON.parse(renderInJSC(
+  path.join(ROOT, 'node_modules', 'markdown-it', 'dist', 'markdown-it.min.js'),
+  path.join(ROOT, 'quicklook', 'render.js'),
+  src,
+  'thumbnailBlocks',
+));
+
+test.describe('Quick Look thumbnail blocks', () => {
+  test.skip(process.platform !== 'darwin', 'Quick Look and JXA are macOS-only');
+
+  test('headings, paragraphs and quotes come out as plain text with their kind', () => {
+    expect(blocks('# Big **idea**\n\nSome `code` and\na break.\n\n> quoted')).toEqual([
+      { kind: 'h1', text: 'Big idea' },
+      { kind: 'p', text: 'Some code and a break.' },
+      { kind: 'quote', text: 'quoted' },
+    ]);
+  });
+
+  test('bullets, numbered items and tasks keep their markers as data', () => {
+    expect(blocks('- one\n  - nested\n\n3. three\n4. four\n\n- [x] done\n- [ ] todo')).toEqual([
+      { kind: 'bullet', text: 'one' },
+      { kind: 'bullet', text: 'nested' },
+      { kind: 'ordered', text: 'three', n: '3' },
+      { kind: 'ordered', text: 'four', n: '4' },
+      { kind: 'task', text: 'done', checked: true },
+      { kind: 'task', text: 'todo', checked: false },
+    ]);
+  });
+
+  test('code blocks are kept and table cells are skipped', () => {
+    expect(blocks('```\nx = 1\n```\n\n| A |\n|---|\n| 1 |')).toEqual([{ kind: 'code', text: 'x = 1' }]);
+  });
+
+  test('only the first 40 blocks are returned', () => {
+    const src = Array.from({ length: 60 }, (_, i) => `para ${i}`).join('\n\n');
+    const out = blocks(src);
+    expect(out).toHaveLength(40);
+    expect(out[39]).toEqual({ kind: 'p', text: 'para 39' });
+  });
+});

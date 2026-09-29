@@ -393,7 +393,7 @@ Renderer webpack config does NOT use the `@vercel/webpack-asset-relocator-loader
 
 ## Quick Look preview
 
-Spacebar on a `.md` in Finder shows a rendered preview, from a native app extension at `MDE.app/Contents/PlugIns/MDEQuickLook.appex`. Source lives in `quicklook/`; `quicklook/build.ts` compiles and signs it from `postPackage`. No Xcode project: an appex is a plist plus a Mach-O linked with `-e _NSExtensionMain`, and `swiftc` from the Command Line Tools is enough.
+Two native app extensions in `MDE.app/Contents/PlugIns/`: `MDEQuickLook.appex` (spacebar preview, rendered HTML) and `MDEThumbnail.appex` (Finder icon, the document's opening text drawn large enough to skim). They are separate extension points, so separate bundles; both compile `quicklook/Shared.swift`, which runs `render.js` in JavaScriptCore. `quicklook/build.ts` compiles and signs both from `postPackage`, driven by its `EXTENSIONS` table. No Xcode project: an appex is a plist plus a Mach-O linked with `-e _NSExtensionMain`, and `swiftc` from the Command Line Tools is enough.
 
 ### Ad-hoc signing is sufficient
 
@@ -403,7 +403,7 @@ Verified by spike before building anything: an ad-hoc-signed, sandboxed appex in
 
 `codesign --force --deep` re-signs nested code, and it re-signs the appex WITHOUT its entitlements. An unsandboxed preview extension is silently never loaded -- and `codesign --verify --deep --strict` still passes, because the signature is valid, just wrong. Mutation-verified: adding `--deep` back to the final re-seal left strict verify green and stripped the entitlements. So `postPackage` goes: `--deep` repair of Electron's helpers -> `buildQuickLookExtension` (signs the appex with `quicklook/entitlements.plist`) -> re-seal the app without `--deep` -> strict verify -> `verifyQuickLookExtension`, which fails the build if the sandbox entitlement is gone. `tests/packaged.spec.ts` asserts the same thing.
 
-The appex's `CFBundleIdentifier` is derived from the host's at build time (`<host id>.quicklook`); macOS rejects an extension whose ID is not prefixed by its host's.
+Each appex's `CFBundleIdentifier` is derived from the host's at build time (`<host id>.quicklook`, `<host id>.thumbnail`); macOS rejects an extension whose ID is not prefixed by its host's.
 
 ### The host must import the markdown UTI
 
@@ -415,9 +415,13 @@ If another app also ships a markdown Quick Look extension, macOS chooses between
 
 `PreviewProvider.swift` is a data-based `QLPreviewProvider` (`QLIsDataBasedPreview`) that returns an HTML page. It evaluates markdown-it's UMD build (copied from `node_modules` at build time, the same copy tiptap-markdown uses) plus `quicklook/render.js` in a `JSContext`, with the editor's options (`html: false`, `breaks: true`), so a file previews the way it parses on open. `render.js` also tags `- [ ]` / `- [x]` items with `data-checked` (styled like the editor's checkboxes) and replaces images with their alt text, since a data-based preview has no base URL to resolve a relative path against. JS errors, a missing resource, or non-UTF-8 input throw, and Quick Look falls back to its own preview.
 
+The thumbnail does NOT render HTML: `QLThumbnailReply` wants a drawing block, and WebKit is too heavy for an icon. `render.js`'s `thumbnailBlocks` walks markdown-it's token stream and returns the first 40 blocks as plain text plus a kind (heading level, paragraph, bullet, numbered, task, quote, code); `ThumbnailProvider.swift` draws them with AppKit on a white US-Letter-shaped page, body text at 7.5% of page width (about 27 characters per line, several times the system text thumbnail's size). Tables are skipped.
+
+The system's own `TextThumbnailExtension` handles `public.plain-text`, which markdown conforms to; ours claims the more specific type and wins -- but a running `com.apple.quicklook.ThumbnailsAgent` caches the extension list, so after registering a fresh build it keeps using the system one until it is killed (`killall -9 com.apple.quicklook.ThumbnailsAgent`; plain SIGTERM leaves it lingering). Finder also caches thumbnails per file; `qlmanage -r cache` clears that.
+
 ### Testing
 
-The extension runs in `QuickLookUIService`, out of Playwright's reach, so the Finder spacebar check is manual, once per release. Everything around it is automated: `tests/quicklook.spec.ts` runs `render.js` through JXA (`osascript -l JavaScript`), which IS JavaScriptCore, so syntax Node accepts but JSC rejects would fail there; `tests/packaged.spec.ts` checks the built appex's entitlements, ID, architecture, the host's UTI import, and renders with the bundled copies of the JS.
+The extensions run in Quick Look's own processes, out of Playwright's reach, so the Finder check (spacebar, and icons in a folder of `.md` files) is manual, once per release. `qlmanage -t -x -s 512 -o <dir> file.md` writes the thumbnail to a PNG for a closer look. Everything around them is automated: `tests/quicklook.spec.ts` runs `renderMarkdown` and `thumbnailBlocks` through JXA (`osascript -l JavaScript`), which IS JavaScriptCore, so syntax Node accepts but JSC rejects would fail there; `tests/packaged.spec.ts` checks each built appex's entitlements, ID, extension point, architecture, the host's UTI import, and runs both functions from the bundled copies of the JS. The Swift drawing code has no automated test.
 
 Bootstrap Icons are self-hosted in `src/fonts/` (woff/woff2), imported via CSS in renderer.tsx.
 
@@ -630,6 +634,7 @@ What exists today, for orientation. This list goes stale faster than the notes a
 - DOCX/PDF import: converts to `.{ext}.md` on click (e.g. `report.pdf.md` -- preserves original extension). The source file is never renamed, moved, or hidden. Clicking a source that already has its Markdown beside it opens an "Already converted" dialog (`.qa-import-exists`) offering to open that Markdown (primary) or convert again into a new numbered copy (`report.pdf.2.md`, `.3.md`, ...) -- conversion never overwrites.
 - PDF export (via Electron printToPDF)
 - Finder Quick Look (spacebar) preview of `.md` files, macOS only: a native appex rendering with the editor's markdown-it options, task checkboxes styled like the editor's, light/dark aware, images shown as alt text
+- Finder icon thumbnails of `.md` files, macOS only: the opening headings, text, lists and tasks drawn large enough to skim
 - Tools -> Word Count: a modal (`.qa-word-count`) showing word count, character count, and estimated page count (300 words/page) as `selection / whole document` -- or, when nothing is selected, the document figure alone with no `0 / ` prefix. Counts are snapshotted when the dialog opens. Escape or clicking the backdrop closes it. No keyboard shortcut -- menu only.
 - Dark mode support (light / dark / system default, stored in user state file)
 - Settings dialog (Cmd+,) with theme selector, spellcheck toggle, auto-save toggle (1s debounce), terminal launcher installer
