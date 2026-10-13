@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, webContents, protocol } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, webContents, protocol, net } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -619,6 +619,44 @@ ipcMain.handle('trash-file', async (_event, filePath: string) => {
 
 ipcMain.handle('reveal-in-finder', (_event, filePath: string) => {
   shell.showItemInFolder(filePath);
+});
+
+// Pasted images are written here, never through write-file-if-unchanged (which is for documents).
+// Never overwrites: a taken name gets -2, -3, ... Returns the path relative to the document's folder.
+ipcMain.handle('save-image', async (_event, docDir: string, folder: string, name: string, source: { url: string } | { bytes: Uint8Array; type: string }) => {
+  if (path.isAbsolute(folder)) throw new Error('The folder must be relative to the document.');
+  let bytes: Buffer;
+  let type: string;
+  if ('bytes' in source) {
+    bytes = Buffer.from(source.bytes);
+    type = source.type;
+  } else if (source.url.startsWith('data:')) {
+    const m = /^data:([^;,]*)((?:;[^;,]*)*),([\s\S]*)$/.exec(source.url);
+    if (!m) throw new Error('Malformed data URL.');
+    type = m[1];
+    bytes = /;base64/i.test(m[2]) ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]));
+  } else {
+    const res = await net.fetch(source.url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    bytes = Buffer.from(await res.arrayBuffer());
+    type = (res.headers.get('content-type') || '').split(';')[0].trim();
+  }
+  const ext = path.extname(name).toLowerCase();
+  const typeExt = Object.keys(IMAGE_TYPES).find((e) => IMAGE_TYPES[e] === type);
+  if (!IMAGE_TYPES[ext] && !typeExt) throw new Error(`Not an image (${type || 'unknown type'}).`);
+  const stem = IMAGE_TYPES[ext] ? name.slice(0, -ext.length) : name;
+  const finalExt = IMAGE_TYPES[ext] ? ext : typeExt!;
+  const dir = path.resolve(docDir, folder);
+  await fs.promises.mkdir(dir, { recursive: true });
+  for (let n = 1; ; n++) {
+    const file = path.join(dir, `${stem}${n === 1 ? '' : `-${n}`}${finalExt}`);
+    try {
+      await fs.promises.writeFile(file, bytes, { flag: 'wx' });
+      return path.relative(docDir, file).split(path.sep).join('/');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  }
 });
 
 ipcMain.handle('create-file', async (_event, filePath: string) => {

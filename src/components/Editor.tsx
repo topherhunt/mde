@@ -21,6 +21,8 @@ import { dirname } from '../utils/paths';
 import { ColorHighlight, TextColor, escapeColorSyntax } from '../utils/colorMarks';
 import TableMenu from './TableMenu';
 import ImageContextMenu from './ImageContextMenu';
+import PasteImagesDialog from './PasteImagesDialog';
+import { PendingPaste, WebImageChoice, pasteNeedingImageChoice, resolveWebPaste, saveClipboardFiles } from '../utils/pasteImages';
 
 // Override tiptap-markdown's text serializer which blindly converts all < and >
 // to &lt; &gt;, mangling prose like "Apples > oranges." on save.
@@ -1608,6 +1610,7 @@ interface EditorProps {
   onDestroy: () => void;
   onDirtyChange: (dirty: boolean) => void;
   onLinkClick: (href: string) => void;
+  onToast: (msg: string, variant?: string) => void;
 }
 
 // The editor's full extension list. Also used headlessly by utils/exportDocument.ts, so an
@@ -1686,7 +1689,7 @@ export function buildExtensions() {
 }
 
 export default function Editor({
-  tab, onReady, onDestroy, onDirtyChange, onLinkClick,
+  tab, onReady, onDestroy, onDirtyChange, onLinkClick, onToast,
 }: EditorProps) {
   const loadedRef = useRef(false);
   const cleanDocRef = useRef<string | null>(null);
@@ -1697,6 +1700,9 @@ export default function Editor({
   // Lets the handlePaste editorProp reach the tiptap-markdown parser without a
   // use-before-define reference to the `editor` const being created below.
   const editorRef = useRef<TipTapEditor | null>(null);
+  // A paste with images waits here for PasteImagesDialog. Reached from handlePaste via the ref.
+  const [pendingPaste, setPendingPaste] = useState<PendingPaste | null>(null);
+  const setPendingPasteRef = useRef(setPendingPaste);
 
   // `extensions` and `editorProps` MUST keep a stable identity across renders.
   // useEditor runs an effect on EVERY render that diffs the options it was given
@@ -1727,8 +1733,13 @@ export default function Editor({
         // Shift-paste (plain) and pasting into a code block stay verbatim.
         if ((view as any).input?.shiftKey) return false;
         if (view.state.selection.$from.parent.type.spec.code) return false;
+        const withImages = pasteNeedingImageChoice(cd);
+        if (withImages) {
+          setPendingPasteRef.current(withImages);
+          return true;
+        }
         const raw = cd.getData('text/plain');
-        if (!raw) return false; // images / non-text: let the default path handle it
+        if (!raw) return false;
         const dedented = dedentPastedText(raw);
         const firstNonBlank = dedented.split('\n').find((l) => l.trim().length > 0);
         // Only hijack pastes that are actually a markdown list.
@@ -1859,10 +1870,14 @@ export default function Editor({
     if (tab.readOnly) editor.setEditable(false);
   }, [editor, tab.readOnly]);
 
+  // Image node views resolve relative paths against this as they are created, and pasted images
+  // are saved beside it. Declared before the load effect so it is set before the first load.
+  useEffect(() => {
+    if (editor) (editor.storage as any).image.baseDir = tab.filePath ? dirname(tab.filePath) : null;
+  }, [editor, tab.filePath]);
+
   useEffect(() => {
     if (!editor || loadedRef.current) return;
-    // Image node views resolve relative paths against this as they are created during the load.
-    (editor.storage as any).image.baseDir = tab.filePath ? dirname(tab.filePath) : null;
 
     if (tab.initialContent) {
       const html = markdownToHtml(editor, tab.initialContent);
@@ -1900,12 +1915,38 @@ export default function Editor({
 
   if (!editor) return null;
 
+  const docDir: string | null = (editor.storage as any).image.baseDir;
+
+  const cancelPaste = () => {
+    setPendingPaste(null);
+    editor.commands.focus();
+  };
+
+  const finishPaste = async (choice: WebImageChoice, folder: string) => {
+    const pending = pendingPaste!;
+    setPendingPaste(null);
+    editor.commands.focus();
+    try {
+      if (pending.kind === 'files') {
+        const paths = await saveClipboardFiles(pending.files, docDir!, folder);
+        editor.chain().focus().insertContent(paths.map((src) => ({ type: 'image', attrs: { src, alt: '' } }))).run();
+      } else {
+        const { html, failed } = await resolveWebPaste(pending.html, choice, docDir, folder);
+        editor.view.pasteHTML(html);
+        if (failed) onToast(`${failed} image${failed === 1 ? '' : 's'} could not be saved; any from the web stayed as links.`, 'danger');
+      }
+    } catch (err) {
+      onToast(`Could not save the image: ${err instanceof Error ? err.message : String(err)}`, 'danger');
+    }
+  };
+
   return (
     <div className="editor-wrapper">
       <EditorContent editor={editor} className={`editor-content ${tab.readOnly ? 'editor-readonly' : ''}`} />
       {!tab.readOnly && <LinkPreview editor={editor} />}
       {!tab.readOnly && <TableMenu editor={editor} />}
       <ImageContextMenu editor={editor} />
+      {pendingPaste && <PasteImagesDialog pending={pendingPaste} canSave={docDir !== null} onChoose={finishPaste} onCancel={cancelPaste} />}
     </div>
   );
 }

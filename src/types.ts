@@ -4,6 +4,9 @@ export interface FileEntry {
   isDirectory: boolean;
 }
 
+// A pasted image to store: a URL (web or data:) the main process fetches, or clipboard bytes.
+export type PastedImageSource = { url: string } | { bytes: Uint8Array; type: string };
+
 export interface FileStats {
   mtimeMs: number;
   size: number;
@@ -245,6 +248,8 @@ export interface MdeAPI {
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   trashFile: (filePath: string) => Promise<void>;
   revealInFinder: (filePath: string) => Promise<void>;
+  // Writes a pasted image under `folder` beside the document, never overwriting; returns its relative path.
+  saveImage: (docDir: string, folder: string, name: string, source: PastedImageSource) => Promise<string>;
   createFile: (filePath: string) => Promise<void>;
   createDirectory: (dirPath: string) => Promise<void>;
   getSidebarWidth: () => Promise<number | null>;

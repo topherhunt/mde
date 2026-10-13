@@ -4538,3 +4538,123 @@ test.describe('Images', () => {
     expect(await saveAndRead(file)).toBe('Before  after\n\n![gone](nope.png)\n');
   });
 });
+
+test.describe('Pasting images', () => {
+  // Dispatches a paste at the end of the document. `files` are PNGs by name.
+  async function paste(clip: { html?: string; text?: string; files?: string[] }) {
+    const ed = page.locator('.tiptap:visible');
+    // A click can't place the caret: the headless window never has focus (see the Images tests).
+    await ed.evaluate((el) => (el as any).editor.commands.focus('end'));
+    await ed.evaluate((el, { clip, png }) => {
+      const dt = new DataTransfer();
+      if (clip.html) dt.setData('text/html', clip.html);
+      if (clip.text) dt.setData('text/plain', clip.text);
+      const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
+      for (const name of clip.files || []) dt.items.add(new File([bytes], name, { type: 'image/png' }));
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, { clip, png: PNG_BYTES.toString('base64') });
+  }
+
+  const pngsIn = (dir: string) => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []);
+
+  test('a pasted screenshot is saved to images/ beside the document and referenced relatively', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openMarkdown('Shot:\n', 'notes.md');
+    const imagesDir = path.join(path.dirname(file), 'images');
+
+    // Cancel first: nothing inserted, nothing written.
+    await paste({ files: ['image.png'] });
+    await expect(page.locator('.qa-paste-images-folder')).toHaveValue('images');
+    await page.locator('.qa-paste-images-cancel').click();
+    await expect(page.locator('.qa-paste-images')).toHaveCount(0);
+    await expect(page.locator('.tiptap:visible .image-node')).toHaveCount(0);
+    expect(fs.existsSync(imagesDir)).toBe(false);
+
+    await paste({ files: ['image.png'] });
+    await page.locator('.qa-paste-images-save').click();
+    const img = page.locator('.tiptap:visible .image-node img');
+    await expect.poll(() => img.evaluate((e) => (e as HTMLImageElement).naturalWidth), { timeout: 5000 }).toBe(1);
+
+    const [saved] = pngsIn(imagesDir);
+    expect(saved).toMatch(/^pasted-\d{4}-\d{2}-\d{2}-\d{6}\.png$/);
+    expect(fs.readFileSync(path.join(imagesDir, saved))).toEqual(PNG_BYTES);
+    expect(await saveAndRead(file)).toBe(`Shot:![](images/${saved})\n`);
+  });
+
+  test('a pasted image never overwrites an existing file, and the folder can be changed', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openMarkdown('x\n', 'notes.md');
+    const dir = path.join(path.dirname(file), 'my pics');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'diagram.png'), 'original');
+
+    await paste({ files: ['diagram.png'] });
+    await page.locator('.qa-paste-images-folder').fill('my pics');
+    await page.locator('.qa-paste-images-folder').press('Enter');
+    await expect(page.locator('.tiptap:visible .image-node img')).toHaveCount(1);
+
+    expect(pngsIn(dir)).toEqual(['diagram-2.png', 'diagram.png']);
+    expect(fs.readFileSync(path.join(dir, 'diagram.png'), 'utf8')).toBe('original');
+    expect(await saveAndRead(file)).toBe('x![](<my pics/diagram-2.png>)\n');
+  });
+
+  test('pasted web content can keep its images as links, or drop them', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openMarkdown('start\n', 'web.md');
+    const dataUri = `data:image/png;base64,${PNG_BYTES.toString('base64')}`;
+    const html = `<p>Look <img src="${dataUri}" alt="embedded"> at <img src="https://example.invalid/cat.png" alt="cat"></p>`;
+
+    await paste({ html, text: 'Look at' });
+    await expect(page.locator('.qa-paste-images')).toContainText('only be saved or removed');
+    await page.locator('.qa-paste-images-links').click();
+    await expect(page.locator('.tiptap:visible')).toContainText('Look');
+    // The embedded image is dropped, never inlined as a data: URL.
+    expect(await saveAndRead(file)).toBe('startLook at ![cat](https://example.invalid/cat.png)\n');
+
+    await paste({ html, text: 'Look at' });
+    await page.locator('.qa-paste-images-remove').click();
+    await expect(page.locator('.tiptap:visible .image-node')).toHaveCount(1);
+    expect(await saveAndRead(file)).toBe('startLook at ![cat](https://example.invalid/cat.png)Look at\n');
+    expect(fs.existsSync(path.join(path.dirname(file), 'images'))).toBe(false);
+  });
+
+  test('saving pasted web content downloads its images, and one that fails stays a link', async () => {
+    const http = await import('http');
+    const server = http.createServer((req, res) => {
+      if (req.url === '/pics/remote%20dot.png') { res.writeHead(200, { 'content-type': 'image/png' }); res.end(PNG_BYTES); } else { res.writeHead(404); res.end(); }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try {
+      ({ app, page } = await launchApp());
+      const file = await openMarkdown('start\n', 'web.md');
+      const dataUri = `data:image/png;base64,${PNG_BYTES.toString('base64')}`;
+      await paste({
+        html: `<p>A <img src="${base}/pics/remote%20dot.png" alt="r"> B <img src="${dataUri}" alt="e"> C <img src="${base}/missing.png" alt="m"></p>`,
+        text: 'A B C',
+      });
+      await page.locator('.qa-paste-images-folder').fill('assets');
+      await page.locator('.qa-paste-images-save').click();
+      await expect(page.locator('.toast')).toContainText('1 image could not be saved');
+
+      const assets = path.join(path.dirname(file), 'assets');
+      const files = pngsIn(assets);
+      expect(files).toHaveLength(2);
+      expect(files).toContain('remote-dot.png');
+      const embedded = files.find((f) => f !== 'remote-dot.png')!;
+      expect(embedded).toMatch(/^pasted-.*-2\.png$/);
+      expect(await saveAndRead(file)).toBe(`startA ![r](assets/remote-dot.png) B ![e](assets/${embedded}) C ![m](${base}/missing.png)\n`);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('copying an image within MDE pastes its reference without asking', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openMarkdown('start\n', 'web.md');
+    await paste({ html: '<p data-pm-slice="1 1 []"><img src="https://example.invalid/cat.png" alt="cat"></p>', text: '' });
+    await expect(page.locator('.tiptap:visible .image-node')).toHaveCount(1);
+    await expect(page.locator('.qa-paste-images')).toHaveCount(0);
+    expect(await saveAndRead(file)).toBe('start![cat](https://example.invalid/cat.png)\n');
+  });
+});

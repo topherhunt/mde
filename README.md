@@ -1,5 +1,7 @@
 # MDE (Markdown Editor)
 
+![](images/screenshot.jpg)
+
 A simple but sturdy WYSIWYG Markdown browser/editor for macOS and Windows. Written in Electron, inspired by Obsidian and VS Code. Drag in a folder or file to view/edit.
 
 Inspired by [Thomas Ptacek's MDV app](https://sockpuppet.org/blog/2026/05/12/emacsification/).
@@ -64,7 +66,7 @@ Once installed, double-clicking a `.md` file or choosing MDE from **Open with** 
 
 ## Note on images
 
-Images in a file are shown inline: relative paths resolve against the file's own folder, and `https://` images load from the web. If an image can't be found, MDE shows a placeholder naming the path it looked for. Either way the image reference is saved back exactly as you wrote it. Click an image to see its path; right-click it to reveal the file in Finder or remove it from the document. There is no way to insert a new image from within MDE yet; type the `![alt](path.png)` syntax yourself.
+Images in a file are shown inline: relative paths resolve against the file's own folder, and `https://` images load from the web. If an image can't be found, MDE shows a placeholder naming the path it looked for. Either way the image reference is saved back exactly as you wrote it. Click an image to see its path; right-click it to reveal the file in Finder or remove it from the document. Pasting a screenshot, or web content that contains images, asks where the images should go: saved into a folder next to the document (`images/` unless you type another name; an existing file is never overwritten), kept as links to the web, or removed. MDE never embeds image data in the Markdown itself. Dragging an image file in isn't supported yet.
 
 ## Note on HTML in Markdown
 

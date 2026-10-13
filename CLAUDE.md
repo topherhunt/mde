@@ -23,7 +23,7 @@ State management is React context + useReducer, no external state lib. User pref
 
 Break these and something silently corrupts, clobbers, or infinite-loops.
 
-- **SINGLE WRITE PATH.** `write-file-if-unchanged` is the ONLY IPC that writes a document to disk. Do NOT add a raw `write-file` handler or `writeFile` bridge method back -- it was deliberately removed so nothing can bypass the hash guard. -> notes: Saving and conflict detection
+- **SINGLE WRITE PATH.** `write-file-if-unchanged` is the ONLY IPC that writes a document to disk. Do NOT add a raw `write-file` handler or `writeFile` bridge method back -- it was deliberately removed so nothing can bypass the hash guard. (`save-image` writes only NEW image files, `flag: 'wx'`, never a document.) -> notes: Saving and conflict detection
 - **On a real conflict, never adopt the on-disk hash.** It belongs to a version the user has not seen; adopting it would let the next Cmd+S clobber it. -> notes: Saving and conflict detection
 - **Read** `diskHash` **from** `diskHashRef`**, and** `state.tabs` **from** `tabsRef` -- never from `activeTab` inside a timer closure. A stale closure caused self-conflicts. -> notes: Saving and conflict detection
 - **Watch the containing directory, not the file.** `fs.watch` on a single file follows the inode, so an atomic save (write temp + rename) silently kills the watcher. -> notes: File watching
@@ -60,7 +60,7 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 - `tiptap-markdown` handles MD parse/serialize. The TipTap document model is the source of truth while editing. TipTap (ProseMirror) for the editor, not raw contenteditable.
 - tiptap-markdown runs with `html: false`, so raw HTML tags are literal text. The text node serializer skips `escapeHTML` so prose like "Apples > oranges." survives verbatim. A lone `~` is deliberately un-escaped on save. -> notes: Markdown serialization
 - Highlight and text color are MDE syntax (`==x==`, `=={blue}x==`, `[x]{red}`) in `utils/colorMarks.ts`; files store palette NAMES, CSS picks the per-theme shade. The text-color rule MUST decline in markdown-it's silent mode, or colored words inside link text break the link. Both marks outrank Link (so they render outside it) and are `mixable`. Inline code no longer excludes them. -> notes: Markdown serialization
-- Images are an inline atom node (`utils/imageNode.ts`). Local files load via the `mde-file://local/` protocol, relative to the document's folder; a missing one shows a placeholder and its reference is left alone. `MarkdownTable` overrides tiptap-markdown's table serializer, which dropped image-only cells. -> notes: Markdown serialization
+- Images are an inline atom node (`utils/imageNode.ts`). Local files load via the `mde-file://local/` protocol, relative to the document's folder; a missing one shows a placeholder and its reference is left alone. A paste carrying images opens `PasteImagesDialog` (save beside the doc / keep links / remove) -- never insert a `data:` URL. `MarkdownTable` overrides tiptap-markdown's table serializer, which dropped image-only cells. -> notes: Markdown serialization
 - `LeadingParagraph` guarantees a document never starts with a code fence. -> notes: Editor wiring
 - Syntax highlighting is deliberately OFF. Plain `CodeBlock`, not `CodeBlockLowlight`. The copy button is a NodeView. -> notes: Editor wiring
 - ProseMirror decorations power find-match highlighting and link-bar selection preservation. Always clean up decoration plugins on unmount.
@@ -167,7 +167,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-271 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+276 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { VcChangedFile, FileAction } from './types';
+import type { VcChangedFile, FileAction, PastedImageSource } from './types';
 
 export interface FileEntry {
   name: string;
@@ -248,6 +248,9 @@ const api = {
 
   trashFile: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('trash-file', filePath),
+
+  saveImage: (docDir: string, folder: string, name: string, source: PastedImageSource): Promise<string> =>
+    ipcRenderer.invoke('save-image', docDir, folder, name, source),
 
   revealInFinder: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('reveal-in-finder', filePath),

@@ -1150,6 +1150,7 @@ export default function App() {
                       if (dirty) triggerAutosave();
                     }}
                     onLinkClick={(href) => handleLinkClick(href, tab.filePath)}
+                    onToast={showToast}
                   />
                 )}
               </div>
