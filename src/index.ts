@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, webConte
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import * as os from 'os';
 import { resolveState, initRepo, adoptRepo, findParentRepo, setAuto } from './git/repo';
 import { computeStatus } from './git/status';
 import { preflight, seedIgnoreFile } from './git/guards';
@@ -367,21 +368,6 @@ function buildMenu(): void {
           click: () => {
             const win = BrowserWindow.getFocusedWindow();
             if (win) win.webContents.send('save-file-as');
-          },
-        },
-        { type: 'separator' },
-        {
-          label: 'Export as PDF...',
-          click: () => {
-            const win = BrowserWindow.getFocusedWindow();
-            if (win) win.webContents.send('export-pdf');
-          },
-        },
-        {
-          label: 'Export as DOCX...',
-          click: () => {
-            const win = BrowserWindow.getFocusedWindow();
-            if (win) win.webContents.send('export-docx');
           },
         },
         { type: 'separator' },
@@ -1012,16 +998,50 @@ ipcMain.handle('show-save-dialog', async (_event, defaultPath?: string) => {
   return result.canceled ? null : result.filePath;
 });
 
-ipcMain.handle('export-pdf', async (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  if (!win) return null;
-  const result = await dialog.showSaveDialog(win, {
-    filters: [{ name: 'PDF', extensions: ['pdf'] }],
-  });
-  if (result.canceled || !result.filePath) return null;
-  const pdfData = await win.webContents.printToPDF({});
-  await fs.promises.writeFile(result.filePath, pdfData);
-  return result.filePath;
+// Prints a standalone HTML page (built by utils/exportDocument.ts) in a throwaway hidden
+// window, so the PDF holds the whole document and none of the app's chrome. Loaded from a temp
+// file, not a data: URL, which Chromium caps at 2MB.
+async function renderPdf(html: string): Promise<Buffer> {
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mde-export-'));
+  const win = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true } });
+  try {
+    const htmlPath = path.join(dir, 'export.html');
+    await fs.promises.writeFile(htmlPath, html, 'utf-8');
+    await win.loadFile(htmlPath);
+    return await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+  } finally {
+    win.destroy();
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  }
+}
+
+// "notes.pdf" -> "notes 2.pdf", "notes 3.pdf", ... -- the first name not yet taken.
+function nextFreeCopyPath(target: string): string {
+  const ext = path.extname(target);
+  const stem = target.slice(0, -ext.length);
+  for (let n = 2; ; n++) {
+    const candidate = `${stem} ${n}${ext}`;
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+}
+
+// Writes the export beside its source, named after it. The main process picks the path from the
+// source and the format, so this can only ever create a .pdf or .docx -- never touch a document.
+// `onExisting: 'ask'` writes nothing when the name is taken; the renderer asks and calls again.
+ipcMain.handle('export-document', async (
+  _event, sourcePath: string, format: 'pdf' | 'docx', payload: string | Uint8Array,
+  onExisting: 'ask' | 'overwrite' | 'copy',
+) => {
+  if (format !== 'pdf' && format !== 'docx') throw new Error(`Unknown export format: ${format}`);
+  const target = path.join(path.dirname(sourcePath), `${path.basename(sourcePath, path.extname(sourcePath))}.${format}`);
+  let outPath = target;
+  if (fs.existsSync(target)) {
+    if (onExisting === 'ask') return { status: 'exists', path: target };
+    if (onExisting === 'copy') outPath = nextFreeCopyPath(target);
+  }
+  const bytes = format === 'pdf' ? await renderPdf(payload as string) : Buffer.from(payload as Uint8Array);
+  await fs.promises.writeFile(outPath, bytes);
+  return { status: 'written', path: outPath };
 });
 
 ipcMain.handle('get-project-root', (event) => {

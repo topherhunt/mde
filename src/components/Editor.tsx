@@ -1551,6 +1551,81 @@ interface EditorProps {
   onImagesFound: (refs: string[]) => void;
 }
 
+// The editor's full extension list. Also used headlessly by utils/exportDocument.ts, so an
+// exported file parses exactly the way it opens.
+export function buildExtensions() {
+  return [
+    StarterKit.configure({
+      codeBlock: false,
+      code: false,
+      text: false,
+      listItem: false,
+      // StarterKit bundles its own Link extension (autolink + paste rules on
+      // by default). Disable it so the configured Link below is the only one.
+      link: false,
+    }),
+    TextNode,
+    // Stock inline code excludes EVERY other mark, so highlighting a phrase skipped its code
+    // and a loaded `==a `x` b==` lost the highlight on `x`. Color marks may wrap code;
+    // Markdown can express that, since code is always the innermost mark.
+    Code.extend({ excludes: 'bold italic strike underline link' }),
+    ColorHighlight,
+    TextColor,
+    Link.extend({
+      // The Link extension's paste rule runs linkifyjs over pasted text and
+      // marks anything URL-shaped as a link, regardless of the autolink /
+      // linkOnPaste options (those only gate the editor plugins). Disable it
+      // so pasting "docs/foo/09-bar.md" stays literal text.
+      addPasteRules() {
+        return [];
+      },
+    }).configure({
+      openOnClick: false,
+      // Don't turn plain text into links. Pasting or typing something like
+      // "docs/foo/09-bar.md" should stay literal text, not become a link.
+      // Real Markdown links ([text](url)) are still parsed on load.
+      autolink: false,
+      linkOnPaste: false,
+      // TipTap's default isAllowedUri regex contains `[^a-z+.-:]`, where
+      // `.-:` is (almost certainly unintentionally) a character RANGE
+      // covering `/`. That makes it reject relative links that start with a
+      // lowercase letter and contain a slash (e.g. "docs/foo/09-bar.md"):
+      // the link mark is dropped while parsing HTML on load, so the link
+      // collapses to plain text on the next save. Accept a URL if the
+      // default validator passes OR if it has no scheme at all (a relative
+      // path) -- dangerous schemes like javascript:/data: still carry a
+      // scheme prefix and remain blocked by the default validator.
+      isAllowedUri: (url, ctx) => ctx.defaultValidate(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url),
+    }),
+    TableKit.configure({
+      table: { resizable: true },
+    }),
+    CodeBlockWithCopy,
+    UnifiedListItem,
+    ListItemBackspace,
+    CmdEnterCycle,
+    TabHandler,
+    BacktickWrap,
+    LeadingParagraph,
+    PlainTextPaste,
+    MoveBlock,
+    LineBoundaryNav,
+    JoinAdjacentLists,
+    FoldAttribute,
+    CodeFolding,
+    Placeholder.configure({
+      placeholder: 'Start writing...',
+    }),
+    SmartClipboard,
+    MarkdownExt.configure({
+      html: false,
+      breaks: true,
+      transformCopiedText: false,
+      transformPastedText: true,
+    }),
+  ];
+}
+
 export default function Editor({
   tab, onReady, onDestroy, onDirtyChange, onLinkClick, onImagesFound,
 }: EditorProps) {
@@ -1577,76 +1652,7 @@ export default function Editor({
   // React render -> setOptions -> transaction ... until React aborts the render
   // loop with "Maximum update depth exceeded" (error #185).
   // Everything referenced below is module-level or a ref, so [] deps are correct.
-  const extensions = useMemo(() => [
-      StarterKit.configure({
-        codeBlock: false,
-        code: false,
-        text: false,
-        listItem: false,
-        // StarterKit bundles its own Link extension (autolink + paste rules on
-        // by default). Disable it so the configured Link below is the only one.
-        link: false,
-      }),
-      TextNode,
-      // Stock inline code excludes EVERY other mark, so highlighting a phrase skipped its code
-      // and a loaded `==a `x` b==` lost the highlight on `x`. Color marks may wrap code;
-      // Markdown can express that, since code is always the innermost mark.
-      Code.extend({ excludes: 'bold italic strike underline link' }),
-      ColorHighlight,
-      TextColor,
-      Link.extend({
-        // The Link extension's paste rule runs linkifyjs over pasted text and
-        // marks anything URL-shaped as a link, regardless of the autolink /
-        // linkOnPaste options (those only gate the editor plugins). Disable it
-        // so pasting "docs/foo/09-bar.md" stays literal text.
-        addPasteRules() {
-          return [];
-        },
-      }).configure({
-        openOnClick: false,
-        // Don't turn plain text into links. Pasting or typing something like
-        // "docs/foo/09-bar.md" should stay literal text, not become a link.
-        // Real Markdown links ([text](url)) are still parsed on load.
-        autolink: false,
-        linkOnPaste: false,
-        // TipTap's default isAllowedUri regex contains `[^a-z+.-:]`, where
-        // `.-:` is (almost certainly unintentionally) a character RANGE
-        // covering `/`. That makes it reject relative links that start with a
-        // lowercase letter and contain a slash (e.g. "docs/foo/09-bar.md"):
-        // the link mark is dropped while parsing HTML on load, so the link
-        // collapses to plain text on the next save. Accept a URL if the
-        // default validator passes OR if it has no scheme at all (a relative
-        // path) -- dangerous schemes like javascript:/data: still carry a
-        // scheme prefix and remain blocked by the default validator.
-        isAllowedUri: (url, ctx) => ctx.defaultValidate(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url),
-      }),
-      TableKit.configure({
-        table: { resizable: true },
-      }),
-      CodeBlockWithCopy,
-      UnifiedListItem,
-      ListItemBackspace,
-      CmdEnterCycle,
-      TabHandler,
-      BacktickWrap,
-      LeadingParagraph,
-      PlainTextPaste,
-      MoveBlock,
-      LineBoundaryNav,
-      JoinAdjacentLists,
-      FoldAttribute,
-      CodeFolding,
-      Placeholder.configure({
-        placeholder: 'Start writing...',
-      }),
-      SmartClipboard,
-      MarkdownExt.configure({
-        html: false,
-        breaks: true,
-        transformCopiedText: false,
-        transformPastedText: true,
-      }),
-  ], []);
+  const extensions = useMemo(buildExtensions, []);
 
   const editorProps = useMemo<PMEditorProps>(() => ({
       // Obsidian (and most editors) put BOTH text/plain and text/html on the

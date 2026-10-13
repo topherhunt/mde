@@ -12,7 +12,7 @@ Detailed rationale behind the invariants listed in `CLAUDE.md`. Read the relevan
 
 `write-file-if-unchanged` is the ONLY IPC that writes a document to disk. There is deliberately no raw `write-file` handler / `writeFile` bridge method -- it was removed so nothing can bypass the hash guard. Cross-file Find & Replace (`FindBar`) also routes through it (with `expectedHash: null`, safe because it writes freshly-read+transformed content and skips open dirty tabs). Do NOT add a raw write-file back; it would be a silent clobber bypass.
 
-Main-process direct `fs.writeFile`s exist only for non-buffer files: state JSON, new-empty-file creation, DOCX/PDF import output, PDF export, launcher scripts.
+Main-process direct `fs.writeFile`s exist only for non-buffer files: state JSON, new-empty-file creation, DOCX/PDF import output, PDF/DOCX export (`export-document`, which derives its own `.pdf`/`.docx` path from the source, so it cannot be aimed at a document), launcher scripts.
 
 ### Two layers of conflict detection
 
@@ -306,6 +306,18 @@ Extraction heuristics:
 - Conversion escapes lines matching `^\d+\.` to prevent Markdown OL interpretation of numbers like "994164972.".
 
 ---
+
+## Export (PDF / DOCX)
+
+Right-click a markdown file (file explorer or tab) > Export as PDF / DOCX writes `<name>.pdf` / `<name>.docx` beside it. No save dialog, and no File-menu entry. A taken name raises `ExportConflictDialog` (`.qa-export-conflict`): Overwrite, Create Another Copy (`name 2.pdf`, `name 3.pdf`, ...), or Cancel. The IPC's `onExisting: 'ask'` writes nothing when the name is taken; the renderer asks, then calls again with the answer.
+
+Both formats are built in `utils/exportDocument.ts` from the ProseMirror document -- never from the window, which is what the original `printToPDF` on the app window did (one page, sidebar and toolbar included). An open file exports its live buffer, unsaved edits included; a closed one is parsed by a module-level headless `Editor` built from `buildExtensions()` (exported from `Editor.tsx`), so it parses exactly as opening it would.
+
+- **PDF**: `getHTMLFromFragment` + a print stylesheet, printed by the main process in a throwaway hidden `BrowserWindow` (JS off). The page is loaded from a temp file, not a `data:` URL, because Chromium caps those at 2MB.
+- **DOCX**: the `docx` library, node by node, so Word gets real Heading 1-6 styles, numbered/bulleted lists, and tables. Tasks are list levels whose bullet is a ☐/☑ glyph; a checked item is struck and greyed. Each ordered list is its own numbering `instance` so it restarts at its `start`. An unmapped node or mark THROWS (surfaced as an "Export failed" toast) rather than silently dropping content.
+- Palette colors use the LIGHT-theme shades in both formats, duplicated from `index.css` as `Record<PaletteColor, string>` so a new palette name fails to compile until it has one.
+- Only links with a scheme survive; a relative link (`other.md`, `#heading`) keeps its text and loses the link, since it points nowhere outside MDE.
+- Never pass `tableHeader: false` to docx's `TableRow`. It writes `<w:tblHeader w:val="off"/>`, which Word honours but mammoth (and so MDE's own DOCX import) reads as ON, turning every row into a header.
 
 ## Sidebar and outline
 
@@ -632,7 +644,7 @@ What exists today, for orientation. This list goes stale faster than the notes a
 - File conflict detection (hash-guarded save that can never clobber a stale file; silent reload with a blue "detected changes" proof banner; red conflict banner when the buffer is dirty). Watches the containing directory so it survives atomic saves.
 - Quick Open command palette (Cmd+O) with fuzzy search, file indexing (10s TTL cache)
 - DOCX/PDF import: converts to `.{ext}.md` on click (e.g. `report.pdf.md` -- preserves original extension). The source file is never renamed, moved, or hidden. Clicking a source that already has its Markdown beside it opens an "Already converted" dialog (`.qa-import-exists`) offering to open that Markdown (primary) or convert again into a new numbered copy (`report.pdf.2.md`, `.3.md`, ...) -- conversion never overwrites.
-- PDF export (via Electron printToPDF)
+- Export to PDF / DOCX from the right-click menu, written beside the source with an overwrite / copy / cancel prompt when the name is taken
 - Finder Quick Look (spacebar) preview of `.md` files, macOS only: a native appex rendering with the editor's markdown-it options, task checkboxes styled like the editor's, light/dark aware, images shown as alt text
 - Finder icon thumbnails of `.md` files, macOS only: the opening headings, text, lists and tasks drawn large enough to skim
 - Tools -> Word Count: a modal (`.qa-word-count`) showing word count, character count, and estimated page count (300 words/page) as `selection / whole document` -- or, when nothing is selected, the document figure alone with no `0 / ` prefix. Counts are snapshotted when the dialog opens. Escape or clicking the backdrop closes it. No keyboard shortcut -- menu only.

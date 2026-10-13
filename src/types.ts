@@ -186,7 +186,12 @@ export interface MdeAPI {
   getFileStats: (filePath: string) => Promise<FileStats | null>;
   listDirectory: (dirPath: string) => Promise<FileEntry[]>;
   showSaveDialog: (defaultPath?: string) => Promise<string | null>;
-  exportPDF: () => Promise<string | null>;
+  exportDocument: (
+    sourcePath: string,
+    format: 'pdf' | 'docx',
+    payload: string | Uint8Array,
+    onExisting: 'ask' | 'overwrite' | 'copy'
+  ) => Promise<{ status: 'exists' | 'written'; path: string }>;
   getProjectRoot: () => Promise<string | null>;
   getPendingFile: () => Promise<string | null>;
   watchFile: (filePath: string) => void;
@@ -197,8 +202,6 @@ export interface MdeAPI {
   onSaveFileAs: (callback: () => void) => () => void;
   onToggleFind: (callback: () => void) => () => void;
   onFileChanged: (callback: (filePath: string) => void) => () => void;
-  onExportPDF: (callback: () => void) => () => void;
-  onExportDOCX: (callback: () => void) => () => void;
   onCloseTab: (callback: () => void) => () => void;
   onReopenClosedTab: (callback: () => void) => () => void;
   onPrevTab: (callback: () => void) => () => void;

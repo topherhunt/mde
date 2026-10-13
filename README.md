@@ -25,7 +25,8 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 - **Find and replace** -- match highlighting, case-sensitive and whole-word filters, inline replace-all confirmation
 - **Quick Open** -- Cmd+O fuzzy file search across the project
 - **Standard editing tools** -- links, code blocks, tables
-- **DOCX and PDF import/export** -- converts to Markdown on click, preserving structure (tables, headings, columns) where possible (not perfect!)
+- **DOCX and PDF import** -- converts to Markdown on click, preserving structure (tables, headings, columns) where possible (not perfect!)
+- **PDF and DOCX export** -- right-click a document (in the sidebar or its tab) to write a PDF or Word file beside it, with real headings, lists, tables and colors
 - **File conflict detection** -- detects external changes; silent reload or warning banner
 - **Checkpoints** -- opt-in version history for a folder. Snapshots save themselves automatically once things go quiet (or on demand, with a note). Clicking a changed file shows a word-level diff in plain prose -- added words green, removed words red -- and **Restore** asks which version you actually want: the way the file was *before* that change, or the way it came out *after* it. **Browse all checkpoints** opens the full history in a tab, where you can work back through every checkpoint, see how much each file changed, and rename a checkpoint to something you will recognise later. To follow a single document, right-click it in the file list (or right-click its tab) and choose **View Change History** -- the same tab, filtered to just the checkpoints that touched that file, which still works after the file has been deleted. Restoring never overwrites your history; it adds to it, so you can always go forward again. Folders that already have version history set up by other tools stay read-only unless you say otherwise.
 - **Finder Quick Look** -- press spacebar on a `.md` file in Finder to see it rendered, not as raw Markdown, and Finder's file icons show the document's opening lines large enough to read (macOS; launch MDE once so macOS picks it up)
@@ -140,8 +141,7 @@ On failure it uploads Playwright traces as a build artifact; download and inspec
 
 ### For me
 
-- Support right-click to convert to .docx or .pdf, w standard nice-looking formatting & colors (customizable)
-  - PDF export -- does this require chrome/puppeteer? can it just use the built-in engine?
+- Customizable export styling (fonts, colors, page size) for PDF / DOCX export
 - **Add Claude agent support.**
 - Support viewing & simple editing of .csv files too.
 

@@ -4172,6 +4172,18 @@ test.describe('Highlights and text colors', () => {
     expect(dark.swatch).toBeLessThan(light.swatch - 60);
     expect(dark.text).toBeGreaterThan(light.text + 30);
   });
+
+  // Without a color-scheme, Chromium draws legacy (always-shown) macOS scrollbars bright white in dark mode.
+  test('the color-scheme follows the theme so native scrollbars match it', async () => {
+    ({ app, page } = await launchApp());
+    const schemeFor = (t: string) => page.evaluate(th => {
+      document.documentElement.setAttribute('data-theme', th);
+      return getComputedStyle(document.documentElement).colorScheme;
+    }, t);
+
+    expect(await schemeFor('dark')).toBe('dark');
+    expect(await schemeFor('light')).toBe('light');
+  });
 });
 
 test.describe('Paragraph spacing', () => {

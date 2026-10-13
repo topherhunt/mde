@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { FileEntry } from '../types';
+import type { ExportFormat } from '../utils/exportDocument';
 
 // Single source of truth for the file context menu, shared by the file
 // explorer (Sidebar) and the tab bar. Adding or changing a menu item here
@@ -26,11 +27,13 @@ interface FileContextMenuProps {
   // no checkpoints, so the menu never offers a screen that would be empty by construction.
   // Receives the repo-relative path, since that is what checkpoints are keyed by.
   onViewHistory?: (relativePath: string) => void;
+  // Writes <name>.pdf / <name>.docx beside a markdown file. Offered only for markdown files.
+  onExport: (sourcePath: string, format: ExportFormat) => void;
 }
 
 export function FileContextMenu({
   x, y, target, projectRoot, onClose, onStartRename, onRequestDelete, onToast, onCreateInFolder,
-  onViewHistory,
+  onViewHistory, onExport,
 }: FileContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -114,6 +117,17 @@ export function FileContextMenu({
           <div className="ctx-menu-divider" />
         </>
       )}
+      {!target.isDirectory && /\.(md|markdown)$/i.test(target.name) && (
+        <>
+          <button className="ctx-menu-item qa-ctx-export-pdf" onClick={() => { onExport(target.path, 'pdf'); onClose(); }}>
+            <i className="bi bi-file-earmark-pdf" /> Export as PDF
+          </button>
+          <button className="ctx-menu-item qa-ctx-export-docx" onClick={() => { onExport(target.path, 'docx'); onClose(); }}>
+            <i className="bi bi-file-earmark-word" /> Export as DOCX
+          </button>
+          <div className="ctx-menu-divider" />
+        </>
+      )}
       <button className="ctx-menu-item" onClick={handleRename}>
         <i className="bi bi-pencil" /> Rename
       </button>
@@ -154,6 +168,36 @@ export function DeleteConfirmDialog({ target, onConfirm, onCancel }: { target: F
           <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
             <button className="settings-btn" onClick={onCancel}>Cancel</button>
             <button className="settings-btn btn-danger" onClick={onConfirm}>Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ExportConflictDialog({ fileName, onOverwrite, onCopy, onCancel }: {
+  fileName: string; onOverwrite: () => void; onCopy: () => void; onCancel: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+
+  return (
+    <div className="modal-backdrop qa-export-conflict" onClick={onCancel}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header" style={{ justifyContent: 'center' }}>
+          <span className="fw-bold">File already exists</span>
+        </div>
+        <div className="modal-body">
+          <p className="small text-muted">
+            <code>{fileName}</code> already exists. Would you like to overwrite it or create another copy?
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
+            <button className="settings-btn qa-export-cancel" onClick={onCancel}>Cancel</button>
+            <button className="settings-btn qa-export-copy" onClick={onCopy}>Create Another Copy</button>
+            <button className="settings-btn btn-danger qa-export-overwrite" onClick={onOverwrite}>Overwrite</button>
           </div>
         </div>
       </div>

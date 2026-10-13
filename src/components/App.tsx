@@ -13,7 +13,8 @@ import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
 import { useVersionControl, VersionControl, CheckpointSettings } from './VersionPanel';
 import HistoryView, { HistoryNavRequest } from './HistoryView';
-import { DeleteConfirmDialog } from './FileContextMenu';
+import { DeleteConfirmDialog, ExportConflictDialog } from './FileContextMenu';
+import { markdownToDoc, docToPdfHtml, docToDocx, ExportFormat } from '../utils/exportDocument';
 import ImageWarningDialog from './ImageWarningDialog';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { FileEntry } from '../types';
@@ -276,6 +277,29 @@ export default function App() {
   // Lets saveActiveTab re-arm autosave without depending on triggerAutosave (which is
   // defined below it, in terms of it).
   const triggerAutosaveRef = useRef<() => void>(() => {});
+
+  const [exportConflict, setExportConflict] = useState<{ sourcePath: string; format: ExportFormat; existingPath: string } | null>(null);
+
+  // An open file exports its live buffer, unsaved edits included -- what the user is looking at.
+  const exportFile = useCallback(async (sourcePath: string, format: ExportFormat, onExisting: 'ask' | 'overwrite' | 'copy' = 'ask') => {
+    setExportConflict(null);
+    try {
+      const openTab = tabsRef.current.find(t => t.filePath === sourcePath);
+      const openEditor = openTab && editorsRef.current.get(openTab.id);
+      const doc = openEditor ? openEditor.state.doc : markdownToDoc(await window.mde.readFile(sourcePath));
+      const payload = format === 'pdf'
+        ? docToPdfHtml(doc, basename(sourcePath).replace(/\.[^.]+$/, ''))
+        : await docToDocx(doc);
+      const result = await window.mde.exportDocument(sourcePath, format, payload, onExisting);
+      if (result.status === 'exists') {
+        setExportConflict({ sourcePath, format, existingPath: result.path });
+      } else {
+        showToast(`Exported ${basename(result.path)}`, 'info');
+      }
+    } catch (err) {
+      showToast(`Export failed: ${err instanceof Error ? err.message : String(err)}`, 'danger');
+    }
+  }, [showToast]);
 
   useEffect(() => {
     const editor = activeTab ? editorsRef.current.get(activeTab.id) || null : null;
@@ -766,9 +790,6 @@ export default function App() {
           dispatch({ type: 'TOGGLE_FIND_BAR' });
         }
       }),
-      window.mde.onExportPDF(async () => {
-        await window.mde.exportPDF();
-      }),
       window.mde.onOpenSettings(() => setSettingsOpen(true)),
       window.mde.onQuickOpen(() => setQuickOpenVisible(true)),
       window.mde.onToggleCodeBlock(() => {
@@ -1015,6 +1036,7 @@ export default function App() {
           onOpenHistory={openCheckpointHistory}
           onOpenSettings={() => setSettingsOpen(true)}
           onViewFileHistory={viewFileHistory}
+          onExport={exportFile}
         />
         <div className="main-area">
           <TabBar
@@ -1029,6 +1051,7 @@ export default function App() {
             onRenameFile={setTabRenameTarget}
             onRequestDeleteFile={setTabDeleteTarget}
             onViewFileHistory={viewFileHistory}
+            onExport={exportFile}
           />
           {!activeTab?.readOnly && toolbarVisible && (
             <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} leaving={toolbarLeaving} />
@@ -1164,6 +1187,14 @@ export default function App() {
           target={tabDeleteTarget}
           onConfirm={confirmTabDelete}
           onCancel={() => setTabDeleteTarget(null)}
+        />
+      )}
+      {exportConflict && (
+        <ExportConflictDialog
+          fileName={basename(exportConflict.existingPath)}
+          onOverwrite={() => exportFile(exportConflict.sourcePath, exportConflict.format, 'overwrite')}
+          onCopy={() => exportFile(exportConflict.sourcePath, exportConflict.format, 'copy')}
+          onCancel={() => setExportConflict(null)}
         />
       )}
       {imageWarning && (

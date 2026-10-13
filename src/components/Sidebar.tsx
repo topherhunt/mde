@@ -3,6 +3,7 @@ import { FileEntry } from '../types';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { basename, dirname, joinPath } from '../utils/paths';
 import { FileContextMenu, DeleteConfirmDialog } from './FileContextMenu';
+import type { ExportFormat } from '../utils/exportDocument';
 import VersionPanel, { VersionControl } from './VersionPanel';
 import { HistoryTarget, SidebarMode } from '../types';
 
@@ -23,9 +24,10 @@ interface SidebarProps {
   onOpenSettings: () => void;
   // Undefined when the folder has no checkpoints; hides the context menu's history item.
   onViewFileHistory?: (relativePath: string) => void;
+  onExport: (sourcePath: string, format: ExportFormat) => void;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed, onOpenHistory, onOpenSettings, onViewFileHistory }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed, onOpenHistory, onOpenSettings, onViewFileHistory, onExport }: SidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const resizing = useRef(false);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -146,6 +148,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, 
             onDeleteFile={onDeleteFile}
             onFileRenamed={onFileRenamed}
             onViewFileHistory={onViewFileHistory}
+            onExport={onExport}
           />
         ) : (
           <DocumentOutline editor={activeEditor} />
@@ -170,6 +173,7 @@ interface FileExplorerProps {
   onDeleteFile: (filePath: string) => void;
   onFileRenamed?: (oldPath: string, newPath: string) => void;
   onViewFileHistory?: (relativePath: string) => void;
+  onExport: (sourcePath: string, format: ExportFormat) => void;
 }
 
 function isEditable(name: string): boolean {
@@ -202,7 +206,7 @@ function flattenVisibleEntries(
   return result;
 }
 
-function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef, onDeleteFile, onFileRenamed, onViewFileHistory }: FileExplorerProps) {
+function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef, onDeleteFile, onFileRenamed, onViewFileHistory, onExport }: FileExplorerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingEntry, setRenamingEntry] = useState<FileEntry | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -460,6 +464,7 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
           onToast={onToast}
           onCreateInFolder={handleCreateInFolder}
           onViewHistory={onViewFileHistory}
+          onExport={onExport}
         />
       )}
     </>

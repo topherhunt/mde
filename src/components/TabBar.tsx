@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Tab, FileEntry } from '../types';
 import { FileContextMenu } from './FileContextMenu';
+import type { ExportFormat } from '../utils/exportDocument';
 import { basename } from '../utils/paths';
 
 interface TabBarProps {
@@ -17,9 +18,10 @@ interface TabBarProps {
   // Undefined when the folder has no checkpoints, which hides the menu item. Kept identical
   // to the file explorer's menu by construction: both mount the same FileContextMenu.
   onViewFileHistory?: (relativePath: string) => void;
+  onExport: (sourcePath: string, format: ExportFormat) => void;
 }
 
-export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder, onPinTab, projectRoot, onToast, onRenameFile, onRequestDeleteFile, onViewFileHistory }: TabBarProps) {
+export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder, onPinTab, projectRoot, onToast, onRenameFile, onRequestDeleteFile, onViewFileHistory, onExport }: TabBarProps) {
   const activeTabRef = useRef<HTMLDivElement>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -128,6 +130,7 @@ export default function TabBar({ tabs, activeIndex, onSelect, onClose, onReorder
           onRequestDelete={onRequestDeleteFile}
           onToast={onToast}
           onViewHistory={onViewFileHistory}
+          onExport={onExport}
         />
       )}
     </div>

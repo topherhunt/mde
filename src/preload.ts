@@ -47,8 +47,14 @@ const api = {
   showSaveDialog: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('show-save-dialog', defaultPath),
 
-  exportPDF: (): Promise<string | null> =>
-    ipcRenderer.invoke('export-pdf'),
+  // Writes <source name>.pdf / .docx beside the source. PDF payload is HTML, DOCX is bytes.
+  exportDocument: (
+    sourcePath: string,
+    format: 'pdf' | 'docx',
+    payload: string | Uint8Array,
+    onExisting: 'ask' | 'overwrite' | 'copy'
+  ): Promise<{ status: 'exists' | 'written'; path: string }> =>
+    ipcRenderer.invoke('export-document', sourcePath, format, payload, onExisting),
 
   getProjectRoot: (): Promise<string | null> =>
     ipcRenderer.invoke('get-project-root'),
@@ -98,17 +104,6 @@ const api = {
     return () => ipcRenderer.removeListener('file-changed', handler);
   },
 
-  onExportPDF: (callback: () => void) => {
-    const handler = () => callback();
-    ipcRenderer.on('export-pdf', handler);
-    return () => ipcRenderer.removeListener('export-pdf', handler);
-  },
-
-  onExportDOCX: (callback: () => void) => {
-    const handler = () => callback();
-    ipcRenderer.on('export-docx', handler);
-    return () => ipcRenderer.removeListener('export-docx', handler);
-  },
 
   onCloseTab: (callback: () => void) => {
     const handler = () => callback();
