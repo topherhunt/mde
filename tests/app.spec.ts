@@ -1811,7 +1811,7 @@ test.describe('Todo lists', () => {
 
   });
 
-  test('copy single list item omits leading hyphen', async () => {
+  test('copying one or several list items omits the hyphens', async () => {
     ({ app, page } = await launchApp());
 
     const tmpDir = makeTmpDir();
@@ -1839,12 +1839,9 @@ test.describe('Todo lists', () => {
     await page.keyboard.press('ControlOrMeta+a');
     await page.keyboard.press('ControlOrMeta+c');
 
+    // Several items: one line each, no hyphens, no blank lines between them.
     const clipMulti = await page.evaluate(() => navigator.clipboard.readText());
-    expect(clipMulti).toContain('- alpha');
-    expect(clipMulti).toContain('- beta');
-    expect(clipMulti).toContain('- gamma');
-    // No blank lines between items
-    expect(clipMulti).not.toMatch(/^- .+\n\n+- /m);
+    expect(clipMulti).toBe('alpha\nbeta\ngamma');
 
   });
 
@@ -2903,7 +2900,7 @@ test.describe('Selecting across a fold', () => {
     await page.keyboard.press('ControlOrMeta+c');
     const clip = await page.evaluate(() => navigator.clipboard.readText());
     expect(clip.trim()).toBe([
-      'Intro text.', '', '## Section A', '', 'Body of A.', '', '### Subsection A1', '', 'Body of A1.', '', '## Section B', '', 'Body of B.',
+      'Intro text.', '', 'Section A', '', 'Body of A.', '', 'Subsection A1', '', 'Body of A1.', '', 'Section B', '', 'Body of B.',
     ].join('\n'));
     const html = await clipboardHTML();
     expect(html).toContain('Body of A.');
@@ -2925,14 +2922,7 @@ test.describe('Selecting across a fold', () => {
 
     await page.keyboard.press('ControlOrMeta+c');
     const clip = await page.evaluate(() => navigator.clipboard.readText());
-    // Each hidden level keeps its own nesting depth.
-    const lines = clip.trim().split('\n');
-    expect(lines.map((l) => l.trim())).toEqual(['- Above', '- Parent item', '- Child item', '- Grandchild', '- Below']);
-    const indent = (l: string) => l.length - l.trimStart().length;
-    expect(indent(lines[1])).toBe(0);
-    expect(indent(lines[2])).toBeGreaterThan(indent(lines[1]));
-    expect(indent(lines[3])).toBeGreaterThan(indent(lines[2]));
-    expect(indent(lines[4])).toBe(0);
+    expect(clip).toBe('Above\nParent item\nChild item\nGrandchild\nBelow');
     const html = await clipboardHTML();
     expect(html).toContain('Child item');
     expect(html).toContain('Grandchild');
@@ -2949,7 +2939,7 @@ test.describe('Selecting across a fold', () => {
 
     await page.keyboard.press('ControlOrMeta+c');
     const clip = await page.evaluate(() => navigator.clipboard.readText());
-    expect(clip.trim()).toBe(HEADINGS.trim());
+    expect(clip.trim()).toBe(HEADINGS.trim().replace(/^#+ /gm, ''));
   });
 });
 
@@ -3136,16 +3126,9 @@ test.describe('Table cell copy', () => {
     await page.keyboard.press('ControlOrMeta+c');
 
     const clip = await page.evaluate(() => navigator.clipboard.readText());
-    // Everything selected must survive the copy -- the table used to be the only
-    // thing that made it onto the clipboard.
-    expect(clip).toContain('Big Heading');
-    expect(clip).toContain('Intro paragraph here.');
-    expect(clip).toContain('first bullet');
-    expect(clip).toContain('second bullet');
-    expect(clip).toContain('Closing paragraph.');
-    // ...and the table comes along as a real Markdown table, not "[table]".
-    expect(clip).toMatch(/\|\s*one\s*\|\s*two\s*\|/);
-    expect(clip).not.toContain('[table]');
+    // Every block survives as plain text; the table's cells are tab-separated.
+    expect(clip).toBe(
+      'Big Heading\n\nIntro paragraph here.\n\nfirst bullet\nsecond bullet\n\nA\tB\none\ttwo\n\nClosing paragraph.');
 
   });
 });
@@ -3824,7 +3807,7 @@ test.describe('Code fence copy', () => {
     await expect(editor.locator('pre')).toHaveCount(1);
   });
 
-  test('copying a whole code block (alone or with empty neighbours) is plain text; mixed keeps the fence', async () => {
+  test('copying a whole code block (alone or with empty neighbours) is plain text, and so is a mixed copy', async () => {
     ({ app, page } = await launchApp());
 
     const tmpDir = makeTmpDir();
@@ -3859,13 +3842,12 @@ test.describe('Code fence copy', () => {
     expect(await copyWith('ed.commands.setTextSelection({ from: 6, to: 35 })'))
       .toBe('const x = 1;\nconst y = 2;');
 
-    // Text outside the block is selected too: the fence stays, so the paste is still Markdown.
-    const mixed = await copyWith('ed.commands.setTextSelection({ from: 2, to: 20 })');
-    expect(mixed).toContain('```');
-    expect(mixed).toContain('itle');
+    // Text outside the block is selected too: still no fence, no heading marker.
+    expect(await copyWith('ed.commands.setTextSelection({ from: 2, to: 24 })'))
+      .toBe('itle\n\nconst x = 1;\ncon');
   });
 
-  test('copying part or all of an inline code span is verbatim text; with outside text it keeps the backticks', async () => {
+  test('copying part or all of an inline code span is verbatim text, and so is a mixed copy', async () => {
     ({ app, page } = await launchApp());
 
     const tmpDir = makeTmpDir();
@@ -3901,8 +3883,8 @@ test.describe('Code fence copy', () => {
     await expect(editor.locator('p').nth(1)).toHaveText('Target:like this', { timeout: 3000 });
     await expect(editor.locator('code')).toHaveCount(1);
 
-    // Selecting outside the span too keeps the Markdown plain-text version, backticks and all.
-    expect(await copyRange(2, 10)).toBe('se `like `');
+    // Selecting outside the span too: still no backticks in the plain text.
+    expect(await copyRange(2, 10)).toBe('se like ');
   });
 });
 
@@ -4234,12 +4216,12 @@ test.describe('Copying a task item', () => {
     await page.keyboard.press('ControlOrMeta+c');
 
     const clip = await page.evaluate(() => navigator.clipboard.readText());
-    // Was "- [ ] - [x] nested **bold** task": the slice carries the ancestor item too,
-    // so both its marker and the nested one were serialized onto the same line.
-    expect(clip).toBe('nested **bold** task');
+    // The slice carries the ancestor item too, so a marker-emitting serializer
+    // once produced "- [ ] - [x] nested **bold** task".
+    expect(clip).toBe('nested bold task');
   });
 
-  test('copying more than one task still keeps the list markers', async () => {
+  test('copying more than one task yields their text lines, no markers', async () => {
     ({ app, page } = await launchApp());
     await openMarkdown('- [ ] one\n- [x] two\n');
 
@@ -4248,8 +4230,60 @@ test.describe('Copying a task item', () => {
     await page.keyboard.press('ControlOrMeta+c');
 
     const clip = await page.evaluate(() => navigator.clipboard.readText());
-    expect(clip).toContain('- [ ] one');
-    expect(clip).toContain('- [x] two');
+    expect(clip).toBe('one\ntwo');
+  });
+});
+
+test.describe('Plain-text clipboard', () => {
+  test('every copy puts literal text on text/plain, keeps rich HTML, and Cmd+Shift+V pastes the literal text', async () => {
+    ({ app, page } = await launchApp());
+    await openMarkdown([
+      '# Heading',
+      '',
+      'Some **bold**, *italic*, ~~struck~~, ==marked== and [a link](https://example.com).\\',
+      'Second line `code`.',
+      '',
+      '> Quoted line.',
+      '',
+      '1. first',
+      '2. second',
+      '',
+      '- [x] done task',
+      '',
+      '---',
+      '',
+    ].join('\n'), 'plain.md');
+    const editor = page.locator('.tiptap:visible');
+    await expect(editor.locator('strong')).toHaveText('bold', { timeout: 5000 });
+
+    await editor.locator('p', { hasText: 'Quoted' }).click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press('ControlOrMeta+c');
+
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe([
+      'Heading',
+      '',
+      'Some bold, italic, struck, marked and a link.',
+      'Second line code.',
+      '',
+      'Quoted line.',
+      '',
+      'first',
+      'second',
+      '',
+      'done task',
+    ].join('\n'));
+    const html = await app.evaluate(({ clipboard }) => clipboard.readHTML());
+    expect(html).toMatch(/<strong>bold<\/strong>/);
+    expect(html).toMatch(/<a [^>]*href="https:\/\/example.com"/);
+
+    await editor.evaluate((el) => (el as any).editor.commands.focus('end'));
+    await page.keyboard.press('ControlOrMeta+Shift+v');
+    await expect(editor).toContainText('done taskHeading', { timeout: 3000 });
+    // Literal text: no second heading, bold, or list was created by the paste.
+    await expect(editor.locator('h1')).toHaveCount(1);
+    await expect(editor.locator('strong')).toHaveCount(1);
+    await expect(editor.locator('li')).toHaveCount(3);
   });
 });
 
@@ -4752,7 +4786,7 @@ test.describe('Images', () => {
     await app.evaluate(({ BrowserWindow }, f) => {
       BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
     }, file);
-    await expect.poll(() => page.locator('.tiptap .image-node img').evaluate(e => (e as HTMLImageElement).naturalWidth), { timeout: 5000 }).toBe(120);
+    await expect.poll(() => page.locator('.tiptap .image-node img').evaluateAll(els => els.length > 0 && els.every(e => (e as HTMLImageElement).naturalWidth === 120)), { timeout: 5000 }).toBe(true);
     return file;
   }
 
@@ -4801,8 +4835,89 @@ test.describe('Images', () => {
 
     await img.click({ button: 'right' });
     await page.locator('.qa-image-remove').click();
+    await page.locator('.qa-delete-image-keep').click();
     await expect(page.locator('.tiptap .image-node')).toHaveCount(1);
     expect(await saveAndRead(file)).toBe('Before  after\n\n![gone](nope.png)\n');
+  });
+
+  // Records shell.trashItem calls instead of touching the real Trash.
+  async function stubTrash() {
+    await app.evaluate(({ shell }) => {
+      const trashed: string[] = (globalThis as any).__trashed = [];
+      shell.trashItem = async (p: string) => { trashed.push(p); };
+    });
+  }
+  const trashed = () => app.evaluate(() => (globalThis as any).__trashed as string[]);
+
+  test('deleting an image whose file is on disk asks first, and Cancel leaves the document alone', async () => {
+    ({ app, page } = await launchApp());
+    await openBoxDoc('Before ![a box](<pics/box one.svg>) after\n');
+    await stubTrash();
+    await page.locator('.tiptap .image-node img').click();
+    await page.keyboard.press('Backspace');
+
+    const dialog = page.locator('.qa-delete-image');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('pics/box one.svg');
+    await expect(page.locator('.tiptap .image-node')).toHaveCount(1);
+    await page.locator('.qa-delete-image-cancel').click();
+
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('.tiptap .image-node img')).toHaveCount(1);
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(0);
+    expect(await trashed()).toEqual([]);
+  });
+
+  test('Delete File removes the image and moves its file to the Trash', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openBoxDoc('Before ![a box](<pics/box one.svg>) after\n');
+    await stubTrash();
+    await page.locator('.tiptap .image-node img').click();
+    await page.keyboard.press('Backspace');
+    await page.locator('.qa-delete-image-trash').click();
+
+    await expect(page.locator('.tiptap .image-node')).toHaveCount(0);
+    await expect.poll(trashed).toEqual([path.join(path.dirname(file), 'pics', 'box one.svg')]);
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(1);
+    expect(await saveAndRead(file)).toBe('Before  after\n');
+  });
+
+  test('Keep File removes the image from the document but not from disk', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openBoxDoc('Before ![a box](<pics/box one.svg>) after\n');
+    await stubTrash();
+    await page.locator('.tiptap .image-node img').click();
+    await page.keyboard.press('Backspace');
+    await page.locator('.qa-delete-image-keep').click();
+
+    await expect(page.locator('.tiptap .image-node')).toHaveCount(0);
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(1);
+    expect(await saveAndRead(file)).toBe('Before  after\n');
+    expect(await trashed()).toEqual([]);
+  });
+
+  test('deleting an image does not ask when the file is missing or still shown elsewhere in the document', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openBoxDoc('A ![a box](<pics/box one.svg>) B ![again](pics/box%20one.svg) C ![gone](nope.png) D\n');
+    await stubTrash();
+    const ed = page.locator('.tiptap:visible');
+
+    // The missing one first, then one of the two references to the same file.
+    await page.locator('.qa-image-missing').click({ button: 'right' });
+    await page.locator('.qa-image-remove').click();
+    await page.locator('.tiptap .image-node img').first().click({ button: 'right' });
+    await page.locator('.qa-image-remove').click();
+    await expect(ed.locator('.image-node')).toHaveCount(1);
+    await expect(page.locator('.qa-delete-image')).toHaveCount(0);
+
+    // The last reference does ask.
+    await page.locator('.tiptap .image-node img').click({ button: 'right' });
+    await page.locator('.qa-image-remove').click();
+    await expect(page.locator('.qa-delete-image')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.qa-delete-image')).toHaveCount(0);
+    expect(await saveAndRead(file)).toBe('A  B ![again](pics/box%20one.svg) C  D\n');
+    expect(await trashed()).toEqual([]);
   });
 });
 

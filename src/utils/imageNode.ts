@@ -106,6 +106,8 @@ export const ImageNode = Node.create({
     return {
       // The open document's folder, set by Editor before it loads content.
       baseDir: null as string | null,
+      // Local files that have displayed in this editor. Only these prompt to trash on removal.
+      shownFiles: new Set<string>(),
       markdown: {
         serialize(state: any, node: any) {
           // text() rather than write(): it re-prefixes continuation lines inside quotes/lists.
@@ -148,7 +150,10 @@ export const ImageNode = Node.create({
       const label = document.createElement('span');
       label.className = 'image-path qa-image-path small';
       label.textContent = shown;
-      img.addEventListener('load', () => { loaded = true; }, { once: true });
+      img.addEventListener('load', () => {
+        loaded = true;
+        if (source.localPath) (editor.storage as any).image.shownFiles.add(source.localPath);
+      }, { once: true });
       img.addEventListener('error', async () => {
         let message = `${shown} can't be loaded`;
         if (source.localPath) {

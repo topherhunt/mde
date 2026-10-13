@@ -22,6 +22,8 @@ import { ColorHighlight, TextColor, escapeColorSyntax } from '../utils/colorMark
 import TableMenu from './TableMenu';
 import ImageContextMenu from './ImageContextMenu';
 import PasteImagesDialog from './PasteImagesDialog';
+import DeleteImageDialog, { DeleteImageChoice } from './DeleteImageDialog';
+import { IMAGE_DELETE_ANSWERED, IMAGE_DELETE_EVENT, ImageDeleteGuard, ImageDeleteRequest } from '../utils/imageDeletion';
 import { INSERT_IMAGE_EVENT, PendingPaste, WebImageChoice, imageDropsHandled, pasteNeedingImageChoice, resolveWebPaste, saveImageFiles } from '../utils/pasteImages';
 
 // Override tiptap-markdown's text serializer which blindly converts all < and >
@@ -57,8 +59,6 @@ const TextNode = Text.extend({
     };
   },
 });
-
-const TABLE_NODE_NAMES = ['table', 'tableRow', 'tableCell', 'tableHeader'];
 
 const cellSpans = (cell: any) => cell.attrs.colspan > 1 || cell.attrs.rowspan > 1;
 
@@ -111,42 +111,37 @@ const MarkdownTable = Table.extend({
   },
 });
 
-// Convert a copied slice into tab-separated rows -- but ONLY when the slice is
-// nothing BUT table structure (a cell selection, a row, or a whole table on its own).
-// Returns null otherwise, including for a mixed selection such as Cmd+A over a
-// document with prose AND a table: there the whole slice goes to the markdown
-// serializer instead, which renders the table as a Markdown table alongside
-// everything else. (Deciding on "contains a table anywhere" used to silently drop
-// every non-table block from the copied text.)
-// A single selected cell yields just its text -- no tabs/newlines.
-function tableSliceToTSV(content: Fragment): string | null {
-  const rows: string[][] = [];
-
-  const collectRow = (rowNode: any) => {
-    const cells: string[] = [];
-    rowNode.forEach((cell: any) => cells.push(cell.textContent));
-    rows.push(cells);
-  };
-
-  let allTable = true;
-  content.forEach((node: any) => {
-    if (!TABLE_NODE_NAMES.includes(node.type.name)) allTable = false;
+// The clipboard's text/plain for a copied fragment: the literal characters, with no
+// Markdown syntax (no #, -, [ ], **, backticks, fences). Blocks are separated by a
+// blank line; list items and table rows by a newline; table cells by a tab. Every
+// node recurses into its children, so no block is ever dropped from the copy.
+function fragmentToPlainText(fragment: Fragment, separator?: string): string {
+  // A cell selection copies bare tableRows (a list selection, bare listItems), with
+  // no parent node to choose their separator.
+  const sep = separator
+    ?? (['tableRow', 'listItem'].includes(fragment.firstChild?.type.name ?? '') ? '\n' : '\n\n');
+  const parts: string[] = [];
+  fragment.forEach((node: any) => {
+    const text = nodeToPlainText(node);
+    if (text) parts.push(text);
   });
-  if (!allTable || content.childCount === 0) return null;
+  return parts.join(sep);
+}
 
-  content.forEach((node: any) => {
-    const name = node.type.name;
-    if (name === 'table') {
-      node.forEach((row: any) => { if (row.type.name === 'tableRow') collectRow(row); });
-    } else if (name === 'tableRow') {
-      collectRow(node);
-    } else {
-      // tableCell / tableHeader
-      rows.push([node.textContent]);
-    }
-  });
-
-  return rows.map((r) => r.join('\t')).join('\n');
+function nodeToPlainText(node: any): string {
+  if (node.isText) return node.text;
+  if (node.isInline) return node.type.name === 'hardBreak' ? '\n' : '';
+  if (node.isTextblock) {
+    return node.textBetween(0, node.content.size, undefined,
+      (leaf: any) => (leaf.type.name === 'hardBreak' ? '\n' : ''));
+  }
+  switch (node.type.name) {
+    case 'bulletList': case 'orderedList': case 'listItem': case 'table':
+      return fragmentToPlainText(node.content, '\n');
+    case 'tableRow': return fragmentToPlainText(node.content, '\t');
+    case 'tableCell': case 'tableHeader': return fragmentToPlainText(node.content, ' ');
+    default: return fragmentToPlainText(node.content);
+  }
 }
 
 const escapeHtml = (s: string) =>
@@ -197,21 +192,18 @@ function listItemDepth($pos: any): number {
   return 0;
 }
 
-const insideListItem = ($pos: any): boolean => listItemDepth($pos) > 0;
-
-// When copying a single list item, strip the list wrapper so the clipboard gets
-// just the text, not "- text". Multi-item copies keep the list markers.
+// Every copy's text/plain is literal text (fragmentToPlainText); code-only
+// selections also get plain HTML so they paste back without code formatting.
 const SmartClipboard = Extension.create({
   name: 'smartClipboard',
   addProseMirrorPlugins() {
-    const editor = this.editor;
     // Copy/cut of a selection whose only content is code -- one code block or one
     // inline code span (see the two *SelectionRange helpers): write the raw text to
     // BOTH text/plain and a plain text/html. Handling the DOM event ourselves --
     // before ProseMirror's serializeForClipboard runs -- means the code is never
     // wrapped in a ``` fence or backticks in either representation, so it pastes as
     // plain text ANYWHERE, not as re-created code. Returns false when text outside
-    // the code is selected too, so mixed copies keep their Markdown on the normal path.
+    // the code is selected too, so mixed copies keep their rich HTML on the normal path.
     const copyCodeAsPlainText = (view: any, event: ClipboardEvent, isCut: boolean): boolean => {
       const { state } = view;
       const range = codeOnlySelectionRange(state) ?? inlineCodeOnlySelectionRange(state);
@@ -240,42 +232,8 @@ const SmartClipboard = Extension.create({
             copy: (view, event) => copyCodeAsPlainText(view, event as ClipboardEvent, false),
             cut: (view, event) => copyCodeAsPlainText(view, event as ClipboardEvent, true),
           },
-          clipboardTextSerializer: (slice) => {
-            // @ts-expect-error tiptap-markdown adds storage.markdown at runtime
-            const serializer = editor.storage.markdown.serializer;
-            const { content } = slice;
-            // Table selections (CellSelection or a copied table) -- tiptap-markdown has no
-            // table serializer and would emit "[table]". Emit tab-separated rows instead,
-            // which paste cleanly as plain text (e.g. VS Code) and as a real table into Word
-            // (which reads the text/html representation ProseMirror writes alongside this one).
-            const tsv = tableSliceToTSV(content);
-            if (tsv !== null) return tsv;
-            // Text selected inside ONE list item copies as just that text -- no "- "
-            // bullet, no "[ ] " checkbox. A copied slice keeps every ancestor the
-            // selection sits under, so a nested task item used to serialize the
-            // ancestor item's marker AND its own, giving "- [ ] - [ ] the text".
-            // Inline formatting (bold, links, code) is still serialized.
-            const { $from, $to, empty } = editor.state.selection;
-            if (!empty && $from.sameParent($to) && $from.parent.isTextblock
-                && !$from.parent.type.spec.code && insideListItem($from)) {
-              const inline = $from.parent.cut($from.parentOffset, $to.parentOffset);
-              return serializer.serialize(Fragment.from(inline)).trim();
-            }
-            // Whole-item copies (a selection spanning the item's own boundaries, so the
-            // rule above doesn't apply) still shed the item's own marker: one list item
-            // is a line of text, not a list. Any sublist it carries keeps its markers.
-            if (content.childCount === 1) {
-              const child = content.firstChild!;
-              if ((child.type.name === 'bulletList' || child.type.name === 'orderedList')
-                  && child.childCount === 1) {
-                return serializer.serialize(child.firstChild!.content).trim();
-              }
-              if (child.type.name === 'listItem') {
-                return serializer.serialize(child.content).trim();
-              }
-            }
-            return serializer.serialize(content);
-          },
+          // Rich formatting travels in the text/html ProseMirror writes alongside this.
+          clipboardTextSerializer: (slice) => fragmentToPlainText(slice.content),
         },
       }),
     ];
@@ -1673,6 +1631,7 @@ export function buildExtensions() {
     ColorHighlight,
     TextColor,
     ImageNode,
+    ImageDeleteGuard,
     Link.extend({
       // The Link extension's paste rule runs linkifyjs over pasted text and
       // marks anything URL-shaped as a link, regardless of the autolink /
@@ -1742,6 +1701,8 @@ export default function Editor({
   // A paste or drop with images waits here for PasteImagesDialog. Reached from the editorProps via the ref.
   const [pendingPaste, setPendingPaste] = useState<PendingPaste | null>(null);
   const setPendingPasteRef = useRef(setPendingPaste);
+  // An edit that removes an image file's last reference waits here for DeleteImageDialog.
+  const [pendingDelete, setPendingDelete] = useState<ImageDeleteRequest | null>(null);
 
   // `extensions` and `editorProps` MUST keep a stable identity across renders.
   // useEditor runs an effect on EVERY render that diffs the options it was given
@@ -1944,6 +1905,14 @@ export default function Editor({
   }, [editor]);
 
   useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom;
+    const onDelete = (e: Event) => setPendingDelete((e as CustomEvent<ImageDeleteRequest>).detail);
+    dom.addEventListener(IMAGE_DELETE_EVENT, onDelete);
+    return () => dom.removeEventListener(IMAGE_DELETE_EVENT, onDelete);
+  }, [editor]);
+
+  useEffect(() => {
     if (!editor || loadedRef.current) return;
 
     if (tab.initialContent) {
@@ -2007,6 +1976,31 @@ export default function Editor({
     }
   };
 
+  const cancelDelete = () => {
+    setPendingDelete(null);
+    editor.commands.focus();
+  };
+
+  const finishDelete = async (choice: DeleteImageChoice) => {
+    const { tr, files } = pendingDelete!;
+    setPendingDelete(null);
+    // The held-back edit only applies to the document it was made on (a reload could intervene).
+    if (editor.state.doc !== tr.before) {
+      onToast('The document changed while the question was open, so nothing was removed.', 'danger');
+      return;
+    }
+    editor.view.dispatch(tr.setMeta(IMAGE_DELETE_ANSWERED, true));
+    editor.commands.focus();
+    if (choice !== 'trash') return;
+    for (const { path, shown } of files) {
+      try {
+        await window.mde.trashFile(path);
+      } catch (err) {
+        onToast(`Could not move ${shown} to the Trash: ${err instanceof Error ? err.message : String(err)}`, 'danger');
+      }
+    }
+  };
+
   return (
     <div className="editor-wrapper">
       <EditorContent editor={editor} className={`editor-content ${tab.readOnly ? 'editor-readonly' : ''}`} />
@@ -2014,6 +2008,7 @@ export default function Editor({
       {!tab.readOnly && <TableMenu editor={editor} />}
       <ImageContextMenu editor={editor} />
       {pendingPaste && <PasteImagesDialog pending={pendingPaste} canSave={docDir !== null} onChoose={finishPaste} onCancel={cancelPaste} />}
+      {pendingDelete && <DeleteImageDialog files={pendingDelete.files.map((f) => f.shown)} onChoose={finishDelete} onCancel={cancelDelete} />}
     </div>
   );
 }

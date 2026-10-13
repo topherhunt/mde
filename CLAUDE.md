@@ -32,7 +32,7 @@ Break these and something silently corrupts, clobbers, or infinite-loops.
 - `{LIST_SEPARATOR}` **must never reach the document or disk.** Two guards in `utils/markdown.ts`; `markdownToHtml()` is the single markdown -> editor-HTML entry point and must stay that way. -> notes: Lists and tasks
 - **Fold state lives on the node as a** `folded` **attribute, never as positions in plugin state.** Position sets do not survive edits. -> notes: Folding
 - **Folding must never mark a buffer dirty or clean.** The clean snapshot is `docSignature(doc)` (drops `folded` keys), and `onTransaction`'s re-baseline skips `FOLD_CHANGE`. -> notes: Folding
-- **Clipboard: never decide the TSV path on "contains a table anywhere."** A mixed slice must fall through to the markdown serializer, or every non-table block is silently dropped from the copy. -> notes: Clipboard
+- **Clipboard `text/plain` is literal text, never Markdown.** `fragmentToPlainText` builds it block by block; never shortcut the whole slice on what it contains (a "contains a table anywhere" shortcut once silently dropped every non-table block). -> notes: Clipboard
 - **Keep** `webpack.main.config.ts`**'s** `externalPackages` **in sync with** `externals`**.** A main-process external not listed there throws `Cannot find module` in the packaged app while working fine in dev. -> notes: Packaging and webpack
 - **Keep** `EnableCookieEncryption` **false while the app is ad-hoc signed.** It makes Chromium create a keychain item, and an ad-hoc designated requirement is pinned to one exact binary hash -- so every release would prompt the user for their login keychain password. MDE uses neither cookies nor `safeStorage`. Revisit only if we get a Developer ID cert. -> notes: Packaging and webpack
 - **Never remove** `forge.config.ts`**'s** `postPackage` **ad-hoc re-sign hook.** Forge leaves the macOS bundle with a signature that no longer matches it, and a BROKEN signature means "damaged, move to Trash" with no Open Anyway button -- strictly worse than no signature. The hook's `codesign --verify` gate must stay too, or the breakage is invisible until a user hits it. -> notes: Packaging and webpack
@@ -60,7 +60,7 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 - `tiptap-markdown` handles MD parse/serialize. The TipTap document model is the source of truth while editing. TipTap (ProseMirror) for the editor, not raw contenteditable.
 - tiptap-markdown runs with `html: false`, so raw HTML tags are literal text. The text node serializer skips `escapeHTML` so prose like "Apples > oranges." survives verbatim. A lone `~` and the brackets of a `[[wikilink]]` are deliberately un-escaped on save. -> notes: Markdown serialization
 - Highlight and text color are MDE syntax (`==x==`, `=={blue}x==`, `[x]{red}`) in `utils/colorMarks.ts`; files store palette NAMES, CSS picks the per-theme shade. The text-color rule MUST decline in markdown-it's silent mode, or colored words inside link text break the link. Both marks outrank Link (so they render outside it) and are `mixable`. Inline code no longer excludes them. -> notes: Markdown serialization
-- Images are an inline atom node (`utils/imageNode.ts`). Local files load via the `mde-file://local/` protocol, relative to the document's folder; a missing one shows a placeholder and its reference is left alone. A paste, drop, or toolbar insert carrying images opens `PasteImagesDialog` (save beside the doc / keep links / remove) -- never insert a `data:` URL. `MarkdownTable` overrides tiptap-markdown's table serializer, which dropped image-only cells. -> notes: Markdown serialization
+- Images are an inline atom node (`utils/imageNode.ts`). Local files load via the `mde-file://local/` protocol, relative to the document's folder; a missing one shows a placeholder and its reference is left alone. A paste, drop, or toolbar insert carrying images opens `PasteImagesDialog` (save beside the doc / keep links / remove) -- never insert a `data:` URL. Removing an image's last reference to a file that displayed is held back by `ImageDeleteGuard` until `DeleteImageDialog` is answered; trash only, never a permanent delete. `MarkdownTable` overrides tiptap-markdown's table serializer, which dropped image-only cells. -> notes: Markdown serialization
 - `LeadingParagraph` guarantees a document never starts with a code fence. -> notes: Editor wiring
 - Syntax highlighting is deliberately OFF. Plain `CodeBlock`, not `CodeBlockLowlight`. The copy button is a NodeView. -> notes: Editor wiring
 - ProseMirror decorations power find-match highlighting and link-bar selection preservation. Always clean up decoration plugins on unmount.
@@ -88,7 +88,7 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 
 ### Clipboard and paste
 
-- `SmartClipboard` produces plain text (never a re-created \`\`\` fence) when the selection's only content is one code block or inline code span (part or whole), just the text (no `- `/ `[ ] `marker) when copying inside one list item, and TSV when copying pure table cells. -> notes: Clipboard
+- Every copy's `text/plain` is the literal text with no Markdown syntax (blank line between blocks, newline between list items and table rows, tab between cells); rich formatting rides in `text/html`. A selection whose only content is one code block or inline code span (part or whole) also gets plain `text/html`, so it never pastes back as code. -> notes: Clipboard
 - `handlePaste` intercepts list-shaped plain text and routes it through MDE's own file-load pipeline, so a pasted list is structurally identical to a loaded one. This is what actually fixes real-world (Obsidian) list pastes -- `transformPastedText` never fires when the clipboard carries `text/html`. -> notes: Paste and input rules
 - `BacktickWrap`: a backtick typed over a non-empty single-line selection wraps it in inline code.
 
@@ -167,7 +167,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-285 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+289 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 
