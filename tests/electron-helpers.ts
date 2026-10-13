@@ -12,7 +12,8 @@ function findWebpackMain(): string {
     path.join(APP_DIR, '.webpack', 'main'),
   ];
   for (const c of candidates) {
-    if (fs.existsSync(path.join(c, 'index.js'))) return c;
+    const entry = path.join(c, 'index.cjs');
+    if (fs.existsSync(entry)) return entry;
   }
   throw new Error(
     'Webpack main bundle not found. Run "npx electron-forge package" first.'

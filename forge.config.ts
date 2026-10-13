@@ -159,6 +159,9 @@ const config: ForgeConfig = {
   plugins: [
     new AutoUnpackNativesPlugin({}),
     new WebpackPlugin({
+      // Off the default 3000, which other local dev servers commonly hold -- a taken
+      // port kills `npm start` with only a buried EADDRINUSE.
+      port: 3917,
       mainConfig,
       renderer: {
         config: rendererConfig,
