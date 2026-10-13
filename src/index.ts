@@ -623,13 +623,16 @@ ipcMain.handle('reveal-in-finder', (_event, filePath: string) => {
 
 // Pasted images are written here, never through write-file-if-unchanged (which is for documents).
 // Never overwrites: a taken name gets -2, -3, ... Returns the path relative to the document's folder.
-ipcMain.handle('save-image', async (_event, docDir: string, folder: string, name: string, source: { url: string } | { bytes: Uint8Array; type: string }) => {
+ipcMain.handle('save-image', async (_event, docDir: string, folder: string, name: string, source: { url: string } | { bytes: Uint8Array; type: string } | { path: string }) => {
   if (path.isAbsolute(folder)) throw new Error('The folder must be relative to the document.');
   let bytes: Buffer;
   let type: string;
   if ('bytes' in source) {
     bytes = Buffer.from(source.bytes);
     type = source.type;
+  } else if ('path' in source) {
+    bytes = await fs.promises.readFile(source.path);
+    type = IMAGE_TYPES[path.extname(source.path).toLowerCase()] || '';
   } else if (source.url.startsWith('data:')) {
     const m = /^data:([^;,]*)((?:;[^;,]*)*),([\s\S]*)$/.exec(source.url);
     if (!m) throw new Error('Malformed data URL.');
@@ -657,6 +660,17 @@ ipcMain.handle('save-image', async (_event, docDir: string, folder: string, name
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
   }
+});
+
+ipcMain.handle('pick-images', async (event, docDir: string | null) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const options: Electron.OpenDialogOptions = {
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Images', extensions: Object.keys(IMAGE_TYPES).map((e) => e.slice(1)) }],
+    ...(docDir ? { defaultPath: docDir } : {}),
+  };
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+  return result.canceled ? [] : result.filePaths;
 });
 
 ipcMain.handle('create-file', async (_event, filePath: string) => {

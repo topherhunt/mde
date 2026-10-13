@@ -1,9 +1,19 @@
-// Pasted images never enter the document as `data:` URLs: they are saved beside the document
-// (PasteImagesDialog asks where), and web images may alternatively stay as links or be dropped.
+// Pasted, dropped, and picked images never enter the document as `data:` URLs: they are saved
+// beside the document (PasteImagesDialog asks where), and web images may alternatively stay as
+// links or be dropped. A `string` file is a path on disk, from the toolbar's file picker.
 
 export type PendingPaste =
-  | { kind: 'files'; files: File[] }
+  | { kind: 'files'; files: (File | string)[] }
   | { kind: 'web'; html: string; embedded: number };
+
+export const isImageFile = (f: File) => f.type.startsWith('image/');
+
+// The editor claims the image files of a drop it handled; App's window-level drop handler skips
+// them (it would otherwise reject them as unsupported) but still opens any documents alongside.
+export const imageDropsHandled = new WeakSet<Event>();
+
+// Dispatched on the editor's DOM by the toolbar, which can't reach the Editor's dialog state.
+export const INSERT_IMAGE_EVENT = 'mde-insert-image';
 
 export type WebImageChoice = 'save' | 'links' | 'remove';
 
@@ -26,7 +36,7 @@ export function pasteNeedingImageChoice(cd: DataTransfer): PendingPaste | null {
     return { kind: 'web', html, embedded: imgs.filter((img) => img.getAttribute('src')!.startsWith('data:')).length };
   }
   // Only a bare image (a screenshot): Word and Excel put a picture of the selection beside their HTML.
-  const files = Array.from(cd.files).filter((f) => f.type.startsWith('image/'));
+  const files = Array.from(cd.files).filter(isImageFile);
   return files.length ? { kind: 'files', files } : null;
 }
 
@@ -45,11 +55,15 @@ function nameForUrl(src: string, fallback: string): string {
   return safeName(last) || fallback;
 }
 
-// Saves each clipboard image and returns the relative paths, in order.
-export async function saveClipboardFiles(files: File[], docDir: string, folder: string): Promise<string[]> {
+// Saves each image and returns the relative paths, in order.
+export async function saveImageFiles(files: (File | string)[], docDir: string, folder: string): Promise<string[]> {
   const base = stamp();
   const paths: string[] = [];
   for (const [i, file] of files.entries()) {
+    if (typeof file === 'string') {
+      paths.push(await window.mde.saveImage(docDir, folder, safeName(file.split(/[\\/]/).pop()!), { path: file }));
+      continue;
+    }
     // A screenshot arrives as "image.png"; anything else keeps its own name.
     const name = /^image\.\w+$/i.test(file.name) || !file.name ? `${base}${i ? `-${i + 1}` : ''}` : safeName(file.name);
     const bytes = new Uint8Array(await file.arrayBuffer());

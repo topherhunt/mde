@@ -1,6 +1,7 @@
 import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { PALETTE, PaletteColor } from '../utils/colorMarks';
+import { INSERT_IMAGE_EVENT } from '../utils/pasteImages';
 
 // Platform-aware modifier label for shortcut hints in tooltips.
 const MOD = window.mde?.platform === 'darwin' ? 'Cmd' : 'Ctrl';
@@ -233,6 +234,14 @@ export default function Toolbar({ editor, linkTrigger, onToast, onLinkEdit, leav
           title={`Insert link (${MOD} + K)`}
           active={editor.isActive('link')}
           onClick={startSetLink}
+        />
+        <ToolbarButton
+          icon="image"
+          title="Insert image"
+          active={false}
+          disabled={!editor.isEditable}
+          onClick={() => editor.view.dom.dispatchEvent(new CustomEvent(INSERT_IMAGE_EVENT))}
+          className="qa-insert-image"
         />
         <ToolbarButton
           icon="table"

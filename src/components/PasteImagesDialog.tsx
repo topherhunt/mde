@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import type { PendingPaste, WebImageChoice } from '../utils/pasteImages';
 
-// Asks where pasted images go. A screenshot can only be saved (or the paste cancelled); images
+// Asks where pasted, dropped, or picked images go. Image files can only be saved (or cancelled); images
 // in pasted web content can also stay as links or be dropped. `canSave` is false for a document
 // that has never been saved, since there is no folder to save beside.
 export default function PasteImagesDialog({ pending, canSave, onChoose, onCancel }: {
@@ -25,12 +25,12 @@ export default function PasteImagesDialog({ pending, canSave, onChoose, onCancel
     <div className="modal-backdrop qa-paste-images" onClick={onCancel}>
       <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <span className="fw-bold">{web ? 'The pasted content has images' : 'Paste image'}</span>
+          <span className="fw-bold">{web ? 'The pasted content has images' : pending.files.length > 1 ? `Add ${pending.files.length} images` : 'Add image'}</span>
         </div>
         <div className="modal-body">
           {canSave ? (
             <>
-              <label className="small fw-bold" htmlFor="paste-images-folder">Save {web ? 'images' : 'the image'} to this folder, next to the document</label>
+              <label className="small fw-bold" htmlFor="paste-images-folder">Save {web || pending.files.length > 1 ? 'images' : 'the image'} to this folder, next to the document</label>
               <input
                 id="paste-images-folder"
                 className="form-control mt-1 qa-paste-images-folder"

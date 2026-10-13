@@ -29,6 +29,12 @@ export async function launchApp(
     args: [mainPath, '--test-headless', ...extraArgs],
   });
 
+  // Never let a test open the user's browser. URLs are recorded for tests to assert on instead.
+  await app.evaluate(({ shell }) => {
+    const opened: string[] = (globalThis as any).__openedExternal = [];
+    shell.openExternal = async (url: string) => { opened.push(url); };
+  });
+
   const page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
   await page.waitForSelector('.app', { timeout: 10000 });

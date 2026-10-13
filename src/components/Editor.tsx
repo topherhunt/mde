@@ -11,7 +11,7 @@ import taskListPlugin from 'markdown-it-task-lists';
 import { Markdown as MarkdownExt } from 'tiptap-markdown';
 import Text from '@tiptap/extension-text';
 import { Extension, InputRule, mergeAttributes } from '@tiptap/core';
-import { TextSelection, Plugin, PluginKey } from '@tiptap/pm/state';
+import { TextSelection, NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, EditorProps as PMEditorProps } from '@tiptap/pm/view';
 import { Fragment, DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { Tab } from '../types';
@@ -22,7 +22,7 @@ import { ColorHighlight, TextColor, escapeColorSyntax } from '../utils/colorMark
 import TableMenu from './TableMenu';
 import ImageContextMenu from './ImageContextMenu';
 import PasteImagesDialog from './PasteImagesDialog';
-import { PendingPaste, WebImageChoice, pasteNeedingImageChoice, resolveWebPaste, saveClipboardFiles } from '../utils/pasteImages';
+import { INSERT_IMAGE_EVENT, PendingPaste, WebImageChoice, imageDropsHandled, pasteNeedingImageChoice, resolveWebPaste, saveImageFiles } from '../utils/pasteImages';
 
 // Override tiptap-markdown's text serializer which blindly converts all < and >
 // to &lt; &gt;, mangling prose like "Apples > oranges." on save.
@@ -34,19 +34,23 @@ import { PendingPaste, WebImageChoice, pasteNeedingImageChoice, resolveWebPaste,
 // next to another `\~` is left alone: under-escaping there would silently turn literal
 // "~~text~~" into a strike on the next load, and over-escaping is the safe direction.
 const LONE_ESCAPED_TILDE = /(?<!\\~)\\~(?!\\~)/g;
+// esc() also escapes brackets, which turned Obsidian's `[[note]]` / `![[pic.png]]` into
+// `\[\[note\]\]` on every save. A label can't hold unescaped brackets, so `[[x]]` reparses as
+// the same literal text; only the brackets are un-escaped, never what's inside.
+const ESCAPED_WIKILINK = /\\\[\\\[((?:(?!\\[[\]])[^\n])+?)\\\]\\\]/g;
 
 const TextNode = Text.extend({
   addStorage() {
     return {
       markdown: {
         serialize(state: any, node: any) {
-          // state.text() runs esc() internally, so undo its tilde escaping (and add the
-          // `==` / `{color}` escaping it knows nothing about) on just the span of output
-          // this call appended.
+          // state.text() runs esc() internally, so undo its tilde and wikilink escaping (and
+          // add the `==` / `{color}` escaping it knows nothing about) on just the span of
+          // output this call appended.
           const start = state.out.length;
           state.text(node.text);
-          state.out = state.out.slice(0, start)
-            + escapeColorSyntax(state.out.slice(start).replace(LONE_ESCAPED_TILDE, '~'));
+          state.out = state.out.slice(0, start) + escapeColorSyntax(state.out.slice(start)
+            .replace(LONE_ESCAPED_TILDE, '~').replace(ESCAPED_WIKILINK, '[[$1]]'));
         },
         parse: {},
       },
@@ -148,12 +152,41 @@ function tableSliceToTSV(content: Fragment): string | null {
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// True when the whole selection lies inside a single code block (an interior
-// selection, not a NodeSelection of the block itself -- there $from.parent is the
-// doc, whose spec.code is falsy).
-function selectionInsideCodeBlock(state: any): boolean {
-  const { $from, $to, empty } = state.selection;
-  return !empty && $from.parent.type.spec.code && $from.sameParent($to);
+// The range of code text to copy when the selection's ONLY content is inside one
+// code block: an interior selection, a NodeSelection of the block, or a drag that
+// spills into empty neighbouring blocks. Null when any inline content outside the
+// block, or a second code block, is selected.
+function codeOnlySelectionRange(state: any): { from: number; to: number } | null {
+  const { from, to, empty } = state.selection;
+  if (empty) return null;
+  let block: { start: number; end: number } | null = null;
+  let codeBlocks = 0;
+  let outside = false;
+  state.doc.nodesBetween(from, to, (node: any, pos: number) => {
+    if (node.type.spec.code && node.isTextblock) {
+      codeBlocks++;
+      block = { start: pos + 1, end: pos + 1 + node.content.size };
+      return false;
+    }
+    if (node.isInline) outside = true;
+    return !outside;
+  });
+  if (outside || codeBlocks !== 1) return null;
+  const range = { from: Math.max(from, block!.start), to: Math.min(to, block!.end) };
+  return range.from < range.to ? range : null;
+}
+
+// The selection when it lies within one textblock and every selected inline node
+// carries the inline code mark -- part or all of a `code span`. Null otherwise.
+function inlineCodeOnlySelectionRange(state: any): { from: number; to: number } | null {
+  const { from, to, empty, $from, $to } = state.selection;
+  const code = state.schema.marks.code;
+  if (empty || !code || !$from.sameParent($to) || !$from.parent.isTextblock) return null;
+  let allCode = true;
+  state.doc.nodesBetween(from, to, (node: any) => {
+    if (node.isInline && !code.isInSet(node.marks)) allCode = false;
+  });
+  return allCode ? { from, to } : null;
 }
 
 // Depth of the innermost listItem the position sits inside, or 0 for none.
@@ -172,20 +205,20 @@ const SmartClipboard = Extension.create({
   name: 'smartClipboard',
   addProseMirrorPlugins() {
     const editor = this.editor;
-    // Copy/cut from inside a code block: write the raw text to BOTH text/plain and a
-    // plain text/html (one <p> per line). Handling the DOM event ourselves -- before
-    // ProseMirror's serializeForClipboard runs -- means the code is never wrapped in a
-    // ``` fence in either representation, so it pastes as plain text ANYWHERE (prose or
-    // another fence), not as a re-created code block. Returns false for anything else
-    // (whole-block NodeSelection, selections spanning out of the block) so the normal
-    // clipboard path -- including the code-block copy button and fenced-block copies --
-    // is untouched.
+    // Copy/cut of a selection whose only content is code -- one code block or one
+    // inline code span (see the two *SelectionRange helpers): write the raw text to
+    // BOTH text/plain and a plain text/html. Handling the DOM event ourselves --
+    // before ProseMirror's serializeForClipboard runs -- means the code is never
+    // wrapped in a ``` fence or backticks in either representation, so it pastes as
+    // plain text ANYWHERE, not as re-created code. Returns false when text outside
+    // the code is selected too, so mixed copies keep their Markdown on the normal path.
     const copyCodeAsPlainText = (view: any, event: ClipboardEvent, isCut: boolean): boolean => {
       const { state } = view;
-      if (!selectionInsideCodeBlock(state)) return false;
+      const range = codeOnlySelectionRange(state) ?? inlineCodeOnlySelectionRange(state);
+      if (!range) return false;
       const data = event.clipboardData;
       if (!data) return false;
-      const text = state.doc.textBetween(state.selection.from, state.selection.to, '\n');
+      const text = state.doc.textBetween(range.from, range.to, '\n');
       event.preventDefault();
       data.clearData();
       data.setData('text/plain', text);
@@ -1137,8 +1170,14 @@ function hiddenRange(doc: any, node: any, pos: number): { from: number; to: numb
   return null;
 }
 
-function selectionInside(selection: any, range: { from: number; to: number }): boolean {
-  return selection.from < range.to && selection.to > range.from;
+// Whether a fold over `range` would hide where the user is: either end of a text selection,
+// or a selected node. A selection that merely SPANS the range has both ends visible, so the
+// fold stays -- and copying it still carries the hidden content, since the clipboard is
+// serialized from the document, not the DOM.
+function selectionHiddenBy(selection: any, range: { from: number; to: number }): boolean {
+  if (selection instanceof NodeSelection) return selection.from >= range.from && selection.to <= range.to;
+  const inside = (pos: number) => pos > range.from && pos < range.to;
+  return inside(selection.anchor) || inside(selection.head);
 }
 
 // Fold flags live ON the nodes (a `folded` attribute), not in a plugin-held Set of
@@ -1176,7 +1215,7 @@ function setFolded(view: any, pos: number, folded: boolean): boolean {
     // is under the pointer without moving the cursor first.) Park it on the folded line.
     const isHeading = node.type.name === 'heading';
     const hidden = hiddenRange(view.state.doc, node, pos);
-    if (hidden && selectionInside(view.state.selection, hidden)) {
+    if (hidden && selectionHiddenBy(view.state.selection, hidden)) {
       const line = isHeading ? node : node.firstChild;
       const end = pos + (isHeading ? 1 : 2) + (line?.content.size ?? 0);
       tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(end, tr.doc.content.size))));
@@ -1402,9 +1441,9 @@ const CodeFolding = Extension.create({
         // Two ways a fold flag goes stale, both cleared here:
         // (1) The node stops being foldable (its sublist gets deleted, or the blocks under
         //     a heading are removed) -- no invisible fold state should linger on it.
-        // (2) The cursor ends up INSIDE the hidden range. Tab on the item below a folded
-        //     one sinks it into that folded sublist, so the line the user is typing on
-        //     would just disappear. Unfold instead: whatever the cursor is in stays visible.
+        // (2) An end of the selection lands INSIDE the hidden range. Tab on the item below
+        //     a folded one sinks it into that folded sublist, so the line the user is typing
+        //     on would just disappear. Unfold instead: whatever the cursor is in stays visible.
         appendTransaction(transactions, _oldState, newState) {
           if (!transactions.some(t => t.docChanged || t.selectionSet)) return null;
           const { collapsed } = foldKey.getState(newState);
@@ -1414,7 +1453,7 @@ const CodeFolding = Extension.create({
             if (!node) continue;
             if (isFoldable(newState.doc, node, pos)) {
               const hidden = hiddenRange(newState.doc, node, pos);
-              if (!hidden || !selectionInside(newState.selection, hidden)) continue;
+              if (!hidden || !selectionHiddenBy(newState.selection, hidden)) continue;
             }
             tr = tr || newState.tr;
             // Attribute-only markup changes preserve node size, so earlier edits in this
@@ -1700,7 +1739,7 @@ export default function Editor({
   // Lets the handlePaste editorProp reach the tiptap-markdown parser without a
   // use-before-define reference to the `editor` const being created below.
   const editorRef = useRef<TipTapEditor | null>(null);
-  // A paste with images waits here for PasteImagesDialog. Reached from handlePaste via the ref.
+  // A paste or drop with images waits here for PasteImagesDialog. Reached from the editorProps via the ref.
   const [pendingPaste, setPendingPaste] = useState<PendingPaste | null>(null);
   const setPendingPasteRef = useRef(setPendingPaste);
 
@@ -1763,6 +1802,22 @@ export default function Editor({
         view.dispatch(
           view.state.tr.replaceSelection(slice).scrollIntoView().setMeta('paste', true).setMeta('uiEvent', 'paste'),
         );
+        return true;
+      },
+      // Dropped image files, and a web page's images dragged in, take the same dialog as a paste.
+      // The caret moves to the drop point first, so the paste path inserts them there.
+      handleDrop(view, event, _slice, moved) {
+        const dt = (event as DragEvent).dataTransfer;
+        if (moved || !view.editable || !dt) return false;
+        const withImages = pasteNeedingImageChoice(dt);
+        if (!withImages) return false;
+        const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
+        if (!at) return false;
+        const $at = view.state.doc.resolve(at.pos);
+        if ($at.parent.type.spec.code) return false;
+        imageDropsHandled.add(event);
+        view.dispatch(view.state.tr.setSelection(TextSelection.near($at)));
+        setPendingPasteRef.current(withImages);
         return true;
       },
       handleClick(view, pos, event) {
@@ -1876,6 +1931,18 @@ export default function Editor({
     if (editor) (editor.storage as any).image.baseDir = tab.filePath ? dirname(tab.filePath) : null;
   }, [editor, tab.filePath]);
 
+  // The toolbar's Insert Image button: pick files, then the same dialog as a paste.
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom;
+    const onInsert = async () => {
+      const files = await window.mde.pickImages((editor.storage as any).image.baseDir);
+      if (files.length) setPendingPaste({ kind: 'files', files });
+    };
+    dom.addEventListener(INSERT_IMAGE_EVENT, onInsert);
+    return () => dom.removeEventListener(INSERT_IMAGE_EVENT, onInsert);
+  }, [editor]);
+
   useEffect(() => {
     if (!editor || loadedRef.current) return;
 
@@ -1928,7 +1995,7 @@ export default function Editor({
     editor.commands.focus();
     try {
       if (pending.kind === 'files') {
-        const paths = await saveClipboardFiles(pending.files, docDir!, folder);
+        const paths = await saveImageFiles(pending.files, docDir!, folder);
         editor.chain().focus().insertContent(paths.map((src) => ({ type: 'image', attrs: { src, alt: '' } }))).run();
       } else {
         const { html, failed } = await resolveWebPaste(pending.html, choice, docDir, folder);

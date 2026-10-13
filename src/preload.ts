@@ -251,6 +251,7 @@ const api = {
 
   saveImage: (docDir: string, folder: string, name: string, source: PastedImageSource): Promise<string> =>
     ipcRenderer.invoke('save-image', docDir, folder, name, source),
+  pickImages: (docDir: string | null): Promise<string[]> => ipcRenderer.invoke('pick-images', docDir),
 
   revealInFinder: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('reveal-in-finder', filePath),

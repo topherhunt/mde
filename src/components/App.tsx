@@ -18,6 +18,7 @@ import { markdownToDoc, docToPdfHtml, docToDocx, ExportFormat } from '../utils/e
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { FileEntry } from '../types';
 import { basename, dirname, joinPath, resolvePath } from '../utils/paths';
+import { imageDropsHandled, isImageFile } from '../utils/pasteImages';
 import KEYBOARD_SHORTCUTS_CONTENT from '../../docs/help/keyboard_shortcuts.md';
 
 interface AppState {
@@ -955,6 +956,9 @@ export default function App() {
       e.preventDefault();
       if (!e.dataTransfer?.types.includes('Files')) return;
       dragCountRef.current++;
+      // Images are added to the document, not opened: the editor's drop cursor shows where.
+      const items = Array.from(e.dataTransfer.items);
+      if (items.every((i) => i.kind === 'file' && i.type.startsWith('image/'))) return;
       if (dragCountRef.current === 1) setDraggingOver(true);
     };
     const handleDragLeave = (e: DragEvent) => {
@@ -969,7 +973,8 @@ export default function App() {
       dragCountRef.current = 0;
       setDraggingOver(false);
       if (!e.dataTransfer) return;
-      const files = Array.from(e.dataTransfer.files);
+      const tookImages = imageDropsHandled.has(e);
+      const files = Array.from(e.dataTransfer.files).filter((f) => !(tookImages && isImageFile(f)));
       for (const file of files) {
         const filePath = window.mde.getPathForFile(file);
         if (!filePath) continue;
@@ -986,6 +991,8 @@ export default function App() {
           openFile(filePath);
         } else if (/\.(docx|pdf)$/i.test(filePath)) {
           handleImportFile(filePath);
+        } else if (isImageFile(file)) {
+          showToast('To add an image, drop it into the document.', 'danger');
         } else {
           const ext = basename(filePath) || filePath;
           showToast(`Unsupported file type: ${ext}`, 'danger');
@@ -993,13 +1000,15 @@ export default function App() {
       }
     };
     document.addEventListener('dragover', handleDragOver);
-    document.addEventListener('dragenter', handleDragEnter);
-    document.addEventListener('dragleave', handleDragLeave);
+    // Capture phase: the sidebar rows stopPropagation on dragleave (not dragenter), so a
+    // bubbling counter never returns to 0 and the overlay sticks after the drag leaves.
+    document.addEventListener('dragenter', handleDragEnter, true);
+    document.addEventListener('dragleave', handleDragLeave, true);
     document.addEventListener('drop', handleDrop);
     return () => {
       document.removeEventListener('dragover', handleDragOver);
-      document.removeEventListener('dragenter', handleDragEnter);
-      document.removeEventListener('dragleave', handleDragLeave);
+      document.removeEventListener('dragenter', handleDragEnter, true);
+      document.removeEventListener('dragleave', handleDragLeave, true);
       document.removeEventListener('drop', handleDrop);
     };
   }, [openFile, showToast, state.projectRoot, state.tabs.length]);

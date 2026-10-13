@@ -58,9 +58,9 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 ### Editor and document model
 
 - `tiptap-markdown` handles MD parse/serialize. The TipTap document model is the source of truth while editing. TipTap (ProseMirror) for the editor, not raw contenteditable.
-- tiptap-markdown runs with `html: false`, so raw HTML tags are literal text. The text node serializer skips `escapeHTML` so prose like "Apples > oranges." survives verbatim. A lone `~` is deliberately un-escaped on save. -> notes: Markdown serialization
+- tiptap-markdown runs with `html: false`, so raw HTML tags are literal text. The text node serializer skips `escapeHTML` so prose like "Apples > oranges." survives verbatim. A lone `~` and the brackets of a `[[wikilink]]` are deliberately un-escaped on save. -> notes: Markdown serialization
 - Highlight and text color are MDE syntax (`==x==`, `=={blue}x==`, `[x]{red}`) in `utils/colorMarks.ts`; files store palette NAMES, CSS picks the per-theme shade. The text-color rule MUST decline in markdown-it's silent mode, or colored words inside link text break the link. Both marks outrank Link (so they render outside it) and are `mixable`. Inline code no longer excludes them. -> notes: Markdown serialization
-- Images are an inline atom node (`utils/imageNode.ts`). Local files load via the `mde-file://local/` protocol, relative to the document's folder; a missing one shows a placeholder and its reference is left alone. A paste carrying images opens `PasteImagesDialog` (save beside the doc / keep links / remove) -- never insert a `data:` URL. `MarkdownTable` overrides tiptap-markdown's table serializer, which dropped image-only cells. -> notes: Markdown serialization
+- Images are an inline atom node (`utils/imageNode.ts`). Local files load via the `mde-file://local/` protocol, relative to the document's folder; a missing one shows a placeholder and its reference is left alone. A paste, drop, or toolbar insert carrying images opens `PasteImagesDialog` (save beside the doc / keep links / remove) -- never insert a `data:` URL. `MarkdownTable` overrides tiptap-markdown's table serializer, which dropped image-only cells. -> notes: Markdown serialization
 - `LeadingParagraph` guarantees a document never starts with a code fence. -> notes: Editor wiring
 - Syntax highlighting is deliberately OFF. Plain `CodeBlock`, not `CodeBlockLowlight`. The copy button is a NodeView. -> notes: Editor wiring
 - ProseMirror decorations power find-match highlighting and link-bar selection preservation. Always clean up decoration plugins on unmount.
@@ -88,7 +88,7 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 
 ### Clipboard and paste
 
-- `SmartClipboard` produces plain text (never a re-created \`\`\` fence) when copying inside a code block, just the text (no `- `/ `[ ] `marker) when copying inside one list item, and TSV when copying pure table cells. -> notes: Clipboard
+- `SmartClipboard` produces plain text (never a re-created \`\`\` fence) when the selection's only content is one code block or inline code span (part or whole), just the text (no `- `/ `[ ] `marker) when copying inside one list item, and TSV when copying pure table cells. -> notes: Clipboard
 - `handlePaste` intercepts list-shaped plain text and routes it through MDE's own file-load pipeline, so a pasted list is structurally identical to a loaded one. This is what actually fixes real-world (Obsidian) list pastes -- `transformPastedText` never fires when the clipboard carries `text/html`. -> notes: Paste and input rules
 - `BacktickWrap`: a backtick typed over a non-empty single-line selection wraps it in inline code.
 
@@ -167,7 +167,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-276 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+285 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

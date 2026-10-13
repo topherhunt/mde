@@ -666,7 +666,8 @@ test.describe('Following links', () => {
 
     await editor.locator('a[href="https://example.com"]').click({ modifiers: [MOD] });
 
-    // External URLs route to the system browser, not a tab or the create dialog.
+    // External URLs route to the system browser (stubbed by launchApp), not a tab or the create dialog.
+    await expect.poll(() => app.evaluate(() => (globalThis as any).__openedExternal)).toEqual(['https://example.com']);
     await expect(page.locator('.tab')).toHaveCount(1);
     await expect(page.locator('.modal-dialog')).toHaveCount(0);
   });
@@ -1017,6 +1018,38 @@ test.describe('File explorer', () => {
 
     // Should see nested file
     await expect(page.locator('.tree-file', { hasText: 'nested.md' })).toBeVisible({ timeout: 5000 });
+  });
+
+  test('the drop overlay clears when a file drag leaves the window over a sidebar row', async () => {
+    ({ app, page } = await launchApp());
+
+    const projectDir = fixturePath('test-project');
+    await app.evaluate(({ BrowserWindow }, dir) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-project', dir);
+    }, projectDir);
+    const row = page.locator('.tree-file', { hasText: 'doc1.md' });
+    await expect(row).toBeVisible({ timeout: 5000 });
+
+    // Replay what Chromium fires for a Finder drag that enters the window, crosses onto a
+    // sidebar row, then leaves the window again without dropping.
+    await row.evaluate((rowEl) => {
+      const fire = (type: string, target: Element) => {
+        const dt = new DataTransfer();
+        dt.items.add(new File(['x'], 'x.md'));
+        target.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
+      };
+      fire('dragenter', document.body);
+      fire('dragenter', rowEl);
+      fire('dragleave', document.body);
+    });
+    await expect(page.locator('.drop-overlay')).toBeVisible();
+
+    await row.evaluate((rowEl) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'x.md'));
+      rowEl.dispatchEvent(new DragEvent('dragleave', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    await expect(page.locator('.drop-overlay')).toHaveCount(0);
   });
 });
 
@@ -2802,6 +2835,125 @@ test.describe('Heading folding', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Selecting across a fold: the fold stays, the copy carries the hidden content
+// ---------------------------------------------------------------------------
+
+test.describe('Selecting across a fold', () => {
+  const HEADINGS = [
+    '# Title',
+    '',
+    'Intro text.',
+    '',
+    '## Section A',
+    '',
+    'Body of A.',
+    '',
+    '### Subsection A1',
+    '',
+    'Body of A1.',
+    '',
+    '## Section B',
+    '',
+    'Body of B.',
+    '',
+  ].join('\n');
+
+  // Opens `body` and folds the node whose own line `foldLine()` locates, with Cmd+.
+  async function openFolded(body: string, foldLine: () => ReturnType<Page['locator']>) {
+    ({ app, page } = await launchApp());
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'span.md');
+    fs.writeFileSync(tmpFile, body);
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('Title', { timeout: 5000 });
+
+    await foldLine().click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('ControlOrMeta+.');
+    await expect(editor.locator('.fold-badge')).toHaveCount(1);
+    return editor;
+  }
+
+  // A real mouse drag from the start of `from` to the end of `to`.
+  async function dragSelect(from: ReturnType<Page['locator']>, to: ReturnType<Page['locator']>) {
+    const a = await from.boundingBox();
+    const b = await to.boundingBox();
+    if (!a || !b) throw new Error('drag endpoint is not laid out');
+    await page.mouse.move(a.x + 1, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width - 1, b.y + b.height / 2, { steps: 12 });
+    await page.mouse.up();
+    await page.waitForTimeout(200);
+  }
+
+  const clipboardHTML = () => app.evaluate(({ clipboard }) => clipboard.readHTML());
+
+  test('dragging a selection across a folded heading leaves it folded, and copy includes the hidden section', async () => {
+    const editor = await openFolded(HEADINGS, () => page.locator('.tiptap h2', { hasText: 'Section A' }));
+
+    await dragSelect(editor.getByText('Intro text.'), editor.getByText('Body of B.'));
+
+    await expect(editor.locator('h2.folded')).toContainText('Section A');
+    await expect(editor.locator('.fold-badge')).toHaveCount(1);
+    await expect(editor.getByText('Body of A1.')).not.toBeVisible();
+
+    await page.keyboard.press('ControlOrMeta+c');
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip.trim()).toBe([
+      'Intro text.', '', '## Section A', '', 'Body of A.', '', '### Subsection A1', '', 'Body of A1.', '', '## Section B', '', 'Body of B.',
+    ].join('\n'));
+    const html = await clipboardHTML();
+    expect(html).toContain('Body of A.');
+    expect(html).toMatch(/<h3[^>]*>Subsection A1<\/h3>/);
+    expect(html).toContain('Body of A1.');
+    // Copying is not an edit to the fold either.
+    await expect(editor.locator('h2.folded')).toContainText('Section A');
+  });
+
+  test('dragging a selection across a folded list item leaves it folded, and copy includes the hidden sublist', async () => {
+    const LIST = '# Title\n\n- Above\n- Parent item\n    - Child item\n        - Grandchild\n- Below\n';
+    const editor = await openFolded(LIST, () => page.locator('.tiptap li', { hasText: 'Parent item' }).locator('> p').first());
+
+    await dragSelect(editor.getByText('Above'), editor.getByText('Below'));
+
+    await expect(editor.locator('li.folded')).toContainText('Parent item');
+    await expect(editor.locator('.fold-badge')).toHaveCount(1);
+    await expect(editor.getByText('Child item')).not.toBeVisible();
+
+    await page.keyboard.press('ControlOrMeta+c');
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    // Each hidden level keeps its own nesting depth.
+    const lines = clip.trim().split('\n');
+    expect(lines.map((l) => l.trim())).toEqual(['- Above', '- Parent item', '- Child item', '- Grandchild', '- Below']);
+    const indent = (l: string) => l.length - l.trimStart().length;
+    expect(indent(lines[1])).toBe(0);
+    expect(indent(lines[2])).toBeGreaterThan(indent(lines[1]));
+    expect(indent(lines[3])).toBeGreaterThan(indent(lines[2]));
+    expect(indent(lines[4])).toBe(0);
+    const html = await clipboardHTML();
+    expect(html).toContain('Child item');
+    expect(html).toContain('Grandchild');
+  });
+
+  test('Cmd+A over a folded section leaves it folded, and copy is the whole document', async () => {
+    const editor = await openFolded(HEADINGS, () => page.locator('.tiptap h2', { hasText: 'Section A' }));
+
+    await editor.getByText('Body of B.').click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.waitForTimeout(200);
+    await expect(editor.locator('h2.folded')).toContainText('Section A');
+    await expect(editor.getByText('Body of A1.')).not.toBeVisible();
+
+    await page.keyboard.press('ControlOrMeta+c');
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip.trim()).toBe(HEADINGS.trim());
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Toolbar tooltips
 // ---------------------------------------------------------------------------
 
@@ -3671,6 +3823,87 @@ test.describe('Code fence copy', () => {
     await expect(editor.locator('p', { hasText: 'Intro line. hello world' })).toBeVisible({ timeout: 3000 });
     await expect(editor.locator('pre')).toHaveCount(1);
   });
+
+  test('copying a whole code block (alone or with empty neighbours) is plain text; mixed keeps the fence', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'code3.md');
+    // Positions: heading 0..7 ("Title" at 1..6), code block 7..34 (text 8..33),
+    // then the "After." paragraph, whose text starts at 35.
+    fs.writeFileSync(tmpFile, '# Title\n\n```\nconst x = 1;\nconst y = 2;\n```\n\nAfter.\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor).toContainText('const x = 1;', { timeout: 5000 });
+
+    const copyWith = async (select: string) => {
+      await page.evaluate(() => navigator.clipboard.writeText(''));
+      await editor.evaluate((el, s) => {
+        const ed = (el as any).editor;
+        ed.commands.focus();
+        new Function('ed', s)(ed);
+      }, select);
+      await page.keyboard.press('ControlOrMeta+c');
+      return page.evaluate(() => navigator.clipboard.readText());
+    };
+
+    // The whole block as a NodeSelection.
+    expect(await copyWith('ed.commands.setNodeSelection(7)')).toBe('const x = 1;\nconst y = 2;');
+
+    // A drag from the end of the heading line, across the whole block, to the start
+    // of the next line: the slice holds empty heading/paragraph shells but no text.
+    expect(await copyWith('ed.commands.setTextSelection({ from: 6, to: 35 })'))
+      .toBe('const x = 1;\nconst y = 2;');
+
+    // Text outside the block is selected too: the fence stays, so the paste is still Markdown.
+    const mixed = await copyWith('ed.commands.setTextSelection({ from: 2, to: 20 })');
+    expect(mixed).toContain('```');
+    expect(mixed).toContain('itle');
+  });
+
+  test('copying part or all of an inline code span is verbatim text; with outside text it keeps the backticks', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const tmpFile = path.join(tmpDir, 'inline.md');
+    // Positions: "Use " is 1..5, the code span "like this" 5..14, " here." after it.
+    fs.writeFileSync(tmpFile, 'Use `like this` here.\n\nTarget:\n');
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, tmpFile);
+
+    const editor = page.locator('.tiptap');
+    await expect(editor.locator('code')).toHaveText('like this', { timeout: 5000 });
+
+    const copyRange = async (from: number, to: number) => {
+      await page.evaluate(() => navigator.clipboard.writeText(''));
+      await editor.evaluate((el, r) => {
+        const ed = (el as any).editor;
+        ed.commands.focus();
+        ed.commands.setTextSelection(r);
+      }, { from, to });
+      await page.keyboard.press('ControlOrMeta+c');
+      return page.evaluate(() => navigator.clipboard.readText());
+    };
+
+    expect(await copyRange(7, 12)).toBe('ke th');
+    expect(await copyRange(5, 14)).toBe('like this');
+
+    // Pasting it back lands as plain text, not a second code span.
+    // End of "Target:" (its paragraph opens at 21, text 22..29).
+    await editor.evaluate((el) => (el as any).editor.chain().focus().setTextSelection(29).run());
+    await page.keyboard.press('ControlOrMeta+v');
+    await expect(editor.locator('p').nth(1)).toHaveText('Target:like this', { timeout: 3000 });
+    await expect(editor.locator('code')).toHaveCount(1);
+
+    // Selecting outside the span too keeps the Markdown plain-text version, backticks and all.
+    expect(await copyRange(2, 10)).toBe('se `like `');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -4461,6 +4694,40 @@ test.describe('Images', () => {
     expect(await saveAndRead(tmpFile)).toBe('![gone](nope/missing.png)\n\nend!\n');
   });
 
+  test('a ../ path reaches an image in a folder above the document, and Obsidian-only forms save unchanged', async () => {
+    ({ app, page } = await launchApp());
+    // An Obsidian-style vault: the note is two folders down, attachments live at the root.
+    const vault = makeTmpDir();
+    fs.mkdirSync(path.join(vault, 'attachments'));
+    fs.mkdirSync(path.join(vault, 'docs', 'blah'), { recursive: true });
+    fs.writeFileSync(path.join(vault, 'attachments', '2026-0916-progress-1.png'), PNG_BYTES);
+    const file = path.join(vault, 'docs', 'blah', 'progress.md');
+    // Wikilink embeds and shortest-path links are vault-wide lookups MDE doesn't do; they must
+    // still survive an edit and a save byte-for-byte.
+    const source = [
+      '![progress](../../attachments/2026-0916-progress-1.png)',
+      '![[2026-0916-progress-1.png]]',
+      '![](2026-0916-progress-1.png)',
+      'See [[Some Note|the alias]], [[my_note#A Heading]] and ![[diagram 2.png|300]].',
+      'end',
+    ].join('\n\n') + '\n';
+    fs.writeFileSync(file, source);
+    await app.evaluate(({ BrowserWindow }, f) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
+    }, file);
+
+    const img = page.locator('.tiptap .image-node img').first();
+    await expect.poll(() => img.evaluate((e) => (e as HTMLImageElement).naturalWidth), { timeout: 5000 }).toBe(1);
+    await expect(page.locator('.tiptap p').nth(1)).toHaveText('![[2026-0916-progress-1.png]]');
+    await expect(page.locator('.qa-image-missing')).toHaveCount(1);
+    await expect(page.locator('.qa-image-missing')).toContainText("2026-0916-progress-1.png can't be found");
+
+    await page.locator('.tiptap p').last().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type('!');
+    expect(await saveAndRead(file)).toBe(source.replace(/end\n$/, 'end!\n'));
+  });
+
   test('a file that is not an image says it cannot be displayed rather than not found', async () => {
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
@@ -4598,6 +4865,27 @@ test.describe('Pasting images', () => {
     expect(await saveAndRead(file)).toBe('x![](<my pics/diagram-2.png>)\n');
   });
 
+  test('a pasted image can be saved to a ../ folder above the document', async () => {
+    ({ app, page } = await launchApp());
+    const vault = makeTmpDir();
+    fs.mkdirSync(path.join(vault, 'docs', 'blah'), { recursive: true });
+    const file = path.join(vault, 'docs', 'blah', 'progress.md');
+    fs.writeFileSync(file, 'x\n');
+    await app.evaluate(({ BrowserWindow }, f) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
+    }, file);
+    await expect(page.locator('.tiptap:visible p')).toHaveText('x', { timeout: 5000 });
+
+    await paste({ files: ['chart.png'] });
+    await page.locator('.qa-paste-images-folder').fill('../../attachments');
+    await page.locator('.qa-paste-images-save').click();
+    const img = page.locator('.tiptap:visible .image-node img');
+    await expect.poll(() => img.evaluate((e) => (e as HTMLImageElement).naturalWidth), { timeout: 5000 }).toBe(1);
+
+    expect(pngsIn(path.join(vault, 'attachments'))).toEqual(['chart.png']);
+    expect(await saveAndRead(file)).toBe('x![](../../attachments/chart.png)\n');
+  });
+
   test('pasted web content can keep its images as links, or drop them', async () => {
     ({ app, page } = await launchApp());
     const file = await openMarkdown('start\n', 'web.md');
@@ -4647,6 +4935,75 @@ test.describe('Pasting images', () => {
     } finally {
       server.close();
     }
+  });
+
+  // Fires a drag event carrying the named PNG files (or a .md file) at the given point.
+  async function dragFiles(type: 'dragenter' | 'dragleave' | 'drop', names: string[], at: { x: number; y: number }) {
+    await page.evaluate(({ type, names, at, png }) => {
+      const dt = new DataTransfer();
+      const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
+      for (const name of names) dt.items.add(new File([bytes], name, { type: name.endsWith('.png') ? 'image/png' : 'text/markdown' }));
+      const target = document.elementFromPoint(at.x, at.y)!;
+      target.dispatchEvent(new DragEvent(type, { dataTransfer: dt, clientX: at.x, clientY: at.y, bubbles: true, cancelable: true }));
+    }, { type, names, at, png: PNG_BYTES.toString('base64') });
+  }
+
+  test('a dropped image file takes the paste dialog and lands where it was dropped', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openMarkdown('first\n\nsecond\n', 'notes.md');
+    const box = (await page.locator('.tiptap:visible p').first().boundingBox())!;
+    const at = { x: box.x + box.width - 2, y: box.y + box.height / 2 };
+
+    // Dragging only images shows the drop cursor, not the full-window "Drop to open" wash.
+    await dragFiles('dragenter', ['dot.png'], at);
+    await expect(page.locator('.drop-overlay')).toHaveCount(0);
+    await dragFiles('dragleave', ['dot.png'], at);
+    await dragFiles('dragenter', ['other.md'], at);
+    await expect(page.locator('.drop-overlay')).toHaveCount(1);
+
+    await dragFiles('drop', ['dot.png'], at);
+    await expect(page.locator('.drop-overlay')).toHaveCount(0);
+    await page.locator('.qa-paste-images-save').click();
+    await expect(page.locator('.tiptap:visible .image-node img')).toHaveCount(1);
+    // saveAndRead waits for the dirty dot to CLEAR, so it must have appeared first.
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(1);
+    expect(pngsIn(path.join(path.dirname(file), 'images'))).toEqual(['dot.png']);
+    expect(await saveAndRead(file)).toBe('first![](images/dot.png)\n\nsecond\n');
+  });
+
+  test('the toolbar Insert Image button picks files and copies them in at the caret', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openMarkdown('first\n\nsecond\n', 'notes.md');
+    const docDir = path.dirname(file);
+    const elsewhere = makeTmpDir();
+    fs.writeFileSync(path.join(elsewhere, 'chart one.png'), PNG_BYTES);
+    // The stub records the folder the picker opened in, and answers with whatever is queued.
+    await app.evaluate(({ dialog }) => {
+      const g = globalThis as any;
+      g.pickerOpenedIn = [];
+      g.pickerAnswers = [];
+      dialog.showOpenDialog = (async (_win: unknown, opts: Electron.OpenDialogOptions) => {
+        g.pickerOpenedIn.push(opts.defaultPath);
+        const filePaths = g.pickerAnswers.shift();
+        return { canceled: !filePaths, filePaths: filePaths || [] };
+      }) as any;
+    });
+    await page.locator('.tiptap:visible').evaluate((el) => (el as any).editor.commands.setTextSelection(6));
+
+    // Cancelling the picker asks nothing more.
+    await page.locator('.qa-insert-image').click();
+    await expect.poll(() => app.evaluate(() => (globalThis as any).pickerOpenedIn)).toEqual([docDir]);
+    await expect(page.locator('.qa-paste-images')).toHaveCount(0);
+
+    await app.evaluate((_e, p) => { (globalThis as any).pickerAnswers.push([p]); }, path.join(elsewhere, 'chart one.png'));
+    await page.locator('.qa-insert-image').click();
+    await page.locator('.qa-paste-images-save').click();
+    await expect(page.locator('.tiptap:visible .image-node img')).toHaveCount(1);
+    await expect(page.locator('.tab-dirty-dot')).toHaveCount(1);
+
+    expect(fs.readdirSync(elsewhere)).toEqual(['chart one.png']);
+    expect(fs.readFileSync(path.join(docDir, 'images', 'chart-one.png'))).toEqual(PNG_BYTES);
+    expect(await saveAndRead(file)).toBe('first![](images/chart-one.png)\n\nsecond\n');
   });
 
   test('copying an image within MDE pastes its reference without asking', async () => {
