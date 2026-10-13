@@ -7,7 +7,7 @@ import { basename } from '../utils/paths';
 // explorer (Sidebar) and the tab bar. Adding or changing a menu item here
 // updates both places automatically.
 
-const REVEAL_LABEL =
+export const REVEAL_LABEL =
   window.mde?.platform === 'darwin' ? 'Reveal in Finder'
   : window.mde?.platform === 'win32' ? 'Show in Explorer'
   : 'Show in Folder';

@@ -64,7 +64,7 @@ Once installed, double-clicking a `.md` file or choosing MDE from **Open with** 
 
 ## Note on images
 
-Images in a file are shown inline: relative paths resolve against the file's own folder, and `https://` images load from the web. If an image can't be found, MDE shows a placeholder naming the path it looked for. Either way the image reference is saved back exactly as you wrote it. There is no way to insert a new image from within MDE yet; type the `![alt](path.png)` syntax yourself.
+Images in a file are shown inline: relative paths resolve against the file's own folder, and `https://` images load from the web. If an image can't be found, MDE shows a placeholder naming the path it looked for. Either way the image reference is saved back exactly as you wrote it. Click an image to see its path; right-click it to reveal the file in Finder or remove it from the document. There is no way to insert a new image from within MDE yet; type the `![alt](path.png)` syntax yourself.
 
 ## Note on HTML in Markdown
 

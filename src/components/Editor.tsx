@@ -20,6 +20,7 @@ import { ImageNode } from '../utils/imageNode';
 import { dirname } from '../utils/paths';
 import { ColorHighlight, TextColor, escapeColorSyntax } from '../utils/colorMarks';
 import TableMenu from './TableMenu';
+import ImageContextMenu from './ImageContextMenu';
 
 // Override tiptap-markdown's text serializer which blindly converts all < and >
 // to &lt; &gt;, mangling prose like "Apples > oranges." on save.
@@ -1904,6 +1905,7 @@ export default function Editor({
       <EditorContent editor={editor} className={`editor-content ${tab.readOnly ? 'editor-readonly' : ''}`} />
       {!tab.readOnly && <LinkPreview editor={editor} />}
       {!tab.readOnly && <TableMenu editor={editor} />}
+      <ImageContextMenu editor={editor} />
     </div>
   );
 }

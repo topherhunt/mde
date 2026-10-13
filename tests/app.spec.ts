@@ -4472,4 +4472,69 @@ test.describe('Images', () => {
     }, file);
     await expect(page.locator('.qa-image-missing')).toContainText("broken.png can't be displayed", { timeout: 5000 });
   });
+
+  // Big enough to click, unlike the 1x1 PNG.
+  const BOX_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="teal"/></svg>';
+
+  async function openBoxDoc(source: string): Promise<string> {
+    const dir = makeTmpDir();
+    fs.mkdirSync(path.join(dir, 'pics'));
+    fs.writeFileSync(path.join(dir, 'pics', 'box one.svg'), BOX_SVG);
+    const file = path.join(dir, 'doc.md');
+    fs.writeFileSync(file, source);
+    await app.evaluate(({ BrowserWindow }, f) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
+    }, file);
+    await expect.poll(() => page.locator('.tiptap .image-node img').evaluate(e => (e as HTMLImageElement).naturalWidth), { timeout: 5000 }).toBe(120);
+    return file;
+  }
+
+  test('selecting an image by click or arrow key shows its path in the corner', async () => {
+    ({ app, page } = await launchApp());
+    await openBoxDoc('Before ![a box](<pics/box one.svg>) after\n');
+    const label = page.locator('.qa-image-path');
+    await expect(label).toBeHidden();
+
+    await page.locator('.tiptap .image-node img').click();
+    await expect(label).toBeVisible();
+    await expect(label).toHaveText('pics/box one.svg');
+
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await expect(label).toBeHidden();
+
+    // The headless window never has focus, so ProseMirror ignores native caret moves; place the
+    // caret just before the image through the editor, then let ArrowRight step onto it.
+    await page.locator('.tiptap:visible').evaluate((el) => (el as any).editor.commands.setTextSelection(8));
+    await page.keyboard.press('ArrowRight');
+    await expect(label).toBeVisible();
+  });
+
+  test('right-clicking an image reveals its file, and Remove deletes only that reference', async () => {
+    ({ app, page } = await launchApp());
+    const file = await openBoxDoc('Before ![a box](<pics/box one.svg>) after\n\n![gone](nope.png)\n');
+    await app.evaluate(({ shell }) => {
+      (globalThis as Record<string, unknown>).__revealed = [];
+      shell.showItemInFolder = (p: string) => {
+        (((globalThis as Record<string, unknown>).__revealed) as string[]).push(p);
+      };
+    });
+
+    const img = page.locator('.tiptap .image-node img');
+    await img.click({ button: 'right' });
+    await page.locator('.qa-image-reveal').click();
+    const revealed = await app.evaluate(() => (globalThis as Record<string, unknown>).__revealed);
+    expect(revealed).toEqual([path.join(path.dirname(file), 'pics', 'box one.svg')]);
+    await expect(page.locator('.qa-image-menu')).toHaveCount(0);
+
+    // A missing image has no file to reveal, but can still be removed.
+    await page.locator('.qa-image-missing').click({ button: 'right' });
+    await expect(page.locator('.qa-image-menu')).toBeVisible();
+    await expect(page.locator('.qa-image-reveal')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    await img.click({ button: 'right' });
+    await page.locator('.qa-image-remove').click();
+    await expect(page.locator('.tiptap .image-node')).toHaveCount(1);
+    expect(await saveAndRead(file)).toBe('Before  after\n\n![gone](nope.png)\n');
+  });
 });

@@ -1163,9 +1163,33 @@ body {
   outline-offset: 2px;
 }
 
+.editor-content .tiptap .image-node {
+  display: inline-block;
+  position: relative;
+  max-width: 100%;
+}
+
 .editor-content .tiptap .image-node img {
   max-width: 100%;
   vertical-align: bottom;
+}
+
+/* The image's path, overlaid on its bottom-right corner while it is selected. */
+.image-path {
+  display: none;
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.image-node.ProseMirror-selectednode .image-path {
+  display: block;
 }
 
 /* Stands in for an image whose file is missing or unreadable; the reference itself is untouched. */

@@ -69,6 +69,10 @@ function missingPlaceholder(message: string): HTMLElement {
   return wrap;
 }
 
+export const IMAGE_MENU_EVENT = 'mde-image-menu';
+// `localPath` is set only for a local file that actually displayed.
+export type ImageMenuRequest = { x: number; y: number; pos: number; localPath: string | null };
+
 // Inline, like Markdown's own image: `see ![x](a.png) here` stays one paragraph.
 export const ImageNode = Node.create({
   name: 'image',
@@ -116,12 +120,23 @@ export const ImageNode = Node.create({
   },
 
   addNodeView() {
-    return ({ node, editor }) => {
+    return ({ node, editor, getPos }) => {
       const dom = document.createElement('span');
       dom.className = 'image-node';
       const src: string = node.attrs.src;
       const source = resolveImageSrc(src, (editor.storage as any).image.baseDir);
       const shown = displaySrc(src);
+      // Set once the image is known to display; Reveal is only offered for a file that loaded.
+      let loaded = false;
+      // The menu itself lives in React (ImageContextMenu), which listens for this event.
+      dom.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const pos = getPos();
+        if (typeof pos !== 'number') return;
+        editor.commands.setNodeSelection(pos);
+        const detail: ImageMenuRequest = { x: e.clientX, y: e.clientY, pos, localPath: source && loaded ? source.localPath : null };
+        dom.dispatchEvent(new CustomEvent(IMAGE_MENU_EVENT, { bubbles: true, detail }));
+      });
       if (!source) {
         dom.append(missingPlaceholder(`${shown} can't be found`));
         return { dom };
@@ -129,16 +144,22 @@ export const ImageNode = Node.create({
       const img = document.createElement('img');
       img.alt = node.attrs.alt ?? '';
       if (node.attrs.title) img.title = node.attrs.title;
+      // Shown by CSS only while the node is selected. A placeholder already names the path.
+      const label = document.createElement('span');
+      label.className = 'image-path qa-image-path small';
+      label.textContent = shown;
+      img.addEventListener('load', () => { loaded = true; }, { once: true });
       img.addEventListener('error', async () => {
         let message = `${shown} can't be loaded`;
         if (source.localPath) {
           const stats = await window.mde.getFileStats(source.localPath);
           message = stats && !stats.isDirectory ? `${shown} can't be displayed` : `${shown} can't be found`;
         }
+        label.remove();
         img.replaceWith(missingPlaceholder(message));
       }, { once: true });
       img.src = source.url;
-      dom.append(img);
+      dom.append(img, label);
       return { dom };
     };
   },
