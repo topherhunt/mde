@@ -1435,6 +1435,36 @@ test.describe('Markdown round-trip', () => {
     expect(saved).toContain('appended');
 
   });
+
+  test('an ordered list nested as the first block of a bullet item round-trips unchanged', async () => {
+    ({ app, page } = await launchApp());
+    const source = [
+      '- Plan',
+      '  - Header block',
+      '  - 1. Regenwatervolume',
+      '    - Algemeen',
+      '    - Dakoppervlakte',
+      '  - 2. Infiltratie',
+      '       - Tuindelen',
+      '  - Bijlage',
+      '',
+      'end',
+    ].join('\n') + '\n';
+    const tmpFile = await openMarkdown(source);
+    const ed = page.locator('.tiptap');
+
+    await expect(ed.locator('ul ul > li > ol[start="2"] > li > p')).toHaveText('Infiltratie');
+    // CommonMark: `    - Algemeen` sits short of `1. `'s content column, so it is a sibling list
+    // inside the same bullet item, not a child of the numbered one.
+    await expect(ed.locator('ul ul > li > ol + ul > li')).toHaveText(['Algemeen', 'Dakoppervlakte']);
+    await expect(ed.locator('ol[start="2"] > li > ul > li')).toHaveText('Tuindelen');
+
+    await ed.locator('p').last().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type('!');
+
+    expect(await saveAndRead(tmpFile)).toBe(source.replace('end\n', 'end!\n'));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -4352,59 +4382,94 @@ test.describe('Sidebar layout', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Images: the editor has no image node, so an image reference is dropped on load
-// and absent on save. Until that is fixed, opening such a file must SAY so.
+// Images
 // ---------------------------------------------------------------------------
 
-test.describe('Image loss warning', () => {
-  test('warns that saving a file with images will strip them, and names them', async () => {
-    // Verified behaviour, not a hypothetical: opening this file, typing one character and
-    // saving writes back "# Title\n\nafterX\n" with both image lines gone.
+// A 1x1 PNG.
+const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+
+test.describe('Images', () => {
+  test('every form of image reference survives load, edit, and save byte-for-byte', async () => {
     ({ app, page } = await launchApp());
-    const dir = makeTmpDir();
-    const file = path.join(dir, 'gallery.md');
-    fs.writeFileSync(
-      file,
-      '# Title\n\n![a cat](cat.png)\n\n![remote](https://example.com/x.png)\n\nafter\n'
-    );
+    // Each of these is one markdown-it would normalize if rebuilt from attrs: angle brackets
+    // and a space, non-ASCII, an entity, a title, inline markup in the alt, a link wrapper.
+    const source = [
+      '# Gallery',
+      '![a cat](cat.png)',
+      'Text before ![inline *pic*_x_](img/a.png "A title") and after.',
+      '![spaced](<my cat.png>) and ![accent](café.png) and ![amp](a&amp;b.png)',
+      '[![badge](https://example.com/badge.svg)](https://example.com)',
+      '> ![quoted](q.png)',
+      '- ![in a list](l.png)\n- [ ] ![in a task](t.png)',
+      '| a | b |\n| --- | --- |\n| ![cell](c.png) | x |',
+      '![remote](https://example.com/x.png)',
+      'end',
+    ].join('\n\n') + '\n';
+    const tmpFile = await openMarkdown(source, 'gallery.md');
+    const ed = page.locator('.tiptap');
+    await expect(ed.locator('.image-node')).toHaveCount(11);
 
-    await app.evaluate(({ BrowserWindow }, f) => {
-      BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
-    }, file);
+    await ed.locator('p').last().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type('!');
 
-    const dialog = page.locator('.qa-image-warning');
-    await expect(dialog).toBeVisible({ timeout: 5000 });
-    await expect(dialog).toContainText('gallery.md');
-    await expect(dialog).toContainText('2 images');
-    // The references are quoted verbatim so they can be found in the file itself.
-    const refs = page.locator('.qa-image-warning-refs');
-    await expect(refs).toContainText('![a cat](cat.png)');
-    await expect(refs).toContainText('![remote](https://example.com/x.png)');
-
-    await page.locator('.qa-image-warning-dismiss').click();
-    await expect(dialog).toHaveCount(0);
+    expect(await saveAndRead(tmpFile)).toBe(source.replace(/end\n$/, 'end!\n'));
   });
 
-  test('image syntax inside code is not mistaken for a real image', async () => {
-    // A file that DOCUMENTS Markdown round-trips perfectly -- fenced blocks and code spans are
-    // content, not structure. Warning here would be crying wolf on exactly the files most
-    // likely to contain the syntax, which is how a warning gets trained away.
+  test('image syntax inside code stays literal code, not an image', async () => {
+    ({ app, page } = await launchApp());
+    const source = 'Write `![alt](path.png)` inline.\n\n```markdown\n![a cat](cat.png)\n```\n\nend\n';
+    const tmpFile = await openMarkdown(source, 'syntax-guide.md');
+    const ed = page.locator('.tiptap');
+    await expect(ed.locator('code').first()).toHaveText('![alt](path.png)');
+    await expect(ed.locator('.image-node')).toHaveCount(0);
+
+    await ed.locator('p').last().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type('!');
+    expect(await saveAndRead(tmpFile)).toBe(source.replace(/end\n$/, 'end!\n'));
+  });
+
+  test('a relative image path displays the file from beside the document', async () => {
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
-    const file = path.join(dir, 'syntax-guide.md');
-    fs.writeFileSync(
-      file,
-      '# How images work\n\nWrite `![alt](path.png)` inline, like this:\n\n' +
-      '```markdown\n![a cat](cat.png)\n```\n\nAnd that is the whole story.\n'
-    );
-
+    fs.mkdirSync(path.join(dir, 'pics'));
+    fs.writeFileSync(path.join(dir, 'pics', 'dot one.png'), PNG_BYTES);
+    const file = path.join(dir, 'doc.md');
+    fs.writeFileSync(file, '![a dot](<pics/dot one.png>)\n\n![a dot](./pics/dot%20one.png)\n');
     await app.evaluate(({ BrowserWindow }, f) => {
       BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
     }, file);
 
-    // Wait for the load to actually finish before asserting something is absent, or this
-    // passes on the frame before the warning would have appeared.
-    await expect(page.locator('.tiptap')).toContainText('the whole story', { timeout: 5000 });
-    await expect(page.locator('.qa-image-warning')).toHaveCount(0);
+    const imgs = page.locator('.tiptap .image-node img');
+    await expect(imgs).toHaveCount(2, { timeout: 5000 });
+    await expect.poll(() => imgs.evaluateAll(els => els.map(e => (e as HTMLImageElement).naturalWidth))).toEqual([1, 1]);
+    await expect(page.locator('.qa-image-missing')).toHaveCount(0);
+  });
+
+  test('a missing image shows a placeholder naming the path, and saving leaves the reference intact', async () => {
+    ({ app, page } = await launchApp());
+    const source = '![gone](nope/missing.png)\n\nend\n';
+    const tmpFile = await openMarkdown(source, 'missing.md');
+    const missing = page.locator('.qa-image-missing');
+    await expect(missing).toHaveCount(1, { timeout: 5000 });
+    await expect(missing).toContainText("nope/missing.png can't be found");
+
+    await page.locator('.tiptap p').last().click();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.type('!');
+    expect(await saveAndRead(tmpFile)).toBe('![gone](nope/missing.png)\n\nend!\n');
+  });
+
+  test('a file that is not an image says it cannot be displayed rather than not found', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'broken.png'), 'not really a png');
+    const file = path.join(dir, 'doc.md');
+    fs.writeFileSync(file, '![x](broken.png)\n');
+    await app.evaluate(({ BrowserWindow }, f) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
+    }, file);
+    await expect(page.locator('.qa-image-missing')).toContainText("broken.png can't be displayed", { timeout: 5000 });
   });
 });

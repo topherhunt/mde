@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { FileEntry } from '../types';
 import type { ExportFormat } from '../utils/exportDocument';
+import { basename } from '../utils/paths';
 
 // Single source of truth for the file context menu, shared by the file
 // explorer (Sidebar) and the tab bar. Adding or changing a menu item here
@@ -10,6 +11,24 @@ const REVEAL_LABEL =
   window.mde?.platform === 'darwin' ? 'Reveal in Finder'
   : window.mde?.platform === 'win32' ? 'Show in Explorer'
   : 'Show in Folder';
+
+// A relative path is only meaningful when the file lives under the project root; null otherwise.
+export function relativeToProject(filePath: string, projectRoot: string | null): string | null {
+  return projectRoot && filePath.startsWith(projectRoot) ? filePath.slice(projectRoot.length + 1) : null;
+}
+
+// Copies the project-relative path, or just the file name when there is nothing to be relative to.
+export function copyFilePath(filePath: string, projectRoot: string | null, onToast: (msg: string, variant?: string) => void) {
+  const relative = relativeToProject(filePath, projectRoot);
+  if (relative !== null) {
+    navigator.clipboard.writeText(relative);
+    onToast(`Copied path: ${relative}`, 'info');
+  } else {
+    const name = basename(filePath);
+    navigator.clipboard.writeText(name);
+    onToast(`Copied file name: ${name}`, 'info');
+  }
+}
 
 interface FileContextMenuProps {
   x: number;
@@ -56,21 +75,12 @@ export function FileContextMenu({
     zIndex: 9500,
   };
 
-  // A relative path is only meaningful when the file lives under the project
-  // root. Without a project folder (or for a file outside it) there's nothing
-  // to be relative to, so we offer "Copy File Name" instead of promising a
-  // relative path we can't produce.
-  const hasRelativePath = !!projectRoot && target.path.startsWith(projectRoot);
-  const relativePath = hasRelativePath ? target.path.slice(projectRoot!.length + 1) : target.path;
+  // Without a relative path, the menu offers "Copy File Name" rather than promising one.
+  const relativePath = relativeToProject(target.path, projectRoot);
+  const hasRelativePath = relativePath !== null;
 
   const handleCopyPath = () => {
-    if (hasRelativePath) {
-      navigator.clipboard.writeText(relativePath);
-      onToast(`Copied path: ${relativePath}`, 'info');
-    } else {
-      navigator.clipboard.writeText(target.name);
-      onToast(`Copied file name: ${target.name}`, 'info');
-    }
+    copyFilePath(target.path, projectRoot, onToast);
     onClose();
   };
 
@@ -90,7 +100,7 @@ export function FileContextMenu({
   };
 
   const handleViewHistory = () => {
-    onViewHistory!(relativePath);
+    onViewHistory!(relativePath!);
     onClose();
   };
 
@@ -167,7 +177,7 @@ export function DeleteConfirmDialog({ target, onConfirm, onCancel }: { target: F
           </p>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
             <button className="settings-btn" onClick={onCancel}>Cancel</button>
-            <button className="settings-btn btn-danger" onClick={onConfirm}>Delete</button>
+            <button className="settings-btn btn-danger qa-delete-confirm" onClick={onConfirm}>Delete</button>
           </div>
         </div>
       </div>

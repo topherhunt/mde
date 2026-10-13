@@ -3,7 +3,7 @@ import { useEditor, EditorContent, Editor as TipTapEditor, createNodeFromContent
 import StarterKit from '@tiptap/starter-kit';
 import Code from '@tiptap/extension-code';
 import Link from '@tiptap/extension-link';
-import { TableKit } from '@tiptap/extension-table';
+import { Table, TableKit } from '@tiptap/extension-table';
 import CodeBlock from '@tiptap/extension-code-block';
 import Placeholder from '@tiptap/extension-placeholder';
 import { ListItem } from '@tiptap/extension-list';
@@ -15,7 +15,9 @@ import { TextSelection, Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet, EditorProps as PMEditorProps } from '@tiptap/pm/view';
 import { Fragment, DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { Tab } from '../types';
-import { findHeadingByAnchor, findImageReferences, markdownToHtml } from '../utils/markdown';
+import { findHeadingByAnchor, markdownToHtml } from '../utils/markdown';
+import { ImageNode } from '../utils/imageNode';
+import { dirname } from '../utils/paths';
 import { ColorHighlight, TextColor, escapeColorSyntax } from '../utils/colorMarks';
 import TableMenu from './TableMenu';
 
@@ -50,6 +52,57 @@ const TextNode = Text.extend({
 });
 
 const TABLE_NODE_NAMES = ['table', 'tableRow', 'tableCell', 'tableHeader'];
+
+const cellSpans = (cell: any) => cell.attrs.colspan > 1 || cell.attrs.rowspan > 1;
+
+// tiptap-markdown's table serializer, except that a cell holding an image is written even when
+// its text is blank. The stock one skips every blank-text cell, so an image-only cell lost its
+// image on save. A table Markdown can't express (spans, multi-paragraph cells, a header
+// cell outside the first row) still writes tiptap-markdown's `[table]`, as before.
+const MarkdownTable = Table.extend({
+  addStorage() {
+    return {
+      markdown: {
+        serialize(state: any, node: any) {
+          const rows: any[] = [];
+          node.forEach((row: any) => rows.push(row));
+          const expressible = rows.every((row, i) => {
+            let ok = true;
+            row.forEach((cell: any) => {
+              if ((cell.type.name === 'tableHeader') !== (i === 0) || cellSpans(cell) || cell.childCount > 1) ok = false;
+            });
+            return ok;
+          });
+          if (!expressible) {
+            state.write('[table]');
+            state.closeBlock(node);
+            return;
+          }
+          state.inTable = true;
+          rows.forEach((row, i) => {
+            state.write('| ');
+            row.forEach((cell: any, _offset: number, j: number) => {
+              if (j) state.write(' | ');
+              const content = cell.firstChild;
+              let hasImage = false;
+              content.forEach((child: any) => { if (child.type.name === 'image') hasImage = true; });
+              if (content.textContent.trim() || hasImage) state.renderInline(content);
+            });
+            state.write(' |');
+            state.ensureNewLine();
+            if (i === 0) {
+              state.write(`| ${Array.from({ length: row.childCount }, () => '---').join(' | ')} |`);
+              state.ensureNewLine();
+            }
+          });
+          state.closeBlock(node);
+          state.inTable = false;
+        },
+        parse: {},
+      },
+    };
+  },
+});
 
 // Convert a copied slice into tab-separated rows -- but ONLY when the slice is
 // nothing BUT table structure (a cell selection, a row, or a whole table on its own).
@@ -224,7 +277,15 @@ const UnifiedListItem = ListItem.extend({
           if (node.attrs.checked !== null) {
             state.write(node.attrs.checked ? '[x] ' : '[ ] ');
           }
-          state.renderContent(node);
+          // An empty paragraph before a list is the placeholder cleanParsedListHtml adds for
+          // `- 1. x`; skipping it writes the inner marker on the item's own line. Not for tasks,
+          // where `- [ ] 1. x` would parse back as paragraph text.
+          const first = node.firstChild;
+          const skipFirst = node.attrs.checked === null && first.type.name === 'paragraph'
+            && first.content.size === 0 && /^(bullet|ordered)List$/.test(node.maybeChild(1)?.type.name);
+          node.forEach((child: any, _: number, i: number) => {
+            if (!(skipFirst && i === 0)) state.render(child, node, i);
+          });
         },
         parse: {
           setup(markdownit: any) {
@@ -1546,9 +1607,6 @@ interface EditorProps {
   onDestroy: () => void;
   onDirtyChange: (dirty: boolean) => void;
   onLinkClick: (href: string) => void;
-  // Fired once per load when the file contains image syntax the editor cannot hold, so the app
-  // can warn BEFORE a save silently drops it. See findImageReferences.
-  onImagesFound: (refs: string[]) => void;
 }
 
 // The editor's full extension list. Also used headlessly by utils/exportDocument.ts, so an
@@ -1571,6 +1629,7 @@ export function buildExtensions() {
     Code.extend({ excludes: 'bold italic strike underline link' }),
     ColorHighlight,
     TextColor,
+    ImageNode,
     Link.extend({
       // The Link extension's paste rule runs linkifyjs over pasted text and
       // marks anything URL-shaped as a link, regardless of the autolink /
@@ -1597,9 +1656,8 @@ export function buildExtensions() {
       // scheme prefix and remain blocked by the default validator.
       isAllowedUri: (url, ctx) => ctx.defaultValidate(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url),
     }),
-    TableKit.configure({
-      table: { resizable: true },
-    }),
+    TableKit.configure({ table: false }),
+    MarkdownTable.configure({ resizable: true }),
     CodeBlockWithCopy,
     UnifiedListItem,
     ListItemBackspace,
@@ -1627,7 +1685,7 @@ export function buildExtensions() {
 }
 
 export default function Editor({
-  tab, onReady, onDestroy, onDirtyChange, onLinkClick, onImagesFound,
+  tab, onReady, onDestroy, onDirtyChange, onLinkClick,
 }: EditorProps) {
   const loadedRef = useRef(false);
   const cleanDocRef = useRef<string | null>(null);
@@ -1635,8 +1693,6 @@ export default function Editor({
   // which is created once when the editor is initialized.
   const onLinkClickRef = useRef(onLinkClick);
   onLinkClickRef.current = onLinkClick;
-  const onImagesFoundRef = useRef(onImagesFound);
-  onImagesFoundRef.current = onImagesFound;
   // Lets the handlePaste editorProp reach the tiptap-markdown parser without a
   // use-before-define reference to the `editor` const being created below.
   const editorRef = useRef<TipTapEditor | null>(null);
@@ -1802,20 +1858,12 @@ export default function Editor({
     if (tab.readOnly) editor.setEditable(false);
   }, [editor, tab.readOnly]);
 
-  // Raise the image warning from the RAW markdown, before it reaches the parser -- once it has
-  // been through markdownToHtml the images are already gone and there is nothing left to detect.
-  // Read-only panes (help pages, the diff viewer) are never saved, so nothing there is at risk.
-  const reportImages = useCallback((md: string) => {
-    if (tab.readOnly) return;
-    const refs = findImageReferences(md);
-    if (refs.length) onImagesFoundRef.current(refs);
-  }, [tab.readOnly]);
-
   useEffect(() => {
     if (!editor || loadedRef.current) return;
+    // Image node views resolve relative paths against this as they are created during the load.
+    (editor.storage as any).image.baseDir = tab.filePath ? dirname(tab.filePath) : null;
 
     if (tab.initialContent) {
-      reportImages(tab.initialContent);
       const html = markdownToHtml(editor, tab.initialContent);
       const doc = createNodeFromContent(html, editor.schema, { slice: false });
       const { tr } = editor.state;
@@ -1831,7 +1879,6 @@ export default function Editor({
     if (!tab.filePath) return;
 
     window.mde.readFile(tab.filePath).then(async content => {
-      reportImages(content);
       const html = markdownToHtml(editor, content);
       const doc = createNodeFromContent(html, editor.schema, { slice: false });
       const { tr } = editor.state;

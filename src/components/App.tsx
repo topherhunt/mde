@@ -13,9 +13,8 @@ import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
 import { useVersionControl, VersionControl, CheckpointSettings } from './VersionPanel';
 import HistoryView, { HistoryNavRequest } from './HistoryView';
-import { DeleteConfirmDialog, ExportConflictDialog } from './FileContextMenu';
+import { DeleteConfirmDialog, ExportConflictDialog, copyFilePath, relativeToProject } from './FileContextMenu';
 import { markdownToDoc, docToPdfHtml, docToDocx, ExportFormat } from '../utils/exportDocument';
-import ImageWarningDialog from './ImageWarningDialog';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { FileEntry } from '../types';
 import { basename, dirname, joinPath, resolvePath } from '../utils/paths';
@@ -215,11 +214,6 @@ export default function App() {
   const [findFocusTrigger, setFindFocusTrigger] = useState(0);
   // Blue "detected changes" banner shown after a silent auto-reload. `hiding` drives fade-out.
   const [reloadNotice, setReloadNotice] = useState<{ fileName: string; hiding?: boolean } | null>(null);
-  // A file just loaded that contains images the editor cannot hold, so saving it would strip
-  // them. One at a time, last one wins: opening two such files at once is rare, and the warning
-  // is per-file identical in substance -- a queue would be machinery for no gain.
-  const [imageWarning, setImageWarning] =
-    useState<{ fileName: string; refs: string[] } | null>(null);
   const reloadTimersRef = useRef<{ hide?: ReturnType<typeof setTimeout>; remove?: ReturnType<typeof setTimeout> }>({});
   const showReloadNotice = useCallback((fileName: string) => {
     const timers = reloadTimersRef.current;
@@ -287,9 +281,10 @@ export default function App() {
       const openTab = tabsRef.current.find(t => t.filePath === sourcePath);
       const openEditor = openTab && editorsRef.current.get(openTab.id);
       const doc = openEditor ? openEditor.state.doc : markdownToDoc(await window.mde.readFile(sourcePath));
+      // Relative image paths resolve against the source's folder, as they do in the editor.
       const payload = format === 'pdf'
-        ? docToPdfHtml(doc, basename(sourcePath).replace(/\.[^.]+$/, ''))
-        : await docToDocx(doc);
+        ? await docToPdfHtml(doc, basename(sourcePath).replace(/\.[^.]+$/, ''), dirname(sourcePath))
+        : await docToDocx(doc, dirname(sourcePath));
       const result = await window.mde.exportDocument(sourcePath, format, payload, onExisting);
       if (result.status === 'exists') {
         setExportConflict({ sourcePath, format, existingPath: result.path });
@@ -798,6 +793,34 @@ export default function App() {
       }),
       window.mde.onShowKeyboardShortcuts(openKeyboardShortcuts),
       window.mde.onShowWordCount(() => setWordCountOpen(true)),
+      window.mde.onExportActiveTab((format) => {
+        const tab = state.tabs[state.activeTabIndex];
+        if (!tab || tab.view || !tab.filePath || !/\.(md|markdown)$/i.test(tab.filePath)) {
+          showToast(tab && !tab.filePath && !tab.readOnly ? 'Save the file first, then export it.' : 'Open a Markdown file to export it.', 'danger');
+        } else {
+          exportFile(tab.filePath, format);
+        }
+      }),
+      window.mde.onFileAction((action) => {
+        const tab = state.tabs[state.activeTabIndex];
+        if (!tab || !tab.filePath) {
+          showToast(tab && !tab.readOnly ? 'Save the file first.' : 'Open a file first.', 'danger');
+          return;
+        }
+        const target: FileEntry = { path: tab.filePath, name: basename(tab.filePath), isDirectory: false };
+        const relative = relativeToProject(tab.filePath, state.projectRoot);
+        switch (action) {
+          case 'rename': setTabRenameTarget(target); break;
+          case 'trash': setTabDeleteTarget(target); break;
+          case 'reveal': window.mde.revealInFinder(tab.filePath); break;
+          case 'copy-path': copyFilePath(tab.filePath, state.projectRoot, showToast); break;
+          case 'history':
+            if (vc.state.attach === 'none') showToast('Checkpoints are off for this folder. Turn them on in Settings.', 'danger');
+            else if (relative === null) showToast('This file is outside the open folder, so it has no checkpoints.', 'danger');
+            else openCheckpointHistory({ kind: 'file', path: relative });
+            break;
+        }
+      }),
       window.mde.onInsertLink(() => {
         const ed = editorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
         if (ed && (ed.isActive('link') || !ed.state.selection.empty)) {
@@ -851,7 +874,7 @@ export default function App() {
     ];
 
     return () => cleanups.forEach(fn => fn());
-  }, [openFile, saveActiveTab, saveActiveTabAs, handleCloseTab, openKeyboardShortcuts, state.tabs, state.activeTabIndex]);
+  }, [openFile, saveActiveTab, saveActiveTabAs, handleCloseTab, openKeyboardShortcuts, exportFile, openCheckpointHistory, vc.state.attach, state.tabs, state.activeTabIndex, state.projectRoot]);
 
   useEffect(() => {
     window.mde.getProjectRoot().then(root => {
@@ -1127,7 +1150,6 @@ export default function App() {
                       if (dirty) triggerAutosave();
                     }}
                     onLinkClick={(href) => handleLinkClick(href, tab.filePath)}
-                    onImagesFound={(refs) => setImageWarning({ fileName: tab.fileName, refs })}
                   />
                 )}
               </div>
@@ -1195,13 +1217,6 @@ export default function App() {
           onOverwrite={() => exportFile(exportConflict.sourcePath, exportConflict.format, 'overwrite')}
           onCopy={() => exportFile(exportConflict.sourcePath, exportConflict.format, 'copy')}
           onCancel={() => setExportConflict(null)}
-        />
-      )}
-      {imageWarning && (
-        <ImageWarningDialog
-          fileName={imageWarning.fileName}
-          refs={imageWarning.refs}
-          onDismiss={() => setImageWarning(null)}
         />
       )}
       {settingsOpen && (
@@ -1445,7 +1460,7 @@ function RenameDialog({ target, onConfirm, onCancel }: { target: FileEntry; onCo
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-dialog qa-rename-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header" style={{ justifyContent: 'center' }}>
           <span className="fw-bold">Rename {target.isDirectory ? 'folder' : 'file'}</span>
         </div>

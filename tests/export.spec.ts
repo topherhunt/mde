@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { launchApp } from './electron-helpers';
+import { launchApp, clickMenuItem } from './electron-helpers';
 import { ElectronApplication, Page } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -36,10 +36,14 @@ async function exportFromSidebar(fileName: string, format: 'pdf' | 'docx') {
   await page.locator(`.qa-ctx-export-${format}`).click();
 }
 
+async function loadPdf(file: string) {
+  const pdfjs = require('pdfjs-dist/legacy/build/pdf.mjs');
+  return pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(file)), useWorkerFetch: false, isEvalSupported: false }).promise;
+}
+
 // Whitespace stripped: pdfjs splits kerned runs into separate items ("Q u a rt e rly").
 async function pdfText(file: string): Promise<{ pages: number; text: string }> {
-  const pdfjs = require('pdfjs-dist/legacy/build/pdf.mjs');
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(file)), useWorkerFetch: false, isEvalSupported: false }).promise;
+  const doc = await loadPdf(file);
   let text = '';
   for (let i = 1; i <= doc.numPages; i++) {
     const content = await (await doc.getPage(i)).getTextContent();
@@ -47,6 +51,31 @@ async function pdfText(file: string): Promise<{ pages: number; text: string }> {
   }
   return { pages: doc.numPages, text: text.replace(/\s+/g, '') };
 }
+
+async function pdfLinks(file: string): Promise<{ page: number; dest?: unknown; url?: string }[]> {
+  const doc = await loadPdf(file);
+  const links = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    for (const a of await (await doc.getPage(i)).getAnnotations()) {
+      if (a.subtype === 'Link') links.push({ page: i, dest: a.dest, url: a.url });
+    }
+  }
+  return links;
+}
+
+async function pdfImageCount(file: string): Promise<number> {
+  const { OPS } = require('pdfjs-dist/legacy/build/pdf.mjs');
+  const doc = await loadPdf(file);
+  let count = 0;
+  for (let i = 1; i <= doc.numPages; i++) {
+    const ops = await (await doc.getPage(i)).getOperatorList();
+    count += ops.fnArray.filter((fn: number) => fn === OPS.paintImageXObject).length;
+  }
+  return count;
+}
+
+// A 1x1 PNG.
+const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 async function docxXml(file: string): Promise<string> {
   const zip = await JSZip.loadAsync(fs.readFileSync(file));
@@ -77,6 +106,32 @@ test.describe('Export', () => {
     expect(text).toContain('Theverylastline.');
     // A window screenshot would include the sidebar's file list.
     expect(text).not.toContain('report.md');
+  });
+
+  test('PDF export keeps in-page heading links as jumps, with 0.5in margins', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    const filler = Array.from({ length: 80 }, (_, i) => `Filler paragraph ${i + 1}.`).join('\n\n');
+    fs.writeFileSync(path.join(dir, 'guide.md'), `# Guide\n\nSee [the details](#final-details) or [nowhere](#no-such-heading) or [the site](https://example.com).\n\n${filler}\n\n## Final Details\n\nDone.\n`);
+    await openProject(dir);
+    await expect(page.locator('.tree-file')).toContainText('guide.md', { timeout: 5000 });
+
+    await exportFromSidebar('guide.md', 'pdf');
+    const out = path.join(dir, 'guide.pdf');
+    await expect.poll(() => fs.existsSync(out), { timeout: 10000 }).toBe(true);
+
+    const links = await pdfLinks(out);
+    expect(links.filter(l => l.url)).toEqual([{ page: 1, dest: undefined, url: 'https://example.com/' }]);
+    // One internal jump: the link to a missing heading is unwrapped, not left dangling.
+    const internal = links.filter(l => !l.url);
+    expect(internal).toHaveLength(1);
+    expect(internal[0].dest).toBeTruthy();
+
+    const doc = await loadPdf(out);
+    const items = (await (await doc.getPage(1)).getTextContent()).items.filter((it: any) => it.str.trim());
+    const leftEdge = Math.min(...items.map((it: any) => it.transform[4]));
+    expect(leftEdge).toBeGreaterThan(34); // 0.5in = 36pt
+    expect(leftEdge).toBeLessThan(38);
   });
 
   test('Export as DOCX maps headings, marks, lists, tasks, tables, links, and colors to real Word structure', async () => {
@@ -141,6 +196,25 @@ test.describe('Export', () => {
     expect(xml).not.toMatch(/<w:strike\/>(?:(?!<\/w:r>).)*open task/s);
   });
 
+  test('DOCX export turns in-page heading links into jumps to bookmarked headings', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'guide.md'), '# Guide\n\nSee [the details](#final-details) or [nowhere](#no-such-heading).\n\n## Final Details\n\nDone.\n');
+    await openProject(dir);
+    await expect(page.locator('.tree-file')).toContainText('guide.md', { timeout: 5000 });
+
+    await exportFromSidebar('guide.md', 'docx');
+    const out = path.join(dir, 'guide.docx');
+    await expect.poll(() => fs.existsSync(out), { timeout: 10000 }).toBe(true);
+
+    const html = await docxHtml(out);
+    expect(html).toContain('<a href="#_heading1">the details</a>');
+    expect(html).toContain('<h2><a id="_heading1"></a>Final Details</h2>');
+    expect(html).toContain('or nowhere.');
+    // An unlinked heading carries no bookmark.
+    expect(html).toContain('<h1>Guide</h1>');
+  });
+
   test('exporting an open tab from the tab bar uses its unsaved edits', async () => {
     ({ app, page } = await launchApp());
     const dir = makeTmpDir();
@@ -196,14 +270,61 @@ test.describe('Export', () => {
     await expect(page.locator('.toast')).toContainText('Exported memo 2.docx');
   });
 
-  test('export lives in the right-click menu only: the File menu has no Export items', async () => {
+  test('File > Export > as .DOCX exports the active tab, and explains itself when no file is open', async () => {
     ({ app, page } = await launchApp());
-    const labels = await app.evaluate(({ Menu }) => {
-      const walk = (items: Electron.MenuItem[]): string[] =>
-        items.flatMap(i => [i.label, ...(i.submenu ? walk(i.submenu.items) : [])]);
-      return walk(Menu.getApplicationMenu()!.items);
-    });
-    expect(labels).toContain('Save As...');
-    expect(labels.filter(l => /export/i.test(l))).toEqual([]);
+    const clickExport = (label: string) => clickMenuItem(app, 'File', 'Export', label);
+
+    await clickExport('as .DOCX');
+    await expect(page.locator('.toast')).toContainText('Open a Markdown file to export it.');
+
+    const dir = makeTmpDir();
+    const file = path.join(dir, 'plan.md');
+    fs.writeFileSync(file, '# Plan\n\nShip it.\n');
+    await app.evaluate(({ BrowserWindow }, f) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', f);
+    }, file);
+    await expect(page.locator('.tab-name')).toContainText('plan.md', { timeout: 5000 });
+
+    await clickExport('as .DOCX');
+    const out = path.join(dir, 'plan.docx');
+    await expect.poll(() => fs.existsSync(out), { timeout: 10000 }).toBe(true);
+    expect(await docxHtml(out)).toContain('Ship it.');
+  });
+
+  test('PDF export embeds images found beside the source and names the ones it cannot find', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.mkdirSync(path.join(dir, 'pics'));
+    fs.writeFileSync(path.join(dir, 'pics', 'dot.png'), PNG_BYTES);
+    fs.writeFileSync(path.join(dir, 'album.md'), '# Album\n\n![a dot](pics/dot.png)\n\n![gone](pics/gone.png)\n');
+    await openProject(dir);
+    await expect(page.locator('.tree-file')).toContainText('album.md', { timeout: 5000 });
+
+    await exportFromSidebar('album.md', 'pdf');
+    const out = path.join(dir, 'album.pdf');
+    await expect.poll(() => fs.existsSync(out), { timeout: 10000 }).toBe(true);
+
+    expect(await pdfImageCount(out)).toBe(1);
+    expect((await pdfText(out)).text).toContain('[imagenotfound:pics/gone.png]');
+  });
+
+  test('DOCX export embeds images found beside the source and names the ones it cannot find', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.mkdirSync(path.join(dir, 'pics'));
+    fs.writeFileSync(path.join(dir, 'pics', 'dot.png'), PNG_BYTES);
+    fs.writeFileSync(path.join(dir, 'album.md'), '# Album\n\n![a dot](pics/dot.png)\n\n![gone](pics/gone.png)\n');
+    await openProject(dir);
+    await expect(page.locator('.tree-file')).toContainText('album.md', { timeout: 5000 });
+
+    await exportFromSidebar('album.md', 'docx');
+    const out = path.join(dir, 'album.docx');
+    await expect.poll(() => fs.existsSync(out), { timeout: 10000 }).toBe(true);
+
+    const zip = await JSZip.loadAsync(fs.readFileSync(out));
+    expect(Object.keys(zip.files).filter(f => /^word\/media\/.+\.png$/.test(f))).toHaveLength(1);
+    const html = await docxHtml(out);
+    expect(html).toContain('alt="a dot"');
+    expect(html).toContain('[image not found: pics/gone.png]');
   });
 });

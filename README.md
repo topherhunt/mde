@@ -4,7 +4,7 @@ A simple but sturdy WYSIWYG Markdown browser/editor for macOS and Windows. Writt
 
 Inspired by [Thomas Ptacek's MDV app](https://sockpuppet.org/blog/2026/05/12/emacsification/).
 
-> ❗ **Alpha.** Stable and usable, but expect rough edges. Bug reports and feature requests welcome.
+> ❗ Status: **Beta.** Stable and usable, but expect rough edges. Bug reports and feature requests welcome.
 
 ## Why MDE?
 
@@ -26,7 +26,7 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 - **Quick Open** -- Cmd+O fuzzy file search across the project
 - **Standard editing tools** -- links, code blocks, tables
 - **DOCX and PDF import** -- converts to Markdown on click, preserving structure (tables, headings, columns) where possible (not perfect!)
-- **PDF and DOCX export** -- right-click a document (in the sidebar or its tab) to write a PDF or Word file beside it, with real headings, lists, tables and colors
+- **PDF and DOCX export** -- File > Export, or right-click a document (in the sidebar or its tab), to write a PDF or Word file beside it, with real headings, lists, tables, colors and working links to headings
 - **File conflict detection** -- detects external changes; silent reload or warning banner
 - **Checkpoints** -- opt-in version history for a folder. Snapshots save themselves automatically once things go quiet (or on demand, with a note). Clicking a changed file shows a word-level diff in plain prose -- added words green, removed words red -- and **Restore** asks which version you actually want: the way the file was *before* that change, or the way it came out *after* it. **Browse all checkpoints** opens the full history in a tab, where you can work back through every checkpoint, see how much each file changed, and rename a checkpoint to something you will recognise later. To follow a single document, right-click it in the file list (or right-click its tab) and choose **View Change History** -- the same tab, filtered to just the checkpoints that touched that file, which still works after the file has been deleted. Restoring never overwrites your history; it adds to it, so you can always go forward again. Folders that already have version history set up by other tools stay read-only unless you say otherwise.
 - **Finder Quick Look** -- press spacebar on a `.md` file in Finder to see it rendered, not as raw Markdown, and Finder's file icons show the document's opening lines large enough to read (macOS; launch MDE once so macOS picks it up)
@@ -64,7 +64,7 @@ Once installed, double-clicking a `.md` file or choosing MDE from **Open with** 
 
 ## Note on images
 
-**MDE cannot edit files that contain images yet.** There is no image support in the editor, so an `![alt](path.png)` reference is dropped when the file loads -- and saving would then write the file back without it. Opening such a file pops up a warning that names the images it found and tells you not to save. Close the file without saving and the file on disk is untouched. Real image support is on the list.
+Images in a file are shown inline: relative paths resolve against the file's own folder, and `https://` images load from the web. If an image can't be found, MDE shows a placeholder naming the path it looked for. Either way the image reference is saved back exactly as you wrote it. There is no way to insert a new image from within MDE yet; type the `![alt](path.png)` syntax yourself.
 
 ## Note on HTML in Markdown
 

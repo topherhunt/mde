@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { launchApp } from './electron-helpers';
+import { launchApp, clickMenuItem } from './electron-helpers';
 import { ElectronApplication, Page } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1537,6 +1537,21 @@ test.describe("One file's change history", () => {
     await page.locator('.tab', { hasText: 'note.md' }).click({ button: 'right' });
     await page.locator('.qa-ctx-file-history').click();
 
+    await expect(page.locator('.qa-hist-scope-header')).toContainText('note.md');
+    await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2);
+  });
+
+  test('File > View Change History on an open tab lists only that file\'s checkpoints', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    await seedMixedHistory(dir);
+
+    await app.evaluate(({ BrowserWindow }, filePath) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('open-file', filePath);
+    }, path.join(dir, 'note.md'));
+    await expect(page.locator('.tiptap')).toBeVisible({ timeout: 5000 });
+
+    await clickMenuItem(app, 'File', 'View Change History');
     await expect(page.locator('.qa-hist-scope-header')).toContainText('note.md');
     await expect(page.locator('.qa-hist-checkpoint')).toHaveCount(2);
   });

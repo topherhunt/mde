@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, webContents, protocol } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -24,6 +24,29 @@ import { VcCheckpointResult } from './types';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
+
+// `mde-file://local/<path>` serves local images to the editor and the PDF export window (see
+// utils/imageNode.ts). Image types only: everything else the renderer reads goes through IPC.
+const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.svg': 'image/svg+xml', '.avif': 'image/avif', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
+};
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'mde-file', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
+]);
+
+async function serveLocalImage(request: Request): Promise<Response> {
+  let filePath = decodeURIComponent(new URL(request.url).pathname);
+  if (/^\/[A-Za-z]:/.test(filePath)) filePath = filePath.slice(1);
+  const type = IMAGE_TYPES[path.extname(filePath).toLowerCase()];
+  if (!type) return new Response(null, { status: 415 });
+  try {
+    const bytes = await fs.promises.readFile(filePath);
+    return new Response(bytes, { headers: { 'content-type': type, 'access-control-allow-origin': '*' } });
+  } catch {
+    return new Response(null, { status: 404 });
+  }
+}
 
 // On Windows, Squirrel runs the app with special args during install/update/uninstall.
 // We handle these to create/remove Start Menu shortcuts and register the .md "Open with"
@@ -370,6 +393,31 @@ function buildMenu(): void {
             if (win) win.webContents.send('save-file-as');
           },
         },
+        {
+          label: 'Export',
+          submenu: (['pdf', 'docx'] as const).map(format => ({
+            label: `as .${format.toUpperCase()}`,
+            // Electron hands over the focused window, which lets tests drive this item directly.
+            click: (_item: Electron.MenuItem, win: Electron.BaseWindow | undefined) => {
+              if (win instanceof BrowserWindow) win.webContents.send('export-active-tab', format);
+            },
+          })),
+        },
+        { type: 'separator' },
+        // The right-click file menu's actions, for the active tab, so none is right-click-only.
+        ...([
+          ['rename', 'Rename...'],
+          ['trash', process.platform === 'darwin' ? 'Move to Trash...' : 'Delete...'],
+          ['separator'],
+          ['reveal', process.platform === 'darwin' ? 'Reveal in Finder' : process.platform === 'win32' ? 'Show in Explorer' : 'Show in Folder'],
+          ['copy-path', 'Copy Relative Path'],
+          ['history', 'View Change History'],
+        ] as const).map((entry): Electron.MenuItemConstructorOptions => entry.length === 1 ? { type: 'separator' } : {
+          label: entry[1],
+          click: (_item: Electron.MenuItem, win: Electron.BaseWindow | undefined) => {
+            if (win instanceof BrowserWindow) win.webContents.send('file-action', entry[0]);
+          },
+        }),
         { type: 'separator' },
         {
           label: 'Close Tab',
@@ -1604,6 +1652,7 @@ app.on('open-file', (event, filePath) => {
 // --- App lifecycle ---
 
 app.on('ready', () => {
+  protocol.handle('mde-file', serveLocalImage);
   buildMenu();
   // Keep the Windows window-control overlay colors in sync when the OS theme changes
   // (only matters when the app is following the system theme).

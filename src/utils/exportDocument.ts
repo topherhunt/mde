@@ -1,15 +1,16 @@
 import { Editor, getHTMLFromFragment, createNodeFromContent } from '@tiptap/core';
 import type { Node as PMNode, Mark } from '@tiptap/pm/model';
 import {
-  Document, Packer, Paragraph, TextRun, ExternalHyperlink, HeadingLevel, Table, TableRow, TableCell,
-  WidthType, BorderStyle, ShadingType, LevelFormat, AlignmentType,
+  Document, Packer, Paragraph, TextRun, ImageRun, ExternalHyperlink, HeadingLevel, Table, TableRow, TableCell,
+  WidthType, BorderStyle, ShadingType, LevelFormat, AlignmentType, Bookmark, InternalHyperlink,
   type IRunOptions, type IParagraphOptions, type ILevelsOptions,
 } from 'docx';
 import { buildExtensions } from '../components/Editor';
-import { markdownToHtml } from './markdown';
+import { markdownToHtml, headingAnchors, normalizeAnchor } from './markdown';
 import { PALETTE, PaletteColor } from './colorMarks';
+import { resolveImageSrc, displaySrc } from './imageNode';
 
-// Right-click > Export as PDF / DOCX. Both formats are built from the ProseMirror document --
+// Export as PDF / DOCX (right-click menu or File > Export). Both formats are built from the ProseMirror document --
 // the same model the editor shows -- never from the rendered window.
 
 export type ExportFormat = 'pdf' | 'docx';
@@ -25,9 +26,37 @@ const TEXT_COLOR: Record<PaletteColor, string> = {
   lime: '4d7c0f', green: '15803d', blue: '2563eb', purple: '9333ea', pink: 'db2777',
 };
 
-// A relative link (another .md, a #heading) means nothing outside MDE, so only links with a
-// scheme survive into an export; the rest keep their text and lose the link.
-const isExternalHref = (href: string) => /^[a-z][a-z0-9+.-]*:/i.test(href);
+// What a link becomes in an export: a URL with a scheme stays external, a `#heading` in this
+// document becomes an internal jump, and anything else (another .md, a missing heading) means
+// nothing outside MDE, so it keeps its text and loses the link.
+type LinkTarget = { external: string } | { slug: string } | null;
+
+function resolveLink(href: string, slugs: { has(slug: string): boolean }): LinkTarget {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return { external: href };
+  if (!href.startsWith('#')) return null;
+  const slug = normalizeAnchor(href.slice(1));
+  return slugs.has(slug) ? { slug } : null;
+}
+
+// Exports can't show the editor's missing-image box, so an image that won't load becomes this.
+const missingImageText = (src: string) => `[image not found: ${displaySrc(src)}]`;
+
+function imageSrcs(doc: PMNode): Set<string> {
+  const srcs = new Set<string>();
+  doc.descendants(node => { if (node.type.name === 'image') srcs.add(node.attrs.src); });
+  return srcs;
+}
+
+async function loadImage(src: string, baseDir: string | null): Promise<HTMLImageElement | null> {
+  const source = resolveImageSrc(src, baseDir);
+  if (!source) return null;
+  const img = new Image();
+  // Lets a loaded image be drawn to a canvas and read back (mde-file: sends the CORS header).
+  img.crossOrigin = 'anonymous';
+  img.src = source.url;
+  try { await img.decode(); } catch { return null; }
+  return img.naturalWidth ? img : null;
+}
 
 let parserEditor: Editor | null = null;
 
@@ -40,7 +69,7 @@ export function markdownToDoc(markdown: string): PMNode {
 // --- PDF: a standalone HTML page, printed by the main process ---
 
 const PDF_CSS = `
-@page { margin: 0.75in; }
+@page { margin: 0.5in; }
 body { margin: 0; color: #1a1a1a; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; font-size: 11pt; line-height: 1.5; }
 h1 { font-size: 2em; font-weight: 700; line-height: 1.2; margin: 1.2em 0 0.5em; }
 h2 { font-size: 1.5em; font-weight: 600; line-height: 1.3; margin: 1.2em 0 0.4em; }
@@ -59,6 +88,7 @@ table { border-collapse: collapse; margin: 0.8em 0; }
 th, td { border: 1px solid #d4d4d4; padding: 0.3em 0.6em; vertical-align: top; text-align: left; }
 th { background: #f5f5f5; }
 th > p, td > p { margin: 0; }
+img { max-width: 100%; }
 tr { break-inside: avoid; }
 hr { border: none; border-top: 1px solid #d4d4d4; margin: 1.5em 0; }
 li[data-checked] { list-style: none; position: relative; }
@@ -71,11 +101,31 @@ ${PALETTE.map(c => `mark[data-color="${c}"] { background: #${HIGHLIGHT[c]}; }\ns
 
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function docToPdfHtml(doc: PMNode, title: string): string {
+export async function docToPdfHtml(doc: PMNode, title: string, baseDir: string | null): Promise<string> {
   const container = document.createElement('div');
   container.innerHTML = getHTMLFromFragment(doc.content, doc.type.schema);
+  const loaded = new Map<string, string | null>();
+  await Promise.all(Array.from(imageSrcs(doc), async src => loaded.set(src, (await loadImage(src, baseDir))?.src ?? null)));
+  for (const img of Array.from(container.querySelectorAll('img'))) {
+    const src = img.getAttribute('src')!;
+    const url = loaded.get(src);
+    if (url) {
+      img.setAttribute('src', url);
+      img.removeAttribute('data-markdown');
+    } else {
+      img.replaceWith(missingImageText(src));
+    }
+  }
+  // The DOM lists headings in the same document order headingAnchors walks.
+  const anchors = headingAnchors(doc);
+  const headings = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  if (headings.length !== anchors.length) throw new Error(`PDF export: ${headings.length} rendered headings but ${anchors.length} in the document`);
+  headings.forEach((h, i) => { h.id = anchors[i].slug; });
+  const slugs = new Set(anchors.map(a => a.slug));
   for (const a of Array.from(container.querySelectorAll('a'))) {
-    if (!isExternalHref(a.getAttribute('href') || '')) a.replaceWith(...Array.from(a.childNodes));
+    const target = resolveLink(a.getAttribute('href') || '', slugs);
+    if (!target) a.replaceWith(...Array.from(a.childNodes));
+    else if ('slug' in target) a.setAttribute('href', `#${target.slug}`);
   }
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${PDF_CSS}</style></head><body>${container.innerHTML}</body></html>`;
 }
@@ -102,11 +152,55 @@ function listLevels(text: (level: number) => string, format: typeof LevelFormat[
 
 const BULLETS = ['•', '◦', '▪'];
 
+// Widest an embedded image may be, in the CSS pixels docx sizes images in: the 6.5in text
+// column of a Letter page with 1in margins.
+const MAX_IMAGE_PX = 624;
+
+// Word needs the bytes, in a format it reads. Drawing to a canvas covers every type the editor
+// can show (webp, svg, ...) with one PNG path.
+type DocxImage = { data: Uint8Array; width: number; height: number };
+
+async function rasterize(src: string, baseDir: string | null): Promise<DocxImage | null> {
+  const img = await loadImage(src, baseDir);
+  if (!img) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  canvas.getContext('2d')!.drawImage(img, 0, 0);
+  // A remote image without CORS headers fails to decode above; this throws only on a bug.
+  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) throw new Error(`DOCX export: could not encode image ${src}`);
+  const scale = Math.min(1, MAX_IMAGE_PX / img.naturalWidth);
+  return {
+    data: new Uint8Array(await blob.arrayBuffer()),
+    width: Math.round(img.naturalWidth * scale),
+    height: Math.round(img.naturalHeight * scale),
+  };
+}
+
+// Word bookmark names allow only letters, digits, and underscores, so a heading slug can't be
+// used directly; the leading underscore hides them from Word's Bookmarks dialog.
+const bookmarkName = (headingIndex: number) => `_heading${headingIndex}`;
+
 class DocxBuilder {
   private orderedStarts = new Set<number>();
   private orderedInstance = 0;
+  private headingSlugs: string[] = [];
+  private headingIndex = 0;
+  // Only headings some link points at get a bookmark, so Word users aren't handed clutter.
+  private bookmarkBySlug = new Map<string, string>();
+
+  constructor(private images: Map<string, DocxImage | null>) {}
 
   build(doc: PMNode): Promise<Blob> {
+    this.headingSlugs = headingAnchors(doc).map(a => a.slug);
+    const slugs = new Set(this.headingSlugs);
+    doc.descendants(node => {
+      for (const mark of node.marks) {
+        const target = mark.type.name === 'link' ? resolveLink(mark.attrs.href, slugs) : null;
+        if (target && 'slug' in target) this.bookmarkBySlug.set(target.slug, bookmarkName(this.headingSlugs.indexOf(target.slug)));
+      }
+    });
     const children = this.blocks(doc, { quoteDepth: 0, listLevel: 0 });
     const document = new Document({
       styles: {
@@ -154,12 +248,16 @@ class DocxBuilder {
     switch (node.type.name) {
       case 'paragraph':
         return [new Paragraph({ ...this.quoteProps(ctx), children: this.inline(node, ctx) })];
-      case 'heading':
+      case 'heading': {
+        // Visited in the same document order headingAnchors walks.
+        const bookmark = this.bookmarkBySlug.get(this.headingSlugs[this.headingIndex++]);
+        const children = this.inline(node, ctx);
         return [new Paragraph({
           ...this.quoteProps(ctx),
           heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6][node.attrs.level - 1],
-          children: this.inline(node, ctx),
+          children: bookmark ? [new Bookmark({ id: bookmark, children })] : children,
         })];
+      }
       case 'blockquote':
         return this.blocks(node, { ...ctx, quoteDepth: ctx.quoteDepth + 1, muted: true });
       case 'codeBlock':
@@ -245,19 +343,29 @@ class DocxBuilder {
     });
   }
 
-  private inline(node: PMNode, ctx: Ctx): (TextRun | ExternalHyperlink)[] {
-    const out: (TextRun | ExternalHyperlink)[] = [];
+  private inline(node: PMNode, ctx: Ctx): (TextRun | ImageRun | ExternalHyperlink | InternalHyperlink)[] {
+    const out: (TextRun | ImageRun | ExternalHyperlink | InternalHyperlink)[] = [];
     node.forEach(child => {
       if (child.type.name === 'hardBreak') {
         out.push(new TextRun({ break: 1 }));
         return;
       }
-      if (!child.isText) throw new Error(`DOCX export: no mapping for inline node "${child.type.name}"`);
-      const run = this.run(child.text!, child.marks, ctx);
+      let run: TextRun | ImageRun;
+      if (child.type.name === 'image') {
+        const image = this.images.get(child.attrs.src);
+        run = image
+          ? new ImageRun({ type: 'png', data: image.data, transformation: { width: image.width, height: image.height }, altText: { name: child.attrs.alt || 'image', description: child.attrs.alt || '' } })
+          : new TextRun({ text: missingImageText(child.attrs.src), italics: true, color: MUTED });
+      } else if (child.isText) {
+        run = this.run(child.text!, child.marks, ctx);
+      } else {
+        throw new Error(`DOCX export: no mapping for inline node "${child.type.name}"`);
+      }
       const link = child.marks.find(m => m.type.name === 'link');
-      out.push(link && isExternalHref(link.attrs.href)
-        ? new ExternalHyperlink({ link: link.attrs.href, children: [run] })
-        : run);
+      const target = link ? resolveLink(link.attrs.href, this.bookmarkBySlug) : null;
+      if (!target) out.push(run);
+      else if ('external' in target) out.push(new ExternalHyperlink({ link: target.external, children: [run] }));
+      else out.push(new InternalHyperlink({ anchor: this.bookmarkBySlug.get(target.slug)!, children: [run] }));
     });
     return out;
   }
@@ -282,7 +390,7 @@ class DocxBuilder {
           break;
         case 'textColor': opts.color = TEXT_COLOR[mark.attrs.color as PaletteColor]; break;
         case 'link':
-          if (isExternalHref(mark.attrs.href)) opts.style = 'Hyperlink';
+          if (resolveLink(mark.attrs.href, this.bookmarkBySlug)) opts.style = 'Hyperlink';
           break;
         default:
           throw new Error(`DOCX export: no mapping for mark "${mark.type.name}"`);
@@ -292,7 +400,9 @@ class DocxBuilder {
   }
 }
 
-export async function docToDocx(doc: PMNode): Promise<Uint8Array> {
-  const blob = await new DocxBuilder().build(doc);
+export async function docToDocx(doc: PMNode, baseDir: string | null): Promise<Uint8Array> {
+  const images = new Map<string, DocxImage | null>();
+  await Promise.all(Array.from(imageSrcs(doc), async src => images.set(src, await rasterize(src, baseDir))));
+  const blob = await new DocxBuilder(images).build(doc);
   return new Uint8Array(await blob.arrayBuffer());
 }

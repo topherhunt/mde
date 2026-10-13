@@ -39,6 +39,9 @@ export interface Tab {
   view?: 'history';
 }
 
+// File > (Rename, Move to Trash, Reveal, Copy Relative Path, View Change History) on the active tab.
+export type FileAction = 'rename' | 'trash' | 'reveal' | 'copy-path' | 'history';
+
 export type SidebarMode = 'explorer' | 'outline' | 'versions';
 
 // --- Version history (checkpoints). See CHECKPOINTS.md for the full design. ---
@@ -236,6 +239,8 @@ export interface MdeAPI {
   onQuickOpen: (callback: () => void) => () => void;
   onShowKeyboardShortcuts: (callback: () => void) => () => void;
   onShowWordCount: (callback: () => void) => () => void;
+  onExportActiveTab: (callback: (format: 'pdf' | 'docx') => void) => () => void;
+  onFileAction: (callback: (action: FileAction) => void) => () => void;
   getPathForFile: (file: File) => string;
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   trashFile: (filePath: string) => Promise<void>;

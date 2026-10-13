@@ -76,6 +76,10 @@ export function cleanParsedListHtml(html: string): string {
   clean = clean.replace(/<(ul|ol)>/g, '<$1 data-tight="true">');
   // Unwrap <p> inside <li> (loose list artifact) so items serialize as tight
   clean = clean.replace(/<li>\s*<p>([\s\S]*?)<\/p>\s*<\/li>/g, '<li>$1</li>');
+  // An item that opens with a list (`- 1. x`) needs an empty first paragraph: listItem's schema
+  // requires one, and without it ProseMirror hoists the inner list out into the parent item.
+  // UnifiedListItem's serializer skips that paragraph so the markers stay on one line.
+  clean = clean.replace(/(<li[^>]*>)(\s*<[ou]l[\s>])/g, '$1<p></p>$2');
   return clean;
 }
 
@@ -83,71 +87,43 @@ function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
-// Inline `code spans`. Image syntax inside one is literal text that survives the round trip
-// untouched, so it must not raise the warning.
-const CODE_SPAN = /(`+)[^`]*?\1/g;
-// Inline and reference-style images: ![alt](path) and ![alt][ref]. Escaped \![ is not one.
-const IMAGE_SYNTAX = /(^|[^\\])!\[[^\]\n]*\](\([^)\n]*\)|\[[^\]\n]*\])/g;
-
-/**
- * Every image reference in `md` that the editor would DESTROY on the next save.
- *
- * There is no image node in the editor's schema (StarterKit does not bundle one), so markdown ->
- * HTML makes an `<img>`, ProseMirror's parser finds no node type to put it in and drops it, and
- * serializing back writes a document that never had an image. This finds them so the user can be
- * told before that happens, since nothing else in the app would say a word.
- *
- * Fenced blocks and inline code spans are excluded: image syntax in there is CONTENT, round-trips
- * intact, and warning about it would be crying wolf on any file that documents Markdown. Raw
- * `<img>` HTML is not matched either -- tiptap-markdown runs with `html: false`, so those are
- * literal text and survive. Indented (4-space) code blocks are a known blind spot; they would
- * produce a false warning, which is the safe direction to be wrong in.
- */
-export function findImageReferences(md: string): string[] {
-  const lines = md.split('\n');
-  const inFence = fencedLines(lines);
-  const found: string[] = [];
-
-  lines.forEach((line, i) => {
-    if (inFence[i]) return;
-    const bare = line.replace(CODE_SPAN, m => ' '.repeat(m.length));
-    for (const m of bare.matchAll(IMAGE_SYNTAX)) {
-      // Slice from the ORIGINAL line: the code-span blanking is only for finding positions.
-      const start = m.index + m[1].length;
-      found.push(line.slice(start, start + m[0].length - m[1].length));
-    }
-  });
-
-  return found;
-}
-
 // GitHub's heading slug (github-slugger): lowercase, drop punctuation, each space -> '-'.
 function headingSlug(text: string): string {
   return text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, '').replace(/ /g, '-');
 }
 
-// Position of the heading an in-page `#anchor` link points at, or null. Repeated
-// slugs get GitHub's `-1`, `-2` suffixes in document order, so `#setup-1` is the second "Setup".
-export function findHeadingByAnchor(doc: PMNode, anchor: string): number | null {
-  let wanted = anchor.toLowerCase();
-  try {
-    wanted = decodeURIComponent(wanted);
-  } catch {
-    // A malformed %-escape is matched literally.
-  }
+// Every heading's anchor slug, in document order. Repeated slugs get GitHub's `-1`, `-2`
+// suffixes, so `#setup-1` is the second "Setup".
+export function headingAnchors(doc: PMNode): { pos: number; slug: string }[] {
   const seen = new Set<string>();
-  let found: number | null = null;
+  const anchors: { pos: number; slug: string }[] = [];
   doc.descendants((node, pos) => {
-    if (found !== null) return false;
     if (node.type.name !== 'heading') return;
     const base = headingSlug(node.textContent);
     let slug = base;
     for (let n = 1; seen.has(slug); n++) slug = `${base}-${n}`;
     seen.add(slug);
-    if (slug === wanted) found = pos;
+    anchors.push({ pos, slug });
     return false;
   });
-  return found;
+  return anchors;
+}
+
+// An in-page link's fragment (without the `#`) in the form `headingAnchors` produces.
+export function normalizeAnchor(anchor: string): string {
+  try {
+    return decodeURIComponent(anchor.toLowerCase());
+  } catch {
+    // A malformed %-escape is matched literally.
+    return anchor.toLowerCase();
+  }
+}
+
+// Position of the heading an in-page `#anchor` link points at, or null.
+export function findHeadingByAnchor(doc: PMNode, anchor: string): number | null {
+  const wanted = normalizeAnchor(anchor);
+  const match = headingAnchors(doc).find(h => h.slug === wanted);
+  return match ? match.pos : null;
 }
 
 // THE single markdown -> editor-HTML pipeline. Every path that puts markdown into the

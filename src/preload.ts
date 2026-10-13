@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { VcChangedFile } from './types';
+import type { VcChangedFile, FileAction } from './types';
 
 export interface FileEntry {
   name: string;
@@ -221,6 +221,18 @@ const api = {
     const handler = () => callback();
     ipcRenderer.on('show-keyboard-shortcuts', handler);
     return () => ipcRenderer.removeListener('show-keyboard-shortcuts', handler);
+  },
+
+  onExportActiveTab: (callback: (format: 'pdf' | 'docx') => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, format: 'pdf' | 'docx') => callback(format);
+    ipcRenderer.on('export-active-tab', handler);
+    return () => ipcRenderer.removeListener('export-active-tab', handler);
+  },
+
+  onFileAction: (callback: (action: FileAction) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, action: FileAction) => callback(action);
+    ipcRenderer.on('file-action', handler);
+    return () => ipcRenderer.removeListener('file-action', handler);
   },
 
   onShowWordCount: (callback: () => void) => {

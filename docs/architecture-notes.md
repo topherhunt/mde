@@ -90,17 +90,16 @@ The `LeadingParagraph` extension's `appendTransaction` prepends an empty paragra
 
 tiptap-markdown is configured with `html: false` so raw HTML tags in Markdown (e.g. `<ol>` in body text) are treated as literal text, not parsed as HTML elements. The text node serializer is overridden to skip tiptap-markdown's `escapeHTML` (which converts `<` `>` to `&lt;` `&gt;`), preserving prose like "Apples > oranges." verbatim on save. Standard Markdown character escaping (via prosemirror-markdown's `esc()`) is still applied.
 
-### Images are dropped, and the warning that says so
+### Images (`utils/imageNode.ts`)
 
-There is no image node anywhere in the editor's schema -- StarterKit does not bundle `@tiptap/extension-image` and nothing else adds one. So `![alt](path)` becomes an `<img>` in `markdownToHtml`, ProseMirror's parser finds no node type that can hold it and discards it, and serializing the result writes a document that never contained an image. Open, type one character, save, and the reference is gone from disk with nothing said. Measured, not reasoned about: `"# Title\n\n![a cat](cat.png)\n\n![remote](...)\n\nafter\n"` came back as `"# Title\n\nafterX\n"`.
+An inline, atom `image` node -- inline because Markdown images are inline, so `see ![x](a.png) here` stays one paragraph. Before it existed there was no node to hold an `<img>`, so ProseMirror discarded every image on load and the next save wrote the file without them.
 
-The real fix is a schema that can hold the node; until then `findImageReferences` (in `utils/markdown.ts`) scans the RAW markdown on load -- before the parser sees it, since afterwards there is nothing left to find -- and `App` raises `ImageWarningDialog`.
-
-- It reuses `fencedLines` and blanks inline code spans first. Image syntax inside code is content, round-trips perfectly, and warning about it would fire on precisely the files most likely to contain the syntax (anything documenting Markdown), which is how a warning gets trained away. Indented 4-space code blocks are a known blind spot: they produce a false warning, which is the safe direction.
-- Raw `<img>` HTML is deliberately NOT matched. With `html: false` those are literal text and survive.
-- It is a blocking modal, not a toast. A toast is the right weight for "this happened"; this is "your file is about to lose content", it is the only warning there will be, and it has to survive not being looked at.
-- It fires from `Editor`'s load effect (both the `initialContent` and `readFile` branches) via an `onImagesFound` ref, and is skipped for `tab.readOnly` panes -- help pages and diffs are never saved, so nothing there is at risk.
-- **Delete all of this when the image node lands.** A warning that outlives its bug is worse than no warning.
+- **The saved form is the source text, verbatim.** markdown-it normalizes the destination (`<my cat.png>` -> `my%20cat.png`, `café` -> `caf%C3%A9`, `&amp;` -> `&`) and flattens the alt to plain text (`*pic*` -> `pic`), so rebuilding `![alt](src)` from attrs rewrites the user's reference on every save. `captureSource` wraps markdown-it's inline `image` rule (via `ruler.__rules__`, guarded by a WeakSet since tiptap-markdown calls `setup` per parse), slices `state.src` across what the rule consumed, and stores it as `data-markdown` -> the `markdown` attr. The serializer writes it with `state.text(raw, false)`, not `write()`, so continuation lines inside quotes/lists get re-prefixed. Only an image with no `markdown` attr (pasted HTML) is rebuilt from its attrs.
+- **Reference-style `![alt][ref]` is saved in the resolved inline form**, not verbatim: markdown-it consumes the `[ref]: url` definition and nothing in the document holds it, so a verbatim reference would dangle. Reference-style LINKS get the same rewrite (stock prosemirror-markdown behavior).
+- **Local files load through `mde-file://local/<path>`**, a privileged standard scheme registered in `index.ts`. The renderer's origin is `http://localhost` in dev, from which Chromium refuses `file://`. The fixed `local` host is required: under a standard scheme `mde-file:///Users/x` parses `Users` as the host and lowercases it. The handler serves only image extensions and sends `Access-Control-Allow-Origin: *` so DOCX export can draw the image to a canvas and read it back. Forge's dev-server CSP is extended in `forge.config.ts` to allow `mde-file:` and `http(s):` images; packaged builds send no CSP.
+- **Relative paths resolve against the document's folder** (`resolveImageSrc`, the same rule links follow) via `editor.storage.image.baseDir`, which `Editor` sets before each load. A file renamed or moved while open keeps resolving against its old folder until it is reopened.
+- **A failed load shows `.image-missing`**: a dashed box plus small muted-red text. On `error`, a local path is stat'ed to choose between "can't be found" and "can't be displayed"; a remote one says "can't be loaded". The node and its `markdown` attr are untouched, so the reference saves unchanged.
+- **The table serializer is overridden (`MarkdownTable` in `Editor.tsx`)**: tiptap-markdown's skips every cell whose `textContent` is blank, and an image-only cell has none, so its image vanished on save. The override renders a cell that holds an image; everything else matches stock, including `[table]` for tables Markdown can't express.
 
 ### A lone `~` is never escaped
 
@@ -163,6 +162,10 @@ Two guards in `utils/markdown.ts`:
 
 1. `fencedLines()` marks every line inside a ``` / `~~~` fence (opening indent 0-3, closing fence same char and at least as long with nothing after it) and `splitLooseLists()` skips them -- list syntax inside a fence is CONTENT, and inserting a separator there put a literal `{LIST_SEPARATOR}` in the user's code sample, which then got SAVED BACK TO DISK.
 2. `markdownToHtml()` is the single markdown -> editor-HTML entry point (file load, external reload, paste, help pages all call it); it counts separators in the source, counts them in the output, `console.error`s any excess, and scrubs them when the source had none of its own (when the source DID contain one we cannot tell the user's text from ours, so it is left alone rather than deleting their content).
+
+### An item that opens with a list (`- 1. x`)
+
+markdown-it parses `- 1. x` as an `<li>` whose first child is an `<ol>`, but `listItem`'s schema is `paragraph block*`. ProseMirror's DOM parser can't fit the list there, so it closes the item and hoists the list into the PARENT item: on save, `- 1. x` became an empty `- ` line plus a dedented `1. x`, and the nesting was gone. `cleanParsedListHtml` inserts an empty `<p></p>` before any leading `<ul>`/`<ol>` in an `<li>`, and `UnifiedListItem`'s serializer skips an empty first paragraph followed by a list, so the inner marker is written on the item's own line again. Task items are exempt from the skip: `- [ ] 1. x` parses back as paragraph text, not a list. In the editor, such an item shows an empty bullet line above the inner list. Items that open with other blocks (`- # h`, `- > q`) are untested.
 
 ---
 
@@ -309,14 +312,15 @@ Extraction heuristics:
 
 ## Export (PDF / DOCX)
 
-Right-click a markdown file (file explorer or tab) > Export as PDF / DOCX writes `<name>.pdf` / `<name>.docx` beside it. No save dialog, and no File-menu entry. A taken name raises `ExportConflictDialog` (`.qa-export-conflict`): Overwrite, Create Another Copy (`name 2.pdf`, `name 3.pdf`, ...), or Cancel. The IPC's `onExisting: 'ask'` writes nothing when the name is taken; the renderer asks, then calls again with the answer.
+Right-click a markdown file (file explorer or tab) > Export as PDF / DOCX, or File > Export > as .PDF / as .DOCX for the active tab, writes `<name>.pdf` / `<name>.docx` beside it. No save dialog. The menu path exists so nothing is reachable only by right-click (see File operations); on an untitled buffer, a help tab, or the history tab it toasts instead. A taken name raises `ExportConflictDialog` (`.qa-export-conflict`): Overwrite, Create Another Copy (`name 2.pdf`, `name 3.pdf`, ...), or Cancel. The IPC's `onExisting: 'ask'` writes nothing when the name is taken; the renderer asks, then calls again with the answer.
 
 Both formats are built in `utils/exportDocument.ts` from the ProseMirror document -- never from the window, which is what the original `printToPDF` on the app window did (one page, sidebar and toolbar included). An open file exports its live buffer, unsaved edits included; a closed one is parsed by a module-level headless `Editor` built from `buildExtensions()` (exported from `Editor.tsx`), so it parses exactly as opening it would.
 
-- **PDF**: `getHTMLFromFragment` + a print stylesheet, printed by the main process in a throwaway hidden `BrowserWindow` (JS off). The page is loaded from a temp file, not a `data:` URL, because Chromium caps those at 2MB.
+- **PDF**: `getHTMLFromFragment` + a print stylesheet (0.5in margins), printed by the main process in a throwaway hidden `BrowserWindow` (JS off). The page is loaded from a temp file, not a `data:` URL, because Chromium caps those at 2MB.
 - **DOCX**: the `docx` library, node by node, so Word gets real Heading 1-6 styles, numbered/bulleted lists, and tables. Tasks are list levels whose bullet is a ☐/☑ glyph; a checked item is struck and greyed. Each ordered list is its own numbering `instance` so it restarts at its `start`. An unmapped node or mark THROWS (surfaced as an "Export failed" toast) rather than silently dropping content.
 - Palette colors use the LIGHT-theme shades in both formats, duplicated from `index.css` as `Record<PaletteColor, string>` so a new palette name fails to compile until it has one.
-- Only links with a scheme survive; a relative link (`other.md`, `#heading`) keeps its text and loses the link, since it points nowhere outside MDE.
+- Links: a URL with a scheme stays external; a `#heading` link that resolves (via `headingAnchors` / `normalizeAnchor` in `utils/markdown.ts`, the same slugs Cmd+click uses) becomes an internal jump -- an `id` on the heading in the PDF, a bookmark + `InternalHyperlink` in DOCX. Anything else (`other.md`, a missing heading) keeps its text and loses the link. DOCX bookmark names are `_heading<N>` because Word allows only letters, digits and underscores, and only LINKED headings get one.
+- Images resolve against the SOURCE file's folder, as in the editor. PDF keeps each image's URL (the hidden print window loads `mde-file:` too); DOCX draws each one to a canvas and embeds it as PNG, capped to the 6.5in text width. One that won't load (missing, or remote without CORS headers -- DOCX only) becomes the text `[image not found: <src>]` in both formats rather than throwing.
 - Never pass `tableHeader: false` to docx's `TableRow`. It writes `<w:tblHeader w:val="off"/>`, which Word honours but mammoth (and so MDE's own DOCX import) reads as ON, turning every row into a header.
 
 ## Sidebar and outline
@@ -334,6 +338,8 @@ Sidebar folder expand/collapse state is lifted to the `Sidebar` component (not `
 File explorer context menu (rename, delete, copy path, reveal in OS file manager) and create file/folder use dedicated IPC handlers (`rename-file`, `trash-file`, `reveal-in-finder`, `create-file`, `create-directory`). Delete moves to Trash via `shell.trashItem()`, never permanent delete. Reveal uses `shell.showItemInFolder()`; the menu label is platform-aware ("Reveal in Finder" / "Show in Explorer" / "Show in Folder"). The copy-path item degrades to "Copy File Name" (copies `target.name`) when there's no project root the file sits under -- a relative path is only meaningful inside the project folder.
 
 Deleting a file via the sidebar also closes any tab open to that file, without adding it to the reopenable closed-tabs queue.
+
+The File menu mirrors the context menu's file actions for the ACTIVE tab (Rename..., Move to Trash..., Reveal in Finder, Copy Relative Path, View Change History, plus Export), so someone who never right-clicks isn't locked out. They arrive as one `file-action` IPC and reuse the tab bar's rename/delete dialogs and `copyFilePath` / `relativeToProject` from `FileContextMenu.tsx`. Where the context menu would HIDE an item (no checkpoints, file outside the folder, untitled buffer), the menu item is always present and toasts the reason instead. Menu items take the window from Electron's click argument rather than `getFocusedWindow()`, so `clickMenuItem` in `tests/electron-helpers.ts` can drive them headless.
 
 ### Drag-drop
 
@@ -644,7 +650,8 @@ What exists today, for orientation. This list goes stale faster than the notes a
 - File conflict detection (hash-guarded save that can never clobber a stale file; silent reload with a blue "detected changes" proof banner; red conflict banner when the buffer is dirty). Watches the containing directory so it survives atomic saves.
 - Quick Open command palette (Cmd+O) with fuzzy search, file indexing (10s TTL cache)
 - DOCX/PDF import: converts to `.{ext}.md` on click (e.g. `report.pdf.md` -- preserves original extension). The source file is never renamed, moved, or hidden. Clicking a source that already has its Markdown beside it opens an "Already converted" dialog (`.qa-import-exists`) offering to open that Markdown (primary) or convert again into a new numbered copy (`report.pdf.2.md`, `.3.md`, ...) -- conversion never overwrites.
-- Export to PDF / DOCX from the right-click menu, written beside the source with an overwrite / copy / cancel prompt when the name is taken
+- Images: shown inline from relative, absolute, or remote paths; a missing one shows a placeholder naming its path. The reference is saved exactly as written. No way to insert one yet
+- Export to PDF / DOCX from the right-click menu or File > Export, written beside the source with an overwrite / copy / cancel prompt when the name is taken; in-page heading links survive as jumps
 - Finder Quick Look (spacebar) preview of `.md` files, macOS only: a native appex rendering with the editor's markdown-it options, task checkboxes styled like the editor's, light/dark aware, images shown as alt text
 - Finder icon thumbnails of `.md` files, macOS only: the opening headings, text, lists and tasks drawn large enough to skim
 - Tools -> Word Count: a modal (`.qa-word-count`) showing word count, character count, and estimated page count (300 words/page) as `selection / whole document` -- or, when nothing is selected, the document figure alone with no `0 / ` prefix. Counts are snapshotted when the dialog opens. Escape or clicking the backdrop closes it. No keyboard shortcut -- menu only.

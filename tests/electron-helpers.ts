@@ -36,6 +36,21 @@ export async function launchApp(
   return { app, page };
 }
 
+// Clicks an application-menu item by its label path, e.g. ('File', 'Export', 'as .PDF'). The
+// window is passed as Electron's click argument, since a headless window is never focused.
+export async function clickMenuItem(app: ElectronApplication, ...labels: string[]): Promise<void> {
+  await app.evaluate(({ Menu, BrowserWindow }, labelPath) => {
+    let items = Menu.getApplicationMenu()?.items ?? [];
+    let item: Electron.MenuItem | undefined;
+    for (const label of labelPath) {
+      item = items.find(i => i.label === label);
+      if (!item) throw new Error(`No menu item "${label}" on the path ${labelPath.join(' > ')}`);
+      items = item.submenu ? item.submenu.items : [];
+    }
+    (item!.click as (event: unknown, win: Electron.BrowserWindow) => void)(undefined, BrowserWindow.getAllWindows()[0]);
+  }, labels);
+}
+
 export function fixturePath(name: string): string {
   return path.resolve(__dirname, 'fixtures', name);
 }

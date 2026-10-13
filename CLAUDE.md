@@ -37,6 +37,7 @@ Break these and something silently corrupts, clobbers, or infinite-loops.
 - **Keep** `EnableCookieEncryption` **false while the app is ad-hoc signed.** It makes Chromium create a keychain item, and an ad-hoc designated requirement is pinned to one exact binary hash -- so every release would prompt the user for their login keychain password. MDE uses neither cookies nor `safeStorage`. Revisit only if we get a Developer ID cert. -> notes: Packaging and webpack
 - **Never remove** `forge.config.ts`**'s** `postPackage` **ad-hoc re-sign hook.** Forge leaves the macOS bundle with a signature that no longer matches it, and a BROKEN signature means "damaged, move to Trash" with no Open Anyway button -- strictly worse than no signature. The hook's `codesign --verify` gate must stay too, or the breakage is invisible until a user hits it. -> notes: Packaging and webpack
 - **No** `codesign --deep` **after** `buildQuickLookExtension` **in** `postPackage`. It re-signs the appexes without their sandbox entitlement, macOS then silently never loads it, and `codesign --verify --deep --strict` STILL PASSES -- only `verifyQuickLookExtension` and `tests/packaged.spec.ts` notice. -> notes: Quick Look preview
+- **An image saves its captured source text, never a rebuild from** `src`**/**`alt`**.** markdown-it percent-encodes the path and flattens the alt, so a rebuild rewrites the user's reference on every save. -> notes: Markdown serialization
 - **Import never mutates the source file.** No renaming, moving, or hiding, and no code path overwrites an already-converted Markdown. -> notes: Import (DOCX / PDF)
 - `confirm()` **and** `alert()` **don't work in Electron's renderer.** Use in-app toasts or inline confirmation UI.
 - **Renderer webpack config must NOT use** `@vercel/webpack-asset-relocator-loader` -- it breaks ESM imports from TipTap packages. Main process only.
@@ -59,6 +60,7 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 - `tiptap-markdown` handles MD parse/serialize. The TipTap document model is the source of truth while editing. TipTap (ProseMirror) for the editor, not raw contenteditable.
 - tiptap-markdown runs with `html: false`, so raw HTML tags are literal text. The text node serializer skips `escapeHTML` so prose like "Apples > oranges." survives verbatim. A lone `~` is deliberately un-escaped on save. -> notes: Markdown serialization
 - Highlight and text color are MDE syntax (`==x==`, `=={blue}x==`, `[x]{red}`) in `utils/colorMarks.ts`; files store palette NAMES, CSS picks the per-theme shade. The text-color rule MUST decline in markdown-it's silent mode, or colored words inside link text break the link. Both marks outrank Link (so they render outside it) and are `mixable`. Inline code no longer excludes them. -> notes: Markdown serialization
+- Images are an inline atom node (`utils/imageNode.ts`). Local files load via the `mde-file://local/` protocol, relative to the document's folder; a missing one shows a placeholder and its reference is left alone. `MarkdownTable` overrides tiptap-markdown's table serializer, which dropped image-only cells. -> notes: Markdown serialization
 - `LeadingParagraph` guarantees a document never starts with a code fence. -> notes: Editor wiring
 - Syntax highlighting is deliberately OFF. Plain `CodeBlock`, not `CodeBlockLowlight`. The copy button is a NodeView. -> notes: Editor wiring
 - ProseMirror decorations power find-match highlighting and link-bar selection preservation. Always clean up decoration plugins on unmount.
@@ -117,7 +119,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 - **Navigation into the history tab is** `{ target, nonce }`**, never a bare target.** Re-requesting the same target is the normal case (Browse while already on that checkpoint's diff) and an unchanged prop fires no effect, so a bare target silently fails to zoom back out. `HistoryView` seeds `nav` lazily at mount and tracks an `appliedNonce` ref. -> notes: Checkpoints
 - In the checkpoint list the WHOLE ROW drills in (no button), and the counts (files / +added / -removed) sit right-aligned on the row's SECOND line so the title above can run the full width. Totals come from a SEPARATE `vc-checkpoint-stats` call made after the list -- never fold them into `listCheckpoints`, which must stay a cheap log walk. The same split applies to uncommitted files: `vc-status-counts` runs after the changes list, never inside `computeStatus`. An unmeasurable count is absent, never `0`. -> notes: Checkpoints
 - The per-file view (right-click -> View Change History, in the file explorer or a tab) is a SCOPE on the list level, not a fourth nav level; drilling into a checkpoint from it still shows every file that checkpoint changed. `listFileCheckpoints` needs `force: true` or `log` throws on a deleted file. -> notes: Checkpoints
-- `FileContextMenu` **is shared by the file explorer and the tab bar** -- add a menu item once and both get it. It is mounted inside `FileExplorer`, not `Sidebar`, so its props thread one level deeper than they look.
+- `FileContextMenu` **is shared by the file explorer and the tab bar** -- add a menu item once and both get it. It is mounted inside `FileExplorer`, not `Sidebar`, so its props thread one level deeper than they look. **Nothing may be right-click-only:** each of its file actions is mirrored in the File menu for the active tab (`file-action` / `export-active-tab` IPC), so a new item belongs there too.
 - One cadence rule, source-agnostic, and only in automatic mode: more than 10 minutes since the last checkpoint + uncommitted changes + a quiet period -> checkpoint everything. No separate behavior for agent writes vs. the user's own edits. `--vc-eligibility-ms` / `--vc-poll-ms` override the constants for tests. -> notes: Checkpoints
 - **In manual mode** `tick()` **must clear** `lastSignature` **before returning, and** `flushRoot` **must return early.** Not clearing it deadlocks the poll gate open and the poller spins at full rate forever; not gating the flush means closing a folder or quitting produces exactly the surprise checkpoint manual mode opted out of. Both are "nothing happened" tests, both mutation-verified. -> notes: Checkpoints
 - Detection polls `statusMatrix` (which excludes gitignored files); the watcher is demoted to an unfiltered dirty-flag gate. The poller gate is `!sawChange && lastSignature === null` -- the second half prevents a deadlock after a single burst of edits. -> notes: Checkpoints
@@ -132,7 +134,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 - DOCX: mammoth + turndown, with HTML preprocessing so turndown-plugin-gfm's table rule fires. PDF: `pdfjs-dist` legacy build in fake-worker mode, with position-based line grouping, column detection, heading detection by font height, and table detection. -> notes: Import (DOCX / PDF)
 - `forge.config.ts`'s `packageAfterCopy` hook copies main-process externals plus their transitive prod deps into the packaged app, because electron-forge ships an empty `node_modules` inside `app.asar`. -> notes: Packaging and webpack
 - Finder Quick Look preview and icon thumbnail are two Swift appexes in `quicklook/` (no Xcode project), both reading markdown through the editor's markdown-it via `render.js` in JavaScriptCore. They only fire because `forge.config.ts` imports the `net.daringfireball.markdown` UTI. The extensions themselves can't be E2E tested -- hand-check spacebar and Finder icons each release. -> notes: Quick Look preview
-- Export (right-click > Export as PDF / DOCX, file explorer or tab) writes `<name>.pdf`/`.docx` beside the source -- no save dialog, no File-menu item. Both are built from the ProseMirror document, never the window; an open file exports its live buffer. An unmapped node or mark must THROW, not drop content. -> notes: Export (PDF / DOCX)
+- Export (right-click > Export as PDF / DOCX in the file explorer or a tab, or File > Export for the active tab) writes `<name>.pdf`/`.docx` beside the source -- no save dialog. Both are built from the ProseMirror document, never the window; an open file exports its live buffer. An unmapped node or mark must THROW, not drop content. -> notes: Export (PDF / DOCX)
 - Bootstrap Icons are self-hosted in `src/fonts/`, imported via CSS in renderer.tsx.
 - Tooltips use a shared CSS `[data-tooltip]::after` bubble; buttons set `data-tooltip` + `aria-label`, not `title`. -> notes: UI details
 
@@ -165,13 +167,9 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-242 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+269 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
-
-**Not yet done / known gaps:**
-
-- **Images are DESTROYED on save.** There is no image node in the editor schema, so an `![](path)` reference is dropped when the document loads and is simply absent when it is serialized back. Confirmed by probe, not inferred. Opening such a file now raises a blocking warning (`ImageWarningDialog`, fed by `findImageReferences` in `utils/markdown.ts`) -- that is a STOPGAP, not the fix, and it must be removed in the same change that adds a real image node. See TASKS.md. -> notes: Images are dropped, and the warning that says so
 
 ## CSS conventions
 

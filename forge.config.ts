@@ -162,6 +162,9 @@ const config: ForgeConfig = {
       // Off the default 3000, which other local dev servers commonly hold -- a taken
       // port kills `npm start` with only a buried EADDRINUSE.
       port: 3917,
+      // Forge's default dev CSP plus images: local ones via mde-file: and remote ones.
+      // Packaged builds load from file:// and send no CSP at all.
+      devContentSecurityPolicy: "default-src 'self' 'unsafe-inline' data:; script-src 'self' 'unsafe-eval' 'unsafe-inline' data:; img-src 'self' data: mde-file: https: http:; connect-src 'self' ws: mde-file: https: http:",
       mainConfig,
       renderer: {
         config: rendererConfig,
