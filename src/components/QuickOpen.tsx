@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { basename, joinPath } from '../utils/paths';
+import { fileKind } from '../utils/fileKinds';
 
 interface QuickOpenProps {
   projectRoot: string;
@@ -71,7 +72,7 @@ export default function QuickOpen({ projectRoot, onSelect, onClose }: QuickOpenP
   useEffect(() => {
     inputRef.current?.focus();
     window.mde.listProjectFiles(projectRoot).then(all =>
-      setFiles(all.filter(f => /\.(md|markdown|txt)$/i.test(f)))
+      setFiles(all.filter(f => fileKind(f) === 'markdown' || fileKind(f) === 'plaintext'))
     );
   }, [projectRoot]);
 

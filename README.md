@@ -27,6 +27,7 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 - **Find and replace** -- match highlighting, case-sensitive and whole-word filters, inline replace-all confirmation
 - **Quick Open** -- Cmd+O fuzzy file search across the project
 - **Standard editing tools** -- links, code blocks, tables
+- **Plain-text files** -- `.txt`, `.json`, `.yaml`, `.gitignore`, `.env` and other text files open in a simple monospace editor that saves exactly what you typed: no reformatting, no whitespace or line-ending changes
 - **DOCX and PDF import** -- previews on click (with headings, bookmarks, or pages in the outline) and converts to Markdown on request, preserving structure (tables, headings, columns) where possible (not perfect!)
 - **PDF and DOCX export** -- File > Export, or right-click a document (in the sidebar or its tab), to write a PDF or Word file beside it, with real headings, lists, tables, colors and working links to headings
 - **File conflict detection** -- detects external changes; silent reload or warning banner

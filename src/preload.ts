@@ -26,6 +26,9 @@ const api = {
   readFile: (filePath: string): Promise<string> =>
     ipcRenderer.invoke('read-file', filePath),
 
+  readPlainText: (filePath: string): Promise<string> =>
+    ipcRenderer.invoke('read-plain-text', filePath),
+
   hashFile: (filePath: string): Promise<string | null> =>
     ipcRenderer.invoke('hash-file', filePath),
 

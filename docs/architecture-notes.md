@@ -286,6 +286,22 @@ The `onLinkClick` prop is bound per-tab in the Editor map; inside the Editor a r
 
 ---
 
+## Plain-text files
+
+### Which files, and where that is decided
+
+`utils/fileKinds.ts` (`fileKind`) is the single answer to "how does this file open", shared by the main process and the renderer: `markdown` (WYSIWYG), `plaintext` (literal editor), `importable` (preview), `other` (does not open). Plain text is a fixed allowlist of extensions plus exact names (`.gitignore`, `.editorconfig`, `.env`, `Makefile`, `Dockerfile`, `LICENSE`) -- no content sniffing, since a misread binary is exactly the file that gets corrupted. Dotfiles stay hidden from the explorer and Quick Open except those exact names (`isHiddenName`); dot-directories stay hidden. The editor kind is fixed on the tab at open (`tab.plainText`), so a rename never swaps editors under a live buffer.
+
+### Literal round trip
+
+`.txt` used to open in the WYSIWYG editor and be rewritten by the Markdown round trip on save. `PlainTextEditor` (CodeMirror 6, no language package, so no highlighting) saves back exactly what it loaded plus the user's edits. Three traps:
+
+- **Line endings.** CodeMirror splits on any break and `toString()` joins with `\n`, which would rewrite a CRLF file. A `<textarea>` is no better -- the HTML spec normalizes its value to `\n`. A file with ONE kind of break is edited normalized and saved with `sliceString(0, len, thatBreak)`; a file that MIXES them sets `EditorState.lineSeparator` to `\n`, so each `\r` stays in the text and shows as a special-char marker. Do not use the `\n`-separator mode for uniform CRLF files: the cursor's line end is then AFTER the `\r`, and typing there corrupts the line. `buildState` throws if the initial state does not serialize back to the input.
+- **Encoding.** `read-file` decodes as UTF-8, which silently turns invalid bytes into U+FFFD. Plain-text tabs read via `read-plain-text`, which throws unless the bytes contain no NUL and re-encode identically; `openFile` checks first and shows a toast instead of opening. A BOM survives as a visible character.
+- **Dirty state** is `doc.eq(cleanDoc)` -- a plain comparison, so undoing back to the loaded text marks it clean.
+
+Save, Save As, reload and the `file-changed` handler go through App's `DocBuffer` (`serialize` / `version` / `reloadFrom`), implemented by `markdownBuffer` and by the `PlainTextHandle`; the hash guard, conflict banner and autosave are shared unchanged. Find (Cmd+F) opens CodeMirror's own search panel, not `FindBar`. Reloading a plain-text buffer resets its undo history.
+
 ## Import (DOCX / PDF)
 
 ### Import never mutates the source
@@ -640,6 +656,8 @@ What exists today, for orientation. This list goes stale faster than the notes a
 
 - Electron shell with IPC bridge, menu bar (including Window menu with Hide/Minimize), drag-drop (with blue pulse overlay)
 - TipTap WYSIWYG editor with Markdown load/save
+- Literal plain-text editor (CodeMirror, monospace, no highlighting) for allowlisted text files; byte-exact round trip including CRLF/mixed line endings, BOM, trailing whitespace
+- File explorer icons per kind: `bi-markdown`, `bi-code-slash` (plain text, muted name), `bi-file-earmark-pdf`, `bi-file-earmark-word`
 - File explorer sidebar:
   - Resizable via drag handle (140--600px, width persisted to mde-state.json)
   - Root header with New File (`bi-file-earmark-plus`), New Folder (`bi-folder-plus`), Collapse All (`bi-arrows-collapse`) buttons -- sticky at the top of the scroll, so only the file/folder list below it scrolls

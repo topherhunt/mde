@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { FileEntry } from '../types';
 import { Editor as TipTapEditor } from '@tiptap/react';
 import { basename, dirname, joinPath } from '../utils/paths';
+import { fileKind } from '../utils/fileKinds';
 import { FileContextMenu, DeleteConfirmDialog } from './FileContextMenu';
 import type { ExportFormat } from '../utils/exportDocument';
 import VersionPanel, { VersionControl } from './VersionPanel';
@@ -178,11 +179,17 @@ interface FileExplorerProps {
 }
 
 function isEditable(name: string): boolean {
-  return /\.(md|markdown|txt)$/i.test(name);
+  const kind = fileKind(name);
+  return kind === 'markdown' || kind === 'plaintext';
 }
 
-function isImportable(name: string): boolean {
-  return /\.(docx|pdf)$/i.test(name);
+function fileIcon(name: string): string | null {
+  switch (fileKind(name)) {
+    case 'markdown': return 'bi-markdown';
+    case 'plaintext': return 'bi-code-slash';
+    case 'importable': return /\.pdf$/i.test(name) ? 'bi-file-earmark-pdf' : 'bi-file-earmark-word';
+    case 'other': return null;
+  }
 }
 
 interface ContextMenuState {
@@ -780,9 +787,10 @@ function FileNode({ entry, onOpenFile, active, selected, onContextMenu, isRenami
   onSetDropTarget: (path: string | null) => void;
   onDropOnFolder: (targetDir: string) => void;
 }) {
-  const editable = isEditable(entry.name);
-  const importable = isImportable(entry.name);
-  const clickable = editable || importable;
+  const kind = fileKind(entry.name);
+  const importable = kind === 'importable';
+  const clickable = kind !== 'other';
+  const icon = fileIcon(entry.name);
 
   const handleClick = () => {
     onSelect(entry);
@@ -811,7 +819,7 @@ function FileNode({ entry, onOpenFile, active, selected, onContextMenu, isRenami
 
   return (
     <div
-      className={`tree-item tree-file ${clickable ? '' : 'tree-file-disabled'} ${importable ? 'tree-file-importable' : ''} ${active ? 'tree-file-active' : ''} ${selected ? 'tree-item-selected' : ''}`}
+      className={`tree-item tree-file qa-tree-file-${kind} ${clickable ? '' : 'tree-file-disabled'} ${importable ? 'tree-file-importable' : ''} ${kind === 'plaintext' ? 'tree-file-plaintext' : ''} ${active ? 'tree-file-active' : ''} ${selected ? 'tree-item-selected' : ''}`}
       onClick={handleClick}
       onDoubleClick={clickable ? () => onOpenFile(entry.path, false) : undefined}
       onContextMenu={(e) => onContextMenu(e, entry)}
@@ -822,6 +830,7 @@ function FileNode({ entry, onOpenFile, active, selected, onContextMenu, isRenami
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
     >
+      <i className={`tree-file-icon qa-tree-file-icon ${icon ? `bi ${icon}` : ''}`} />
       {isRenaming ? (
         <InlineRenameInput
           initialName={entry.name}

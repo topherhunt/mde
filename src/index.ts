@@ -21,6 +21,7 @@ import {
   flushAll,
 } from './git/checkpointer';
 import { VcCheckpointResult } from './types';
+import { isHiddenName } from './utils/fileKinds';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -554,6 +555,18 @@ ipcMain.handle('read-file', async (_event, filePath: string) => {
   return fs.promises.readFile(filePath, 'utf-8');
 });
 
+// For the plain-text editor, which must save back exactly the bytes it loaded. Decoding
+// silently turns invalid UTF-8 into U+FFFD, so a file that does not re-encode to identical
+// bytes (or holds a NUL, i.e. is binary) is refused rather than opened.
+ipcMain.handle('read-plain-text', async (_event, filePath: string) => {
+  const bytes = await fs.promises.readFile(filePath);
+  const text = bytes.toString('utf-8');
+  if (bytes.includes(0) || !Buffer.from(text, 'utf-8').equals(bytes)) {
+    throw new Error(`${path.basename(filePath)} is not UTF-8 text, so MDE cannot edit it without changing it.`);
+  }
+  return text;
+});
+
 // No unguarded 'write-file' IPC on purpose: all document writes go through
 // 'write-file-if-unchanged' below. Don't add a raw write-file -- it bypasses the guard.
 
@@ -694,7 +707,7 @@ ipcMain.handle('list-directory', async (_event, dirPath: string) => {
   const result: Array<{ name: string; path: string; isDirectory: boolean }> = [];
 
   for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue;
+    if (entry.isDirectory() ? entry.name.startsWith('.') : isHiddenName(entry.name)) continue;
     const fullPath = path.join(dirPath, entry.name);
     result.push({ name: entry.name, path: fullPath, isDirectory: entry.isDirectory() });
   }
@@ -724,7 +737,7 @@ async function walkProjectFiles(root: string): Promise<string[]> {
     let entries: fs.Dirent[];
     try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
     for (const entry of entries) {
-      if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+      if (SKIP_DIRS.has(entry.name) || (entry.isDirectory() ? entry.name.startsWith('.') : isHiddenName(entry.name))) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         queue.push(full);

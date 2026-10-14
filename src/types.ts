@@ -42,6 +42,9 @@ export interface Tab {
   // 'preview' shows a .pdf/.docx (`filePath`) read-only, with an offer to convert it. It is
   // never watched or saved: the source is not a document MDE writes.
   view?: 'history' | 'preview';
+  // Edited as literal text (PlainTextEditor) rather than as Markdown. Fixed when the tab
+  // opens, so renaming the file does not swap the editor under the buffer.
+  plainText?: boolean;
 }
 
 // A preview tab's sidebar outline entry; `select` scrolls the preview to it.
@@ -197,6 +200,8 @@ export interface VcCheckpointResult {
 export interface MdeAPI {
   platform: NodeJS.Platform;
   readFile: (filePath: string) => Promise<string>;
+  // Rejects a file that is not exactly UTF-8 text; see 'read-plain-text' in index.ts.
+  readPlainText: (filePath: string) => Promise<string>;
   hashFile: (filePath: string) => Promise<string | null>;
   // The ONLY document-write path. Refuses to overwrite a file changed on disk. No raw writeFile.
   writeFileIfUnchanged: (

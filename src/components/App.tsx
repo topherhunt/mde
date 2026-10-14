@@ -14,6 +14,8 @@ import QuickOpen from './QuickOpen';
 import { useVersionControl, VersionControl, CheckpointSettings } from './VersionPanel';
 import HistoryView, { HistoryNavRequest } from './HistoryView';
 import ImportPreview from './ImportPreview';
+import PlainTextEditor, { PlainTextHandle } from './PlainTextEditor';
+import { fileKind } from '../utils/fileKinds';
 import { DeleteConfirmDialog, ExportConflictDialog, copyFilePath, relativeToProject } from './FileContextMenu';
 import { markdownToDoc, docToPdfHtml, docToDocx, ExportFormat } from '../utils/exportDocument';
 import { Editor as TipTapEditor } from '@tiptap/react';
@@ -181,11 +183,34 @@ function fileNameFromPath(filePath: string): string {
   return basename(filePath) || 'Untitled';
 }
 
-const isImportable = (filePath: string) => /\.(docx|pdf)$/i.test(filePath);
+// What save and reload need from a tab's editor, whichever kind it is.
+type DocBuffer = Pick<PlainTextHandle, 'serialize' | 'version' | 'reloadFrom'>;
+
+function markdownBuffer(editor: TipTapEditor): DocBuffer {
+  return {
+    serialize: async () => (await import('../utils/markdown')).Markdown.serialize(editor),
+    version: () => editor.state.doc,
+    reloadFrom: async (filePath) => {
+      // Fold state is carried across by line number, not position.
+      const savedFoldLines = foldPosToLineNumbers(editor, getFoldedPositions(editor));
+      const content = await window.mde.readFile(filePath);
+      const { Markdown } = await import('../utils/markdown');
+      Markdown.deserializeInto(editor, content);
+      if (savedFoldLines.length) {
+        applyFoldPositions(editor, lineNumbersToFoldPositions(editor.state.doc, content, savedFoldLines));
+      }
+    },
+  };
+}
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const editorsRef = useRef<Map<string, TipTapEditor>>(new Map());
+  const plainEditorsRef = useRef<Map<string, PlainTextHandle>>(new Map());
+  const docBuffer = useCallback((tabId: string): DocBuffer | null => {
+    const editor = editorsRef.current.get(tabId);
+    return plainEditorsRef.current.get(tabId) ?? (editor ? markdownBuffer(editor) : null);
+  }, []);
   const closedTabsRef = useRef<string[]>([]);
   const scrollPositionsRef = useRef<Map<string, number>>(new Map());
   const suppressEditorFocusRef = useRef(false);
@@ -312,6 +337,8 @@ export default function App() {
   useEffect(() => {
     const editor = activeTab ? editorsRef.current.get(activeTab.id) || null : null;
     setActiveEditor(editor);
+    const plain = activeTab && plainEditorsRef.current.get(activeTab.id);
+    if (plain && !suppressEditorFocusRef.current) plain.focus();
     if (editor && !suppressEditorFocusRef.current) {
       editor.commands.focus();
       const tabId = activeTab?.id;
@@ -346,7 +373,8 @@ export default function App() {
       }
     }
 
-    if (isImportable(filePath)) {
+    const kind = fileKind(filePath);
+    if (kind === 'importable') {
       dispatch({
         type: 'OPEN_TAB',
         tab: {
@@ -355,6 +383,15 @@ export default function App() {
         },
       });
       return;
+    }
+
+    if (kind === 'plaintext') {
+      try {
+        await window.mde.readPlainText(filePath);
+      } catch (err) {
+        showToast(err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(err), 'danger');
+        return;
+      }
     }
 
     const [stats, diskHash] = await Promise.all([
@@ -370,11 +407,12 @@ export default function App() {
       diskHash,
       conflict: false,
       tentative,
+      plainText: kind === 'plaintext',
     };
     recordDiskHash(filePath, diskHash);
     dispatch({ type: 'OPEN_TAB', tab });
     window.mde.watchFile(filePath);
-  }, [state.tabs]);
+  }, [state.tabs, showToast]);
 
   // Cmd/Ctrl+click on a link in the editor. External URLs open in the browser;
   // relative paths resolve against the source file's folder (or the project root
@@ -500,7 +538,8 @@ export default function App() {
     if (!activeTab || activeTab.view) return;
     // Never return silently: a buffer that cannot save must say so. The throw reaches the
     // red error banner via the unhandledrejection listener.
-    if (!activeEditor) throw new Error(`Save failed: "${activeTab.fileName}" has no connected editor. Copy your text somewhere safe, then close and reopen the file.`);
+    const buffer = docBuffer(activeTab.id);
+    if (!buffer) throw new Error(`Save failed: "${activeTab.fileName}" has no connected editor. Copy your text somewhere safe, then close and reopen the file.`);
     if (activeTab.conflict) return;
     if (savingRef.current) return;
 
@@ -516,10 +555,9 @@ export default function App() {
       if (!filePath) return;
     }
 
-    const { Markdown } = await import('../utils/markdown');
-    const markdown = Markdown.serialize(activeEditor);
+    const content = await buffer.serialize();
     // What we are about to put on disk. Anything typed after this point is NOT in it.
-    const docAtWrite = activeEditor.state.doc;
+    const versionAtWrite = buffer.version();
 
     // DATA-SAFETY GUARD (do not bypass): overwrite only if the file still hashes to what we
     // last synced; else writeFileIfUnchanged refuses and we show the conflict banner. null = new path.
@@ -532,7 +570,7 @@ export default function App() {
     savingRef.current = true;
     let result;
     try {
-      result = await window.mde.writeFileIfUnchanged(filePath, markdown, expectedHash);
+      result = await window.mde.writeFileIfUnchanged(filePath, content, expectedHash);
     } finally {
       savingRef.current = false;
     }
@@ -562,13 +600,13 @@ export default function App() {
     // Edits made while the write was in flight are not in the file -- keeping the tab
     // clean would silently drop them (the editor re-baselines its clean snapshot on the
     // dirty->clean edge). Leave it dirty and re-arm autosave for the remainder.
-    if (activeEditor.state.doc === docAtWrite) {
+    if (buffer.version() === versionAtWrite) {
       dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
     } else {
       triggerAutosaveRef.current();
     }
     window.mde.watchFile(filePath);
-  }, [activeTab, activeEditor, knownDiskHash, recordDiskHash]);
+  }, [activeTab, docBuffer, knownDiskHash, recordDiskHash]);
 
   const triggerAutosave = useCallback(() => {
     if (!autosave) return;
@@ -586,16 +624,16 @@ export default function App() {
   triggerAutosaveRef.current = triggerAutosave;
 
   const saveActiveTabAs = useCallback(async () => {
-    if (!activeTab || !activeEditor) return;
+    const buffer = activeTab && docBuffer(activeTab.id);
+    if (!buffer) return;
 
     const filePath = await window.mde.showSaveDialog(activeTab.filePath || undefined);
     if (!filePath) return;
 
-    const { Markdown } = await import('../utils/markdown');
-    const markdown = Markdown.serialize(activeEditor);
+    const content = await buffer.serialize();
     // Save As writes to a user-chosen path (possibly overwriting a different file on
     // purpose), so we force the write and adopt the new file's hash as our baseline.
-    const result = await window.mde.writeFileIfUnchanged(filePath, markdown, null);
+    const result = await window.mde.writeFileIfUnchanged(filePath, content, null);
     recordDiskHash(filePath, result.hash);
 
     dispatch({
@@ -609,32 +647,23 @@ export default function App() {
     dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
     dispatch({ type: 'MARK_CONFLICT', tabId: activeTab.id, conflict: false });
     window.mde.watchFile(filePath);
-  }, [activeTab, activeEditor]);
+  }, [activeTab, docBuffer]);
 
   const reloadActiveTab = useCallback(async () => {
-    if (!activeTab || !activeEditor || !activeTab.filePath) return;
+    const buffer = activeTab && docBuffer(activeTab.id);
+    if (!buffer || !activeTab.filePath) return;
 
-    // Save fold state before reload (line numbers, not positions)
-    const savedFoldLines = foldPosToLineNumbers(activeEditor, getFoldedPositions(activeEditor));
-
-    const content = await window.mde.readFile(activeTab.filePath);
+    await buffer.reloadFrom(activeTab.filePath);
     const [stats, diskHash] = await Promise.all([
       window.mde.getFileStats(activeTab.filePath),
       window.mde.hashFile(activeTab.filePath),
     ]);
-    const { Markdown } = await import('../utils/markdown');
-    Markdown.deserializeInto(activeEditor, content);
-
-    // Restore fold state after reload
-    if (savedFoldLines.length) {
-      applyFoldPositions(activeEditor, lineNumbersToFoldPositions(activeEditor.state.doc, content, savedFoldLines));
-    }
 
     recordDiskHash(activeTab.filePath, diskHash);
     dispatch({ type: 'UPDATE_TAB_MTIME', tabId: activeTab.id, mtime: stats?.mtimeMs ?? null, hash: diskHash });
     dispatch({ type: 'MARK_DIRTY', tabId: activeTab.id, dirty: false });
     dispatch({ type: 'MARK_CONFLICT', tabId: activeTab.id, conflict: false });
-  }, [activeTab, activeEditor]);
+  }, [activeTab, docBuffer]);
 
   const scrollListenersRef = useRef<Map<string, () => void>>(new Map());
 
@@ -655,8 +684,14 @@ export default function App() {
     });
   }, []);
 
+  const registerPlainEditor = useCallback((tabId: string, handle: PlainTextHandle) => {
+    plainEditorsRef.current.set(tabId, handle);
+    if (tabId === activeTabIdRef.current && !suppressEditorFocusRef.current) handle.focus();
+  }, []);
+
   const unregisterEditor = useCallback((tabId: string) => {
     editorsRef.current.delete(tabId);
+    plainEditorsRef.current.delete(tabId);
     scrollPositionsRef.current.delete(tabId);
     const cleanup = scrollListenersRef.current.get(tabId);
     if (cleanup) { cleanup(); scrollListenersRef.current.delete(tabId); }
@@ -777,7 +812,10 @@ export default function App() {
       window.mde.onSaveFile(saveActiveTab),
       window.mde.onSaveFileAs(saveActiveTabAs),
       window.mde.onToggleFind(() => {
-        if (findBarOpenRef.current) {
+        const plain = plainEditorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
+        if (plain) {
+          plain.openSearch();
+        } else if (findBarOpenRef.current) {
           setFindFocusTrigger(n => n + 1);
         } else {
           dispatch({ type: 'TOGGLE_FIND_BAR' });
@@ -797,7 +835,7 @@ export default function App() {
       window.mde.onShowWordCount(() => setWordCountOpen(true)),
       window.mde.onExportActiveTab((format) => {
         const tab = state.tabs[state.activeTabIndex];
-        if (!tab || tab.view || !tab.filePath || !/\.(md|markdown)$/i.test(tab.filePath)) {
+        if (!tab || tab.view || !tab.filePath || tab.plainText || fileKind(tab.filePath) !== 'markdown') {
           showToast(tab && !tab.filePath && !tab.readOnly ? 'Save the file first, then export it.' : 'Open a Markdown file to export it.', 'danger');
         } else {
           exportFile(tab.filePath, format);
@@ -852,20 +890,8 @@ export default function App() {
         if (current.dirty) {
           dispatch({ type: 'MARK_CONFLICT', tabId: tab.id, conflict: true });
         } else {
-          const editor = editorsRef.current.get(tab.id);
-          if (editor) {
-            // Save fold state before silent reload
-            const savedFoldLines = foldPosToLineNumbers(editor, getFoldedPositions(editor));
-
-            const content = await window.mde.readFile(filePath);
-            const { Markdown } = await import('../utils/markdown');
-            Markdown.deserializeInto(editor, content);
-
-            // Restore fold state after silent reload
-            if (savedFoldLines.length) {
-              applyFoldPositions(editor, lineNumbersToFoldPositions(editor.state.doc, content, savedFoldLines));
-            }
-          }
+          const buffer = docBuffer(tab.id);
+          if (buffer) await buffer.reloadFrom(filePath);
           recordDiskHash(filePath, diskHash);
           dispatch({ type: 'UPDATE_TAB_MTIME', tabId: tab.id, mtime: stats.mtimeMs, hash: diskHash });
           // Positive proof to the user that live detection is working: a thin blue banner
@@ -876,7 +902,7 @@ export default function App() {
     ];
 
     return () => cleanups.forEach(fn => fn());
-  }, [openFile, saveActiveTab, saveActiveTabAs, handleCloseTab, openKeyboardShortcuts, exportFile, openCheckpointHistory, vc.state.attach, state.tabs, state.activeTabIndex, state.projectRoot]);
+  }, [openFile, saveActiveTab, saveActiveTabAs, handleCloseTab, openKeyboardShortcuts, exportFile, openCheckpointHistory, docBuffer, vc.state.attach, state.tabs, state.activeTabIndex, state.projectRoot]);
 
   useEffect(() => {
     window.mde.getProjectRoot().then(root => {
@@ -988,7 +1014,7 @@ export default function App() {
           }
           return;
         }
-        if (/\.(md|markdown|txt)$/i.test(filePath) || isImportable(filePath)) {
+        if (fileKind(filePath) !== 'other') {
           openFile(filePath);
         } else if (isImageFile(file)) {
           showToast('To add an image, drop it into the document.', 'danger');
@@ -1084,7 +1110,7 @@ export default function App() {
             onViewFileHistory={viewFileHistory}
             onExport={exportFile}
           />
-          {!activeTab?.readOnly && toolbarVisible && (
+          {!activeTab?.readOnly && !activeTab?.plainText && toolbarVisible && (
             <Toolbar editor={activeEditor} linkTrigger={linkTrigger} onToast={showToast} onLinkEdit={() => setLinkBarVisible(true)} leaving={toolbarLeaving} />
           )}
           {state.findBarOpen && activeEditor && (
@@ -1099,7 +1125,7 @@ export default function App() {
             />
           )}
           <div className="editor-area">
-            {!activeTab?.readOnly && !toolbarVisible && (
+            {!activeTab?.readOnly && !activeTab?.plainText && !toolbarVisible && (
               <button
                 className="toolbar-btn toolbar-expand qa-toolbar-expand"
                 data-tooltip={`Show toolbar (${TOGGLE_TOOLBAR_HINT})`}
@@ -1150,6 +1176,16 @@ export default function App() {
                   />
                 ) : tab.view === 'preview' && tab.filePath ? (
                   <ImportPreview tabId={tab.id} filePath={tab.filePath} onConvert={runConvert} onOpenFile={openFile} onOutline={setPreviewOutline} onOutlineActive={setPreviewOutlineActive} />
+                ) : tab.plainText ? (
+                  <PlainTextEditor
+                    tab={tab}
+                    onReady={(handle) => registerPlainEditor(tab.id, handle)}
+                    onDestroy={() => unregisterEditor(tab.id)}
+                    onDirtyChange={(dirty) => {
+                      dispatch({ type: 'MARK_DIRTY', tabId: tab.id, dirty });
+                      if (dirty) triggerAutosave();
+                    }}
+                  />
                 ) : (
                   <Editor
                     tab={tab}

@@ -38,6 +38,7 @@ Break these and something silently corrupts, clobbers, or infinite-loops.
 - **Never remove** `forge.config.ts`**'s** `postPackage` **ad-hoc re-sign hook.** Forge leaves the macOS bundle with a signature that no longer matches it, and a BROKEN signature means "damaged, move to Trash" with no Open Anyway button -- strictly worse than no signature. The hook's `codesign --verify` gate must stay too, or the breakage is invisible until a user hits it. -> notes: Packaging and webpack
 - **No** `codesign --deep` **after** `buildQuickLookExtension` **in** `postPackage`. It re-signs the appexes without their sandbox entitlement, macOS then silently never loads it, and `codesign --verify --deep --strict` STILL PASSES -- only `verifyQuickLookExtension` and `tests/packaged.spec.ts` notice. -> notes: Quick Look preview
 - **An image saves its captured source text, never a rebuild from** `src`**/**`alt`**.** markdown-it percent-encodes the path and flattens the alt, so a rebuild rewrites the user's reference on every save. -> notes: Markdown serialization
+- **A plain-text file saves back exactly the bytes it loaded, plus the user's edits.** Never normalize line endings, whitespace, or encoding; never open one through `read-file` (lossy on invalid UTF-8) or in the Markdown editor. -> notes: Plain-text files
 - **Import never mutates the source file.** No renaming, moving, or hiding, and no code path overwrites an already-converted Markdown. -> notes: Import (DOCX / PDF)
 - `confirm()` **and** `alert()` **don't work in Electron's renderer.** Use in-app toasts or inline confirmation UI.
 - **Renderer webpack config must NOT use** `@vercel/webpack-asset-relocator-loader` -- it breaks ESM imports from TipTap packages. Main process only.
@@ -129,6 +130,11 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 - **Restoring one file never fires from a button.** The button says only "Restore" and opens `RestoreFileDialog`, which offers BOTH directions -- "Undo this change" (`checkpoint.parent`) and "Use this version" (`checkpoint.sha`) -- because "restore to this checkpoint" is genuinely ambiguous next to a red/green diff. The cards must stay tinted with the diff's own `--diff-del-*` / `--diff-add-*`, not generic danger/success: that colour match IS the explanation. -> notes: Checkpoints
 - **A tooltip inside** `.sidebar-content` **must not be centre-anchored.** `[data-tooltip]::after` is absolutely positioned and `nowrap`, and opacity 0 still takes part in layout, so one on a right-edge button pushed the panel's scrollable width ~47px past its visible width -- a permanent horizontal scrollbar with nothing to scroll to, at every sidebar width. The scoped rule right-anchors them. -> notes: UI details
 
+### Plain-text files
+
+- `utils/fileKinds.ts` (`fileKind`) is the ONLY place that decides how a file opens (markdown / plaintext / importable / other) and which dotfiles are listed. Plain text is a fixed allowlist, no content sniffing. -> notes: Plain-text files
+- Plain-text tabs (`tab.plainText`) use `PlainTextEditor` (CodeMirror 6, no language package), no toolbar, no outline, no export. Save/reload go through App's `DocBuffer`, so the hash guard and conflict machinery are shared. -> notes: Plain-text files
+
 ### Import and packaging
 
 - Clicking a `.pdf`/`.docx` opens a read-only preview TAB (`view: 'preview'`) with a convert bar in the toolbar's place -- never a dialog. PDF uses Chromium's built-in viewer via `mde-file:` with its toolbar and thumbnails hidden; DOCX HTML MUST go through `sanitizeDocxHtml`. The sidebar Outline lists the preview's headings (PDF: bookmarks, else pages); a PDF jump must remount the iframe, since the viewer ignores a hash change. -> notes: Import (DOCX / PDF)
@@ -169,7 +175,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-300 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+320 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { FileEntry } from '../types';
 import type { ExportFormat } from '../utils/exportDocument';
 import { basename } from '../utils/paths';
+import { fileKind } from '../utils/fileKinds';
 
 // Single source of truth for the file context menu, shared by the file
 // explorer (Sidebar) and the tab bar. Adding or changing a menu item here
@@ -127,7 +128,7 @@ export function FileContextMenu({
           <div className="ctx-menu-divider" />
         </>
       )}
-      {!target.isDirectory && /\.(md|markdown)$/i.test(target.name) && (
+      {!target.isDirectory && fileKind(target.name) === 'markdown' && (
         <>
           <button className="ctx-menu-item qa-ctx-export-pdf" onClick={() => { onExport(target.path, 'pdf'); onClose(); }}>
             <i className="bi bi-file-earmark-pdf" /> Export as PDF
