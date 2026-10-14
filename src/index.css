@@ -608,6 +608,22 @@ body {
   flex-shrink: 0;
 }
 
+/* Stands in for the toolbar on a PDF / DOCX preview tab. */
+.import-bar {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.pdf-preview {
+  flex: 1;
+  width: 100%;
+  border: 0;
+}
+
 .toolbar.disabled {
   height: 37px;
   border-bottom: 1px solid var(--border);

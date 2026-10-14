@@ -206,6 +206,12 @@ const api = {
   getImportTarget: (filePath: string): Promise<{ mdPath: string; exists: boolean }> =>
     ipcRenderer.invoke('get-import-target', filePath),
 
+  previewDocx: (filePath: string): Promise<string> =>
+    ipcRenderer.invoke('preview-docx', filePath),
+
+  previewPdfOutline: (filePath: string): Promise<{ level: number; title: string; page: number }[]> =>
+    ipcRenderer.invoke('preview-pdf-outline', filePath),
+
   listProjectFiles: (root: string): Promise<string[]> =>
     ipcRenderer.invoke('list-project-files', root),
 

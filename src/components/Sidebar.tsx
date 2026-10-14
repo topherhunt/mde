@@ -5,7 +5,7 @@ import { basename, dirname, joinPath } from '../utils/paths';
 import { FileContextMenu, DeleteConfirmDialog } from './FileContextMenu';
 import type { ExportFormat } from '../utils/exportDocument';
 import VersionPanel, { VersionControl } from './VersionPanel';
-import { HistoryTarget, SidebarMode } from '../types';
+import { HistoryTarget, PreviewOutlineState, SidebarMode } from '../types';
 
 interface SidebarProps {
   projectRoot: string | null;
@@ -13,8 +13,9 @@ interface SidebarProps {
   onSetMode: (mode: SidebarMode) => void;
   vc: VersionControl;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
-  onImportFile: (filePath: string) => void;
   activeEditor: TipTapEditor | null;
+  // null when the active tab is not a preview; undefined while the preview's outline loads.
+  previewOutline: PreviewOutlineState | undefined | null;
   activeFilePath: string | null;
   refreshKey: number;
   onToast: (msg: string, variant?: string) => void;
@@ -27,7 +28,7 @@ interface SidebarProps {
   onExport: (sourcePath: string, format: ExportFormat) => void;
 }
 
-export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, onImportFile, activeEditor, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed, onOpenHistory, onOpenSettings, onViewFileHistory, onExport }: SidebarProps) {
+export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, activeEditor, previewOutline, activeFilePath, refreshKey, onToast, onDeleteFile, onFileRenamed, onOpenHistory, onOpenSettings, onViewFileHistory, onExport }: SidebarProps) {
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const resizing = useRef(false);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -137,7 +138,6 @@ export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, 
           <FileExplorer
             projectRoot={projectRoot}
             onOpenFile={onOpenFile}
-            onImportFile={onImportFile}
             activeFilePath={activeFilePath}
             refreshKey={refreshKey}
             onToast={onToast}
@@ -150,6 +150,8 @@ export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, 
             onViewFileHistory={onViewFileHistory}
             onExport={onExport}
           />
+        ) : previewOutline !== null ? (
+          <PreviewOutline outline={previewOutline} />
         ) : (
           <DocumentOutline editor={activeEditor} />
         )}
@@ -162,7 +164,6 @@ export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, 
 interface FileExplorerProps {
   projectRoot: string | null;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
-  onImportFile: (filePath: string) => void;
   activeFilePath: string | null;
   refreshKey: number;
   onToast: (msg: string, variant?: string) => void;
@@ -206,7 +207,7 @@ function flattenVisibleEntries(
   return result;
 }
 
-function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef, onDeleteFile, onFileRenamed, onViewFileHistory, onExport }: FileExplorerProps) {
+function FileExplorer({ projectRoot, onOpenFile, activeFilePath, refreshKey, onToast, expandedPaths, onToggleExpanded, onCollapseAll, sidebarRef, onDeleteFile, onFileRenamed, onViewFileHistory, onExport }: FileExplorerProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingEntry, setRenamingEntry] = useState<FileEntry | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -422,7 +423,6 @@ function FileExplorer({ projectRoot, onOpenFile, onImportFile, activeFilePath, r
         path={projectRoot}
         name={basename(projectRoot) || ''}
         onOpenFile={onOpenFile}
-        onImportFile={onImportFile}
         activeFilePath={activeFilePath}
         refreshKey={refreshKey + localRefresh}
         isRoot
@@ -475,7 +475,6 @@ interface DirectoryNodeProps {
   path: string;
   name: string;
   onOpenFile: (filePath: string, tentative?: boolean) => void;
-  onImportFile: (filePath: string) => void;
   activeFilePath: string | null;
   refreshKey: number;
   isRoot?: boolean;
@@ -499,7 +498,7 @@ interface DirectoryNodeProps {
   onSetDropTarget: (path: string | null) => void;
 }
 
-function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, refreshKey, isRoot, onContextMenu, renamingEntry, onRenameComplete, creating, onSetCreating, onCreate, selectedPath, onSelect, expandedPaths, onToggleExpanded, onCollapseAll, onRegisterEntries, dragSourcePath, dropTargetPath, onDragStart, onDragEnd, onDropOnFolder, onSetDropTarget }: DirectoryNodeProps) {
+function DirectoryNode({ path, name, onOpenFile, activeFilePath, refreshKey, isRoot, onContextMenu, renamingEntry, onRenameComplete, creating, onSetCreating, onCreate, selectedPath, onSelect, expandedPaths, onToggleExpanded, onCollapseAll, onRegisterEntries, dragSourcePath, dropTargetPath, onDragStart, onDragEnd, onDropOnFolder, onSetDropTarget }: DirectoryNodeProps) {
   const expanded = expandedPaths.has(path);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -535,7 +534,6 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
           path={entry.path}
           name={entry.name}
           onOpenFile={onOpenFile}
-          onImportFile={onImportFile}
           activeFilePath={activeFilePath}
           refreshKey={refreshKey}
           onContextMenu={onContextMenu}
@@ -567,7 +565,6 @@ function DirectoryNode({ path, name, onOpenFile, onImportFile, activeFilePath, r
         <FileNode
           entry={entry}
           onOpenFile={onOpenFile}
-          onImportFile={onImportFile}
           active={entry.path === activeFilePath}
           selected={entry.path === selectedPath}
           onContextMenu={onContextMenu}
@@ -766,10 +763,9 @@ function InlineCreateInput({ type, onSubmit, onCancel }: { type: 'file' | 'folde
   );
 }
 
-function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContextMenu, isRenaming, onRenameComplete, onSelect, onDragStart, onDragEnd, parentPath, dragSourcePath, dropTargetPath, onSetDropTarget, onDropOnFolder }: {
+function FileNode({ entry, onOpenFile, active, selected, onContextMenu, isRenaming, onRenameComplete, onSelect, onDragStart, onDragEnd, parentPath, dragSourcePath, dropTargetPath, onSetDropTarget, onDropOnFolder }: {
   entry: FileEntry;
   onOpenFile: (path: string, tentative?: boolean) => void;
-  onImportFile: (path: string) => void;
   active?: boolean;
   selected?: boolean;
   onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
@@ -790,8 +786,7 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
 
   const handleClick = () => {
     onSelect(entry);
-    if (editable) onOpenFile(entry.path, true);
-    else if (importable) onImportFile(entry.path);
+    if (clickable) onOpenFile(entry.path, true);
   };
 
   const handleFileDragOver = (e: React.DragEvent) => {
@@ -818,7 +813,7 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
     <div
       className={`tree-item tree-file ${clickable ? '' : 'tree-file-disabled'} ${importable ? 'tree-file-importable' : ''} ${active ? 'tree-file-active' : ''} ${selected ? 'tree-item-selected' : ''}`}
       onClick={handleClick}
-      onDoubleClick={editable ? () => onOpenFile(entry.path, false) : undefined}
+      onDoubleClick={clickable ? () => onOpenFile(entry.path, false) : undefined}
       onContextMenu={(e) => onContextMenu(e, entry)}
       draggable
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(entry.path); }}
@@ -836,6 +831,25 @@ function FileNode({ entry, onOpenFile, onImportFile, active, selected, onContext
       ) : (
         <span className="tree-name">{entry.name}</span>
       )}
+    </div>
+  );
+}
+
+// A PDF/DOCX preview's outline; the preview decides which entry is highlighted.
+function PreviewOutline({ outline }: { outline: PreviewOutlineState | undefined }) {
+  if (outline === undefined) return <div className="sidebar-empty">Loading outline...</div>;
+  if (outline.items.length === 0) return <div className="sidebar-empty">No headings found</div>;
+  return (
+    <div className="outline qa-preview-outline">
+      {outline.items.map((item, i) => (
+        <div
+          key={i}
+          className={`outline-item outline-h${item.level} ${i === outline.active ? 'active' : ''}`}
+          onClick={item.select}
+        >
+          {item.text || '(empty heading)'}
+        </div>
+      ))}
     </div>
   );
 }

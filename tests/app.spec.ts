@@ -19,6 +19,36 @@ function makeTmpDir(): string {
   return dir;
 }
 
+// A 3-page PDF with bookmarks Intro -> p1, Methods -> p2, and Details (nested under Methods) -> p3.
+function pdfWithBookmarks(): Buffer {
+  const pageObj = (content: number) => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents ${content} 0 R >>`;
+  const stream = (text: string) => { const s = `BT /F1 36 Tf 72 700 Td (${text}) Tj ET`; return `<< /Length ${s.length} >>\nstream\n${s}\nendstream`; };
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >>',
+    '<< /Type /Pages /Kids [8 0 R 9 0 R 10 0 R] /Count 3 >>',
+    '<< /Type /Outlines /First 4 0 R /Last 5 0 R /Count 3 >>',
+    '<< /Title (Intro) /Parent 3 0 R /Next 5 0 R /Dest [8 0 R /Fit] >>',
+    '<< /Title (Methods) /Parent 3 0 R /Prev 4 0 R /First 6 0 R /Last 6 0 R /Count 1 /Dest [9 0 R /Fit] >>',
+    '<< /Title (Details) /Parent 5 0 R /Dest [10 0 R /Fit] >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    pageObj(11), pageObj(12), pageObj(13),
+    stream('Intro page'), stream('Methods page'), stream('Details page'),
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  objects.forEach((body, i) => { offsets.push(out.length); out += `${i + 1} 0 obj\n${body}\nendobj\n`; });
+  const xref = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
+
+async function openProject(root: string): Promise<void> {
+  await app.evaluate(({ BrowserWindow }, r) => {
+    BrowserWindow.getAllWindows()[0].webContents.send('open-project', r);
+  }, root);
+}
+
 test.afterEach(async () => {
   if (app) {
     await app.close();
@@ -1570,7 +1600,204 @@ test.describe('Import conversion', () => {
     await expect(names.filter({ hasText: /^report\.docx$/ })).toHaveCount(1);
   });
 
-  test('clicking an already-converted file offers to open the Markdown, not reconvert', async () => {
+  test('clicking a DOCX opens a read-only preview with a convert bar, then converts it', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const docxDst = path.join(tmpDir, 'sample.docx');
+    fs.copyFileSync(fixturePath('sample-files.com-large-document.docx'), docxDst);
+    await openProject(tmpDir);
+
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^sample\.docx$/ }).click();
+
+    const preview = page.locator('.qa-docx-preview');
+    await expect(preview).toContainText('Sample Large Multi-Section Document', { timeout: 10000 });
+    await expect(preview.locator('table').first()).toBeVisible();
+    const bar = page.locator('.qa-import-bar');
+    await expect(bar).toContainText('sample.docx.md');
+    await expect(bar).toContainText('left untouched');
+    await expect(bar).toContainText('formatting may be simplified');
+    // No dialog any more, and the preview is not an editor.
+    await expect(page.locator('.modal-backdrop')).toHaveCount(0);
+    await expect(page.locator('.qa-import-preview .ProseMirror')).toHaveCount(0);
+    await expect(page.locator('.tab.active')).toContainText('sample.docx');
+
+    await bar.locator('.qa-convert').click();
+
+    const mdPath = path.join(tmpDir, 'sample.docx.md');
+    await expect.poll(() => fs.existsSync(mdPath), { timeout: 15000 }).toBe(true);
+    await expect(page.locator('.tab.active')).toContainText('sample.docx.md', { timeout: 5000 });
+    await expect(page.locator('.ProseMirror').last()).toContainText('Sample Large Multi-Section Document');
+    expect(fs.existsSync(docxDst)).toBe(true);
+  });
+
+  test('clicking a PDF shows it in the built-in PDF viewer', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    const pdfDst = path.join(tmpDir, 'sample.pdf');
+    fs.copyFileSync(fixturePath('sample-20-page-pdf-a4-size.pdf'), pdfDst);
+    await openProject(tmpDir);
+
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^sample\.pdf$/ }).click();
+
+    const frame = page.locator('.qa-pdf-preview');
+    await expect(frame).toBeAttached({ timeout: 5000 });
+    await expect(page.locator('.qa-import-bar')).toContainText('sample.pdf.md');
+    await expect(page.locator('.qa-import-bar .qa-convert')).toBeVisible();
+
+    // The frame's URL serves the real bytes as a PDF...
+    const src = await frame.getAttribute('src');
+    const served = await page.evaluate(async (url: string) => {
+      const res = await fetch(url);
+      return { status: res.status, type: res.headers.get('content-type'), size: (await res.arrayBuffer()).byteLength };
+    }, src!);
+    expect(served).toEqual({ status: 200, type: 'application/pdf', size: fs.statSync(pdfDst).size });
+
+    // ...and Chromium's PDF viewer (a built-in extension, framed inside ours) actually loaded for it.
+    await expect.poll(() => page.frames().some((f) => f.url().startsWith('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/')),
+      { timeout: 10000 }).toBe(true);
+  });
+
+  // The page Chromium's PDF viewer shows most of, 0-based. Reads viewer internals, so a Chromium
+  // upgrade that renames them fails here loudly rather than passing vacuously.
+  const pdfViewerPage = () => {
+    const viewer = page.frames().find((f) => f.url().startsWith('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/'));
+    return viewer ? viewer.evaluate(() => (document.querySelector('pdf-viewer') as any).viewport_.getMostVisiblePage()).catch(() => null) : null;
+  };
+
+  test('the PDF preview hides the viewer toolbar and lists pages in the outline', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.copyFileSync(fixturePath('sample-20-page-pdf-a4-size.pdf'), path.join(tmpDir, 'sample.pdf'));
+    await openProject(tmpDir);
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^sample\.pdf$/ }).click();
+    await expect(page.locator('.qa-pdf-preview')).toHaveAttribute('src', /#toolbar=0&navpanes=0$/, { timeout: 5000 });
+    await expect.poll(pdfViewerPage, { timeout: 10000 }).toBe(0);
+
+    // The fixture has no bookmarks, so the outline falls back to one entry per page.
+    await page.locator('[title="Document Outline"]').click();
+    const items = page.locator('.qa-preview-outline .outline-item');
+    await expect(items).toHaveCount(20, { timeout: 5000 });
+    await expect(items.first()).toHaveText('Page 1');
+
+    await items.filter({ hasText: /^Page 7$/ }).click();
+    await expect.poll(pdfViewerPage, { timeout: 10000 }).toBe(6);
+    // Clicking the same entry again still jumps, after the reader has moved elsewhere.
+    await items.filter({ hasText: /^Page 2$/ }).click();
+    await expect.poll(pdfViewerPage, { timeout: 10000 }).toBe(1);
+    await items.filter({ hasText: /^Page 7$/ }).click();
+    await expect.poll(pdfViewerPage, { timeout: 10000 }).toBe(6);
+  });
+
+  test('the PDF preview outline lists bookmarks, nested, and jumps to their pages', async () => {
+    ({ app, page } = await launchApp());
+
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'marked.pdf'), pdfWithBookmarks());
+    await openProject(tmpDir);
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^marked\.pdf$/ }).click();
+    await page.locator('[title="Document Outline"]').click();
+
+    const items = page.locator('.qa-preview-outline .outline-item');
+    await expect(items).toHaveText(['Intro', 'Methods', 'Details'], { timeout: 10000 });
+    await expect(items.nth(1)).toHaveClass(/outline-h1/);
+    await expect(items.nth(2)).toHaveClass(/outline-h2/);
+
+    await expect.poll(pdfViewerPage, { timeout: 10000 }).toBe(0);
+    await items.nth(2).click();
+    await expect.poll(pdfViewerPage, { timeout: 10000 }).toBe(2);
+    await expect(items.nth(2)).toHaveClass(/active/);
+    await expect(page.locator('.qa-preview-outline .outline-item.active')).toHaveCount(1);
+  });
+
+  test('the DOCX preview outline lists its headings and scrolls to them', async () => {
+    ({ app, page } = await launchApp());
+
+    const { Document, Packer, Paragraph, HeadingLevel } = require('docx');
+    const filler = Array.from({ length: 80 }, (_, i) => new Paragraph(`Filler paragraph ${i}.`));
+    const doc = new Document({ sections: [{ children: [
+      new Paragraph({ text: 'Alpha Heading', heading: HeadingLevel.HEADING_1 }),
+      ...filler,
+      new Paragraph({ text: 'Beta Subheading', heading: HeadingLevel.HEADING_2 }),
+      ...filler,
+    ] }] });
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'outlined.docx'), await Packer.toBuffer(doc));
+    await openProject(tmpDir);
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^outlined\.docx$/ }).click();
+    await page.locator('[title="Document Outline"]').click();
+
+    const items = page.locator('.qa-preview-outline .outline-item');
+    await expect(items).toHaveText(['Alpha Heading', 'Beta Subheading'], { timeout: 10000 });
+    await expect(items.nth(1)).toHaveClass(/outline-h2/);
+
+    const beta = page.locator('.qa-docx-preview h2', { hasText: 'Beta Subheading' });
+    await expect(beta).not.toBeInViewport();
+    await expect(items.nth(0)).toHaveClass(/active/);
+    await items.nth(1).click();
+    await expect(beta).toBeInViewport();
+    await expect(items.nth(1)).toHaveClass(/active/);
+    await expect(items.nth(0)).not.toHaveClass(/active/);
+
+    // The highlight follows the reader's own scrolling, not just outline clicks.
+    await page.locator('.qa-import-preview .editor-content').evaluate((el) => { el.scrollTop = 0; });
+    await expect(items.nth(0)).toHaveClass(/active/);
+    await expect(items.nth(1)).not.toHaveClass(/active/);
+  });
+
+  test('the PDF preview is allowed by the dev server CSP', async () => {
+    ({ app, page } = await launchApp());
+
+    // `npm start` serves the renderer under forge.config.ts's devContentSecurityPolicy; the suite
+    // loads file:// with no CSP at all. Send the real policy as a header so a frame-src that
+    // omits mde-file: fails here rather than only in dev.
+    const forgeConfig = fs.readFileSync(path.join(__dirname, '..', 'forge.config.ts'), 'utf-8');
+    const csp = forgeConfig.match(/devContentSecurityPolicy:\s*"([^"]+)"/)![1];
+    await app.evaluate(({ session }, policy) => {
+      session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
+        cb({ responseHeaders: details.resourceType === 'mainFrame'
+          ? { ...details.responseHeaders, 'Content-Security-Policy': [policy] }
+          : details.responseHeaders });
+      });
+    }, csp);
+    await page.reload();
+
+    const tmpDir = makeTmpDir();
+    fs.copyFileSync(fixturePath('sample-20-page-pdf-a4-size.pdf'), path.join(tmpDir, 'sample.pdf'));
+    await openProject(tmpDir);
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^sample\.pdf$/ }).click();
+
+    await expect.poll(() => page.frames().some((f) => f.url().startsWith('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/')),
+      { timeout: 10000 }).toBe(true);
+  });
+
+  test('the DOCX preview strips script links but keeps web links', async () => {
+    ({ app, page } = await launchApp());
+
+    const { Document, Packer, Paragraph, ExternalHyperlink, TextRun } = require('docx');
+    const link = (text: string, href: string) => new ExternalHyperlink({ link: href, children: [new TextRun(text)] });
+    const doc = new Document({ sections: [{ children: [
+      new Paragraph({ children: [link('evil link', 'javascript:document.title="pwned"')] }),
+      new Paragraph({ children: [link('good link', 'https://example.com/')] }),
+    ] }] });
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'links.docx'), await Packer.toBuffer(doc));
+    await openProject(tmpDir);
+
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^links\.docx$/ }).click();
+    const preview = page.locator('.qa-docx-preview');
+    await expect(preview).toContainText('good link', { timeout: 10000 });
+    await expect(preview.locator('a', { hasText: 'good link' })).toHaveAttribute('href', 'https://example.com/');
+    // The script link keeps its text but loses its href, so clicking it runs nothing.
+    await expect(preview).toContainText('evil link');
+    expect(await preview.locator('a', { hasText: 'evil link' }).getAttribute('href')).toBeNull();
+    await preview.getByText('evil link').click();
+    expect(await page.title()).not.toBe('pwned');
+  });
+
+  test('previewing an already-converted file offers to open the Markdown, not reconvert', async () => {
     ({ app, page } = await launchApp());
 
     const tmpDir = makeTmpDir();
@@ -1578,23 +1805,19 @@ test.describe('Import conversion', () => {
     const docxDst = path.join(tmpDir, 'sample.docx');
     fs.copyFileSync(docxSrc, docxDst);
     fs.writeFileSync(path.join(tmpDir, 'sample.docx.md'), '# Already converted\n\nEdited by hand.\n');
-
-    await app.evaluate(({ BrowserWindow }, root) => {
-      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
-    }, tmpDir);
+    await openProject(tmpDir);
 
     await page.locator('.sidebar .tree-name').filter({ hasText: /^sample\.docx$/ }).click();
 
-    const dialog = page.locator('.qa-import-exists');
-    await expect(dialog).toBeVisible({ timeout: 5000 });
-    await expect(dialog).toContainText('Already converted');
-    // The convert-from-scratch dialog must NOT be the one shown.
-    await expect(page.locator('.qa-import-confirm')).toHaveCount(0);
+    const bar = page.locator('.qa-import-bar');
+    await expect(bar.locator('.qa-open-existing')).toBeVisible({ timeout: 5000 });
+    await expect(bar).toContainText('Already converted');
+    await expect(bar.locator('.qa-convert')).toHaveCount(0);
 
-    await dialog.locator('.qa-open-existing').click();
+    await bar.locator('.qa-open-existing').click();
 
     // Opens the existing Markdown, with its hand edits intact -- nothing reconverted.
-    await expect(page.locator('.tiptap')).toContainText('Edited by hand', { timeout: 5000 });
+    await expect(page.locator('.ProseMirror').last()).toContainText('Edited by hand', { timeout: 5000 });
     expect(fs.readFileSync(path.join(tmpDir, 'sample.docx.md'), 'utf-8')).toContain('Edited by hand');
     expect(fs.existsSync(path.join(tmpDir, 'sample.docx.2.md'))).toBe(false);
   });
@@ -1608,13 +1831,10 @@ test.describe('Import conversion', () => {
     fs.copyFileSync(docxSrc, docxDst);
     const existingMd = path.join(tmpDir, 'sample.docx.md');
     fs.writeFileSync(existingMd, '# Already converted\n\nEdited by hand.\n');
-
-    await app.evaluate(({ BrowserWindow }, root) => {
-      BrowserWindow.getAllWindows()[0].webContents.send('open-project', root);
-    }, tmpDir);
+    await openProject(tmpDir);
 
     await page.locator('.sidebar .tree-name').filter({ hasText: /^sample\.docx$/ }).click();
-    await page.locator('.qa-import-exists .qa-reconvert').click();
+    await page.locator('.qa-import-bar .qa-reconvert').click();
 
     const secondMd = path.join(tmpDir, 'sample.docx.2.md');
     await expect.poll(() => fs.existsSync(secondMd), { timeout: 15000 }).toBe(true);

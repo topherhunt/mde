@@ -131,6 +131,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 
 ### Import and packaging
 
+- Clicking a `.pdf`/`.docx` opens a read-only preview TAB (`view: 'preview'`) with a convert bar in the toolbar's place -- never a dialog. PDF uses Chromium's built-in viewer via `mde-file:` with its toolbar and thumbnails hidden; DOCX HTML MUST go through `sanitizeDocxHtml`. The sidebar Outline lists the preview's headings (PDF: bookmarks, else pages); a PDF jump must remount the iframe, since the viewer ignores a hash change. -> notes: Import (DOCX / PDF)
 - DOCX: mammoth + turndown, with HTML preprocessing so turndown-plugin-gfm's table rule fires. PDF: `pdfjs-dist` legacy build in fake-worker mode, with position-based line grouping, column detection, heading detection by font height, and table detection. -> notes: Import (DOCX / PDF)
 - `forge.config.ts`'s `packageAfterCopy` hook copies main-process externals plus their transitive prod deps into the packaged app, because electron-forge ships an empty `node_modules` inside `app.asar`. -> notes: Packaging and webpack
 - Finder Quick Look preview and icon thumbnail are two Swift appexes in `quicklook/` (no Xcode project), both reading markdown through the editor's markdown-it via `render.js` in JavaScriptCore. They only fire because `forge.config.ts` imports the `net.daringfireball.markdown` UTI. The extensions themselves can't be E2E tested -- hand-check spacebar and Finder icons each release. -> notes: Quick Look preview
@@ -168,7 +169,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-289 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+300 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

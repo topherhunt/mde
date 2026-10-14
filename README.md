@@ -14,7 +14,7 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 
 - **True WYSIWYG** -- like Obsidian, you see formatted text as you type, not raw Markdown syntax
 - **Folder-based, no vault lock-in** -- open any folder from the terminal (`mde .`) or drag it onto the window or dock icon, like VS Code. No special vault folder to set up. Every folder gets the same treatment.
-- **Auto-convert PDF & DOCX** -- click a PDF or DOCX in the sidebar and it's converted to editable Markdown on the spot, with the original kept as a backup (Warning: conversion is not perfect)
+- **Preview and convert PDF & DOCX** -- click a PDF or DOCX in the sidebar to read it in a tab, then convert it to editable Markdown with one button; the original is left untouched (Warning: conversion is not perfect)
 - **File conflict detection** -- smart auto-reload or warning is displayed if file conflicts are detected. I've been burned by Obsidian and VS Code's wonky file-conflict handling.
 - **Checkpoints** -- an undo history for the whole folder, built for people working alongside Claude Code or other AI agents. See what changed, read it as prose rather than a `+`/`-` diff, and put any file (or the whole folder) back. No Git knowledge required, and nothing is ever lost.
 
@@ -27,7 +27,7 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 - **Find and replace** -- match highlighting, case-sensitive and whole-word filters, inline replace-all confirmation
 - **Quick Open** -- Cmd+O fuzzy file search across the project
 - **Standard editing tools** -- links, code blocks, tables
-- **DOCX and PDF import** -- converts to Markdown on click, preserving structure (tables, headings, columns) where possible (not perfect!)
+- **DOCX and PDF import** -- previews on click (with headings, bookmarks, or pages in the outline) and converts to Markdown on request, preserving structure (tables, headings, columns) where possible (not perfect!)
 - **PDF and DOCX export** -- File > Export, or right-click a document (in the sidebar or its tab), to write a PDF or Word file beside it, with real headings, lists, tables, colors and working links to headings
 - **File conflict detection** -- detects external changes; silent reload or warning banner
 - **Checkpoints** -- opt-in version history for a folder. Snapshots save themselves automatically once things go quiet (or on demand, with a note). Clicking a changed file shows a word-level diff in plain prose -- added words green, removed words red -- and **Restore** asks which version you actually want: the way the file was *before* that change, or the way it came out *after* it. **Browse all checkpoints** opens the full history in a tab, where you can work back through every checkpoint, see how much each file changed, and rename a checkpoint to something you will recognise later. To follow a single document, right-click it in the file list (or right-click its tab) and choose **View Change History** -- the same tab, filtered to just the checkpoints that touched that file, which still works after the file has been deleted. Restoring never overwrites your history; it adds to it, so you can always go forward again. Folders that already have version history set up by other tools stay read-only unless you say otherwise.

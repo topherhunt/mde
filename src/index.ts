@@ -26,7 +26,8 @@ declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 
 // `mde-file://local/<path>` serves local images to the editor and the PDF export window (see
-// utils/imageNode.ts). Image types only: everything else the renderer reads goes through IPC.
+// utils/imageNode.ts), and PDFs to the import preview. Those types only: everything else the
+// renderer reads goes through IPC.
 const IMAGE_TYPES: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.webp': 'image/webp', '.svg': 'image/svg+xml', '.avif': 'image/avif', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
@@ -35,10 +36,11 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'mde-file', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
 ]);
 
-async function serveLocalImage(request: Request): Promise<Response> {
+async function serveLocalFile(request: Request): Promise<Response> {
   let filePath = decodeURIComponent(new URL(request.url).pathname);
   if (/^\/[A-Za-z]:/.test(filePath)) filePath = filePath.slice(1);
-  const type = IMAGE_TYPES[path.extname(filePath).toLowerCase()];
+  const ext = path.extname(filePath).toLowerCase();
+  const type = ext === '.pdf' ? 'application/pdf' : IMAGE_TYPES[ext];
   if (!type) return new Response(null, { status: 415 });
   try {
     const bytes = await fs.promises.readFile(filePath);
@@ -777,6 +779,42 @@ async function nextFreeImportTarget(filePath: string): Promise<string> {
 ipcMain.handle('get-import-target', async (_event, filePath: string): Promise<{ mdPath: string; exists: boolean }> => {
   const mdPath = importTargetPath(filePath);
   return { mdPath, exists: await pathExists(mdPath) };
+});
+
+// mammoth's HTML for the read-only DOCX preview, untouched by the table preprocessing that
+// only exists to satisfy turndown. The renderer sanitizes it before display.
+ipcMain.handle('preview-docx', async (_event, filePath: string): Promise<string> => {
+  const mammoth = require('mammoth');
+  const result = await mammoth.convertToHtml({ path: filePath });
+  return result.value;
+});
+
+// Sidebar outline for the PDF preview: the file's bookmarks when it has any, else one entry per page.
+// `page` is 1-based, for the viewer's `#page=N`.
+ipcMain.handle('preview-pdf-outline', async (_event, filePath: string): Promise<{ level: number; title: string; page: number }[]> => {
+  (globalThis as any).pdfjsWorker = require('pdfjs-dist/legacy/build/pdf.worker.mjs');
+  const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs');
+  const buffer = await fs.promises.readFile(filePath);
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer), useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true }).promise;
+  try {
+    const entries: { level: number; title: string; page: number }[] = [];
+    const walk = async (items: any[], level: number) => {
+      for (const item of items) {
+        const dest = typeof item.dest === 'string' ? await doc.getDestination(item.dest) : item.dest;
+        // A bookmark to a URL or an unresolvable destination has no page to jump to.
+        if (Array.isArray(dest) && dest[0]) {
+          const index = typeof dest[0] === 'number' ? dest[0] : await doc.getPageIndex(dest[0]);
+          entries.push({ level, title: item.title, page: index + 1 });
+        }
+        if (item.items?.length) await walk(item.items, level + 1);
+      }
+    };
+    await walk((await doc.getOutline()) || [], 1);
+    if (entries.length > 0) return entries;
+    return Array.from({ length: doc.numPages }, (_, i) => ({ level: 1, title: `Page ${i + 1}`, page: i + 1 }));
+  } finally {
+    await doc.destroy();
+  }
 });
 
 // `newCopy: true` writes the next free numbered name instead of the default target,
@@ -1710,7 +1748,7 @@ app.on('open-file', (event, filePath) => {
 // --- App lifecycle ---
 
 app.on('ready', () => {
-  protocol.handle('mde-file', serveLocalImage);
+  protocol.handle('mde-file', serveLocalFile);
   buildMenu();
   // Keep the Windows window-control overlay colors in sync when the OS theme changes
   // (only matters when the app is following the system theme).
@@ -1750,9 +1788,11 @@ app.on('before-quit', (event) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue;
       try {
-        hasDirty = await win.webContents.executeJavaScript(
-          'document.querySelector(".tab-dirty-dot") !== null'
-        );
+        // Bounded, or a wedged renderer hangs the quit forever. Unknown counts as dirty so the user decides.
+        hasDirty = await Promise.race([
+          win.webContents.executeJavaScript('document.querySelector(".tab-dirty-dot") !== null'),
+          new Promise<boolean>(resolve => setTimeout(() => resolve(true), 2000)),
+        ]);
         if (hasDirty) {
           const { response } = await dialog.showMessageBox(win, {
             type: 'warning',
@@ -1772,6 +1812,18 @@ app.on('before-quit', (event) => {
     app.quit();
   })();
 });
+
+// Unpackaged runs (`npm start`, tests) quit when their launcher dies. electron-forge exits on
+// Ctrl+C, SIGTERM, a closed terminal or a kill without taking Electron down, leaving an
+// orphan reparented to launchd and a stray dock icon.
+if (!app.isPackaged) {
+  const launcher = process.ppid;
+  const watch = setInterval(() => {
+    if (process.ppid === launcher) return;
+    clearInterval(watch);
+    app.quit();
+  }, 1000);
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

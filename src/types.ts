@@ -39,7 +39,22 @@ export interface Tab {
   // editor would have to either unmount live buffers (losing unsaved work and undo history) or
   // keep a hidden editor receiving keystrokes. Everything else -- Cmd+W, Cmd+S, the conflict
   // banner, drag-drop -- already has a correct answer for a read-only tab.
-  view?: 'history';
+  // 'preview' shows a .pdf/.docx (`filePath`) read-only, with an offer to convert it. It is
+  // never watched or saved: the source is not a document MDE writes.
+  view?: 'history' | 'preview';
+}
+
+// A preview tab's sidebar outline entry; `select` scrolls the preview to it.
+export interface PreviewOutlineItem {
+  level: number;
+  text: string;
+  select: () => void;
+}
+
+// `active` is the highlighted entry's index, -1 for none.
+export interface PreviewOutlineState {
+  items: PreviewOutlineItem[];
+  active: number;
 }
 
 // File > (Rename, Move to Trash, Reveal, Copy Relative Path, View Change History) on the active tab.
@@ -236,6 +251,8 @@ export interface MdeAPI {
   onAutosaveChanged: (callback: (enabled: boolean) => void) => () => void;
   convertImport: (filePath: string, opts?: { newCopy?: boolean }) => Promise<{ mdPath: string } | { error: string }>;
   getImportTarget: (filePath: string) => Promise<{ mdPath: string; exists: boolean }>;
+  previewDocx: (filePath: string) => Promise<string>;
+  previewPdfOutline: (filePath: string) => Promise<{ level: number; title: string; page: number }[]>;
   watchProject: (root: string) => void;
   unwatchProject: (root: string) => void;
   onProjectFilesChanged: (callback: () => void) => () => void;

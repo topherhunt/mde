@@ -1,5 +1,5 @@
 import React, { useReducer, useEffect, useCallback, useRef, useState, useMemo } from 'react';
-import { Tab, SidebarMode, HistoryTarget } from '../types';
+import { Tab, SidebarMode, HistoryTarget, PreviewOutlineItem, PreviewOutlineState } from '../types';
 import Sidebar from './Sidebar';
 import TabBar from './TabBar';
 import Toolbar, { TOGGLE_TOOLBAR_HINT } from './Toolbar';
@@ -13,6 +13,7 @@ import LinkBar from './LinkBar';
 import QuickOpen from './QuickOpen';
 import { useVersionControl, VersionControl, CheckpointSettings } from './VersionPanel';
 import HistoryView, { HistoryNavRequest } from './HistoryView';
+import ImportPreview from './ImportPreview';
 import { DeleteConfirmDialog, ExportConflictDialog, copyFilePath, relativeToProject } from './FileContextMenu';
 import { markdownToDoc, docToPdfHtml, docToDocx, ExportFormat } from '../utils/exportDocument';
 import { Editor as TipTapEditor } from '@tiptap/react';
@@ -180,6 +181,8 @@ function fileNameFromPath(filePath: string): string {
   return basename(filePath) || 'Untitled';
 }
 
+const isImportable = (filePath: string) => /\.(docx|pdf)$/i.test(filePath);
+
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const editorsRef = useRef<Map<string, TipTapEditor>>(new Map());
@@ -188,6 +191,17 @@ export default function App() {
   const suppressEditorFocusRef = useRef(false);
   const findBarOpenRef = useRef(false);
   const [activeEditor, setActiveEditor] = useState<TipTapEditor | null>(null);
+  const [previewOutlines, setPreviewOutlines] = useState<Record<string, PreviewOutlineState>>({});
+  const setPreviewOutline = useCallback((tabId: string, items: PreviewOutlineItem[]) => {
+    setPreviewOutlines((prev) => ({ ...prev, [tabId]: { items, active: -1 } }));
+  }, []);
+  const setPreviewOutlineActive = useCallback((tabId: string, active: number) => {
+    setPreviewOutlines((prev) => {
+      const current = prev[tabId];
+      if (!current) throw new Error(`Outline highlight reported before the outline for tab ${tabId}`);
+      return current.active === active ? prev : { ...prev, [tabId]: { ...current, active } };
+    });
+  }, []);
   const [theme, setTheme] = useState<string>('system');
   const [toast, setToast] = useState<{ msg: string; variant?: string; hiding?: boolean } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -204,8 +218,6 @@ export default function App() {
   const toolbarLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
-  const [importConfirm, setImportConfirm] = useState<string | null>(null);
-  const [importExisting, setImportExisting] = useState<{ filePath: string; mdPath: string } | null>(null);
   const [linkCreateTarget, setLinkCreateTarget] = useState<string | null>(null);
   const [linkBarVisible, setLinkBarVisible] = useState(false);
   const initialSidebarModeSetRef = useRef(false);
@@ -332,6 +344,17 @@ export default function App() {
         window.mde.unwatchFile(oldTentative.filePath);
         editorsRef.current.delete(oldTentative.id);
       }
+    }
+
+    if (isImportable(filePath)) {
+      dispatch({
+        type: 'OPEN_TAB',
+        tab: {
+          id: nextTabId(), filePath, fileName: fileNameFromPath(filePath), dirty: false, diskMtime: null,
+          diskHash: null, conflict: false, tentative, readOnly: true, view: 'preview',
+        },
+      });
+      return;
     }
 
     const [stats, diskHash] = await Promise.all([
@@ -463,18 +486,6 @@ export default function App() {
     ? undefined
     : (relativePath: string) => openCheckpointHistory({ kind: 'file', path: relativePath });
 
-  // Clicking a .docx/.pdf: if it has already been converted, the useful offer is to
-  // open that Markdown -- not to convert again. Only a source with no Markdown beside
-  // it gets the conversion prompt. The source file itself is never renamed or hidden.
-  const handleImportFile = useCallback(async (filePath: string) => {
-    const { mdPath, exists } = await window.mde.getImportTarget(filePath);
-    if (exists) {
-      setImportExisting({ filePath, mdPath });
-    } else {
-      setImportConfirm(filePath);
-    }
-  }, []);
-
   const runConvert = useCallback(async (filePath: string, opts?: { newCopy?: boolean }) => {
     const result = await window.mde.convertImport(filePath, opts);
     if ('error' in result) {
@@ -485,22 +496,8 @@ export default function App() {
     }
   }, [openFile, showToast]);
 
-  const confirmImport = useCallback(async () => {
-    if (!importConfirm) return;
-    const filePath = importConfirm;
-    setImportConfirm(null);
-    await runConvert(filePath);
-  }, [importConfirm, runConvert]);
-
-  const reconvertImport = useCallback(async () => {
-    if (!importExisting) return;
-    const { filePath } = importExisting;
-    setImportExisting(null);
-    await runConvert(filePath, { newCopy: true });
-  }, [importExisting, runConvert]);
-
   const saveActiveTab = useCallback(async () => {
-    if (!activeTab || activeTab.view === 'history') return;
+    if (!activeTab || activeTab.view) return;
     // Never return silently: a buffer that cannot save must say so. The throw reaches the
     // red error banner via the unhandledrejection listener.
     if (!activeEditor) throw new Error(`Save failed: "${activeTab.fileName}" has no connected editor. Copy your text somewhere safe, then close and reopen the file.`);
@@ -694,7 +691,7 @@ export default function App() {
       mtime: stats?.mtimeMs ?? null,
       hash,
     });
-    window.mde.watchFile(newPath);
+    if (!tab.view) window.mde.watchFile(newPath);
   }, [state.tabs, recordDiskHash]);
 
   const confirmTabRename = useCallback(async (newName: string) => {
@@ -719,7 +716,7 @@ export default function App() {
         mtime: stats?.mtimeMs ?? null,
         hash,
       });
-      window.mde.watchFile(newPath);
+      if (!tab.view) window.mde.watchFile(newPath);
     }
     setSidebarRefreshKey(n => n + 1);
   }, [tabRenameTarget, state.tabs]);
@@ -991,10 +988,8 @@ export default function App() {
           }
           return;
         }
-        if (/\.(md|markdown|txt)$/i.test(filePath)) {
+        if (/\.(md|markdown|txt)$/i.test(filePath) || isImportable(filePath)) {
           openFile(filePath);
-        } else if (/\.(docx|pdf)$/i.test(filePath)) {
-          handleImportFile(filePath);
         } else if (isImageFile(file)) {
           showToast('To add an image, drop it into the document.', 'danger');
         } else {
@@ -1062,8 +1057,8 @@ export default function App() {
             suppressEditorFocusRef.current = true;
             openFile(filePath, tentative);
           }}
-          onImportFile={handleImportFile}
           activeEditor={activeEditor}
+          previewOutline={activeTab?.view === 'preview' ? previewOutlines[activeTab.id] : null}
           activeFilePath={activeTab?.filePath || null}
           refreshKey={sidebarRefreshKey}
           onToast={showToast}
@@ -1153,6 +1148,8 @@ export default function App() {
                     onToast={showToast}
                     navRequest={historyNav}
                   />
+                ) : tab.view === 'preview' && tab.filePath ? (
+                  <ImportPreview tabId={tab.id} filePath={tab.filePath} onConvert={runConvert} onOpenFile={openFile} onOutline={setPreviewOutline} onOutlineActive={setPreviewOutlineActive} />
                 ) : (
                   <Editor
                     tab={tab}
@@ -1186,22 +1183,6 @@ export default function App() {
           projectRoot={state.projectRoot}
           onSelect={(filePath) => { setQuickOpenVisible(false); openFile(filePath); }}
           onClose={() => setQuickOpenVisible(false)}
-        />
-      )}
-      {importConfirm && (
-        <ImportConfirmDialog
-          filePath={importConfirm}
-          onConfirm={confirmImport}
-          onCancel={() => setImportConfirm(null)}
-        />
-      )}
-      {importExisting && (
-        <ImportExistsDialog
-          filePath={importExisting.filePath}
-          mdPath={importExisting.mdPath}
-          onOpen={() => { const p = importExisting.mdPath; setImportExisting(null); openFile(p); }}
-          onReconvert={reconvertImport}
-          onCancel={() => setImportExisting(null)}
         />
       )}
       {linkCreateTarget && (
@@ -1533,85 +1514,3 @@ function CreateFileDialog({ filePath, onConfirm, onCancel }: { filePath: string;
   );
 }
 
-function ImportConfirmDialog({ filePath, onConfirm, onCancel }: { filePath: string; onConfirm: () => void; onCancel: () => void }) {
-  const fileName = basename(filePath) || filePath;
-  const ext = fileName.split('.').pop()?.toUpperCase() || '';
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-      if (e.key === 'Enter') onConfirm();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onConfirm, onCancel]);
-
-  return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal-dialog qa-import-confirm" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header" style={{ justifyContent: 'center' }}>
-          <span className="fw-bold">Convert {ext} to Markdown</span>
-        </div>
-        <div className="modal-body">
-          <p className="small text-muted">
-            This will create <code>{fileName}.md</code> alongside it and open that for editing.
-            <code>{fileName}</code> is left untouched. Some formatting may be simplified.
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
-            <button className="settings-btn" onClick={onCancel}>Cancel</button>
-            <button className="settings-btn btn-primary" onClick={onConfirm}>Convert &amp; Open</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Shown when a .docx/.pdf already has a converted Markdown beside it. Opening that
-// Markdown is the primary action -- re-converting would either clobber edits or
-// leave the user guessing which file is current. "Convert again" is available but
-// de-emphasized (for a source that changed on disk since it was converted), and it
-// always writes a NEW numbered file rather than overwriting.
-function ImportExistsDialog({ filePath, mdPath, onOpen, onReconvert, onCancel }: {
-  filePath: string;
-  mdPath: string;
-  onOpen: () => void;
-  onReconvert: () => void;
-  onCancel: () => void;
-}) {
-  const fileName = basename(filePath) || filePath;
-  const mdName = basename(mdPath) || mdPath;
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-      if (e.key === 'Enter') onOpen();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onOpen, onCancel]);
-
-  return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal-dialog modal-dialog-xl qa-import-exists" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header" style={{ justifyContent: 'center' }}>
-          <span className="fw-bold">Already converted</span>
-        </div>
-        <div className="modal-body">
-          <p className="small text-muted">
-            <code>{fileName}</code> has already been converted &mdash; <code>{mdName}</code> is
-            sitting next to it. Open that instead?
-          </p>
-          <p className="small text-muted">
-            Converting again won&rsquo;t overwrite it; it writes a new numbered copy.
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '1rem' }}>
-            <button className="settings-btn" onClick={onCancel}>Cancel</button>
-            <button className="settings-btn qa-reconvert" onClick={onReconvert}>Convert again</button>
-            <button className="settings-btn btn-primary qa-open-existing" onClick={onOpen}>Open {mdName}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
