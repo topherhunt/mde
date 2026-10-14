@@ -154,7 +154,7 @@ npm start          # Run the app (electron-forge start)
 npm test           # Build + run Playwright E2E tests (headless)
 npx playwright test tests/app.spec.ts --grep "pattern"  # Run subset
 rm -rf .webpack/ out/ && npm test  # Clean build (required after webpack config changes)
-bash scripts/release.sh  # Cut a release: version from package.json; builds in CI, publishes after a confirm
+bash scripts/release.sh  # Cut a release: asks for the version, bumps + pushes it, builds in CI, publishes after a confirm
 ```
 
 ## Testing

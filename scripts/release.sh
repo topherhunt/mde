@@ -1,22 +1,22 @@
 #!/bin/bash
-# Publishes the current main commit as a GitHub release. Run with:
+# Bumps the version, then publishes main as a GitHub release. Run with:
 #   bash scripts/release.sh
 #
-# The version comes from package.json, so bump and commit it first. Refuses
-# unless you're on main with a clean tree that matches origin/main and the
-# version isn't already released. The Windows installer can't be built on a Mac,
-# so the "Build and Release" workflow builds both installers into a draft
-# release; you're asked to confirm once both are attached. It never commits or
-# pushes: publishing the draft creates the tag on GitHub at that exact commit.
+# Refuses unless you're on main with a clean tree that matches origin/main and
+# package.json's version is the latest published release. It asks for the new
+# version, runs the tests, then commits "Cut vX.Y.Z" (package.json and its lock)
+# and pushes it to main. If a later step fails, rerunning with that commit still
+# at HEAD resumes releasing it instead of asking again. The Windows installer
+# can't be built on a Mac, so the "Build and Release" workflow builds both
+# installers into a draft release; you're asked to confirm once both are
+# attached. Publishing the draft creates the tag on GitHub at the bump commit.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 die() { echo "!! $*" >&2; exit 1; }
+is_semver() { echo "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; }
 
-[ $# -eq 0 ] || die "takes no arguments; the version comes from package.json"
-VERSION="$(node -p "require('./package.json').version")"
-echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || die "package.json version is '$VERSION'; it must look like 1.2.3"
-TAG="v$VERSION"
+[ $# -eq 0 ] || die "takes no arguments; you're asked for the version"
 
 echo "==> preflight"
 command -v gh >/dev/null       || die "gh is not installed:  brew install gh"
@@ -27,15 +27,41 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 git fetch --quiet origin main
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] \
   || die "main and origin/main differ; push (or pull) first"
-[ -z "$(git ls-remote --tags origin "refs/tags/$TAG")" ] \
-  || die "$TAG is already released; bump the version in package.json, commit, and push"
+
+CURRENT="$(node -p "require('./package.json').version")"
+LATEST="$(gh release view --json tagName -q .tagName)" || die "couldn't read the latest published release"
+LATEST="${LATEST#v}"
+if [ "$(git log -1 --format=%s)" = "Cut v$CURRENT" ] && [ "$CURRENT" != "$LATEST" ]; then
+  VERSION="$CURRENT"
+  echo "    resuming the unpublished v$VERSION bump at HEAD (latest release is v$LATEST)"
+else
+  [ "$CURRENT" = "$LATEST" ] \
+    || die "package.json is $CURRENT but the latest release is v$LATEST; fix package.json first"
+  read -r -p "Current version is $CURRENT. New version: " VERSION
+  is_semver "$VERSION" || die "'$VERSION' must look like 1.2.3"
+  node -e '
+    const [a, b] = process.argv.slice(1).map(v => v.split(".").map(Number));
+    const cmp = a.map((n, i) => n - b[i]).find(d => d !== 0) ?? 0;
+    process.exit(cmp > 0 ? 0 : 1);
+  ' "$VERSION" "$CURRENT" || die "$VERSION is not newer than $CURRENT"
+fi
+TAG="v$VERSION"
+
+[ -z "$(git ls-remote --tags origin "refs/tags/$TAG")" ] || die "$TAG is already released"
 # A draft has no tag yet, so the check above can't see one left by an aborted run.
 ! gh release view "$TAG" >/dev/null 2>&1 \
   || die "a draft release for $TAG already exists; delete it first:  gh release delete $TAG"
-COMMIT="$(git rev-parse HEAD)"
 
 echo "==> testing"
 npm test
+
+if [ "$VERSION" != "$CURRENT" ]; then
+  echo "==> bumping to $VERSION"
+  npm version "$VERSION" --no-git-tag-version >/dev/null
+  git commit --quiet -m "Cut $TAG" -- package.json package-lock.json
+  git push --quiet origin main || die "push failed; the 'Cut $TAG' commit is local only. Push it and rerun to resume"
+fi
+COMMIT="$(git rev-parse HEAD)"
 
 echo "==> building in CI"
 DISPATCH="$(gh workflow run release.yml --ref main -f release=true 2>&1)"
