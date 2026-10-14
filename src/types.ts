@@ -254,6 +254,9 @@ export interface MdeAPI {
   getAutosave: () => Promise<boolean>;
   setAutosave: (enabled: boolean) => Promise<void>;
   onAutosaveChanged: (callback: (enabled: boolean) => void) => () => void;
+  getShowHiddenFiles: () => Promise<boolean>;
+  setShowHiddenFiles: (enabled: boolean) => Promise<void>;
+  onShowHiddenFilesChanged: (callback: (enabled: boolean) => void) => () => void;
   convertImport: (filePath: string, opts?: { newCopy?: boolean }) => Promise<{ mdPath: string } | { error: string }>;
   getImportTarget: (filePath: string) => Promise<{ mdPath: string; exists: boolean }>;
   previewDocx: (filePath: string) => Promise<string>;

@@ -705,9 +705,10 @@ ipcMain.handle('create-directory', async (_event, dirPath: string) => {
 ipcMain.handle('list-directory', async (_event, dirPath: string) => {
   const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
   const result: Array<{ name: string; path: string; isDirectory: boolean }> = [];
+  const showHidden = loadState().showHiddenFiles === true;
 
   for (const entry of entries) {
-    if (entry.isDirectory() ? entry.name.startsWith('.') : isHiddenName(entry.name)) continue;
+    if (entry.isDirectory() ? entry.name.startsWith('.') : isHiddenName(entry.name, showHidden)) continue;
     const fullPath = path.join(dirPath, entry.name);
     result.push({ name: entry.name, path: fullPath, isDirectory: entry.isDirectory() });
   }
@@ -732,12 +733,13 @@ async function walkProjectFiles(root: string): Promise<string[]> {
 
   const files: string[] = [];
   const queue: string[] = [root];
+  const showHidden = loadState().showHiddenFiles === true;
   while (queue.length > 0 && files.length < FILE_INDEX_CAP) {
     const dir = queue.shift()!;
     let entries: fs.Dirent[];
     try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
     for (const entry of entries) {
-      if (SKIP_DIRS.has(entry.name) || (entry.isDirectory() ? entry.name.startsWith('.') : isHiddenName(entry.name))) continue;
+      if (SKIP_DIRS.has(entry.name) || (entry.isDirectory() ? entry.name.startsWith('.') : isHiddenName(entry.name, showHidden))) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         queue.push(full);
@@ -1581,6 +1583,21 @@ ipcMain.handle('set-autosave', (_event, enabled: boolean) => {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send('autosave-changed', enabled);
+    }
+  }
+});
+
+ipcMain.handle('get-show-hidden-files', () => {
+  return loadState().showHiddenFiles === true;
+});
+
+ipcMain.handle('set-show-hidden-files', (_event, enabled: boolean) => {
+  saveState({ showHiddenFiles: enabled });
+  fileIndexCache.clear();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('show-hidden-files-changed', enabled);
+      win.webContents.send('project-files-changed');
     }
   }
 });

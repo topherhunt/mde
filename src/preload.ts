@@ -202,6 +202,13 @@ const api = {
     ipcRenderer.on('autosave-changed', handler);
     return () => ipcRenderer.removeListener('autosave-changed', handler);
   },
+  getShowHiddenFiles: (): Promise<boolean> => ipcRenderer.invoke('get-show-hidden-files'),
+  setShowHiddenFiles: (enabled: boolean): Promise<void> => ipcRenderer.invoke('set-show-hidden-files', enabled),
+  onShowHiddenFilesChanged: (callback: (enabled: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, enabled: boolean) => callback(enabled);
+    ipcRenderer.on('show-hidden-files-changed', handler);
+    return () => ipcRenderer.removeListener('show-hidden-files-changed', handler);
+  },
 
   convertImport: (filePath: string, opts?: { newCopy?: boolean }): Promise<{ mdPath: string } | { error: string }> =>
     ipcRenderer.invoke('convert-import', filePath, opts),

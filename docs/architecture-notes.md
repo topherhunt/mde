@@ -290,7 +290,7 @@ The `onLinkClick` prop is bound per-tab in the Editor map; inside the Editor a r
 
 ### Which files, and where that is decided
 
-`utils/fileKinds.ts` (`fileKind`) is the single answer to "how does this file open", shared by the main process and the renderer: `markdown` (WYSIWYG), `plaintext` (literal editor), `importable` (preview), `other` (does not open). Plain text is a fixed allowlist of extensions plus exact names (`.gitignore`, `.editorconfig`, `.env`, `Makefile`, `Dockerfile`, `LICENSE`) -- no content sniffing, since a misread binary is exactly the file that gets corrupted. Dotfiles stay hidden from the explorer and Quick Open except those exact names (`isHiddenName`); dot-directories stay hidden. The editor kind is fixed on the tab at open (`tab.plainText`), so a rename never swaps editors under a live buffer.
+`utils/fileKinds.ts` (`fileKind`) is the single answer to "how does this file open", shared by the main process and the renderer: `markdown` (WYSIWYG), `plaintext` (literal editor), `importable` (preview), `other` (does not open). Plain text is a fixed allowlist of extensions plus exact names (`.gitignore`, `.editorconfig`, `.env`, `Makefile`, `Dockerfile`, `LICENSE`) -- no content sniffing, since a misread binary is exactly the file that gets corrupted. Every dotfile is hidden from the explorer, Quick Open and Find in all files unless Settings > Show hidden files (`showHiddenFiles` in `mde-state.json`, off by default) is on, and even then only the allowlisted names are listed (`isHiddenName`); dot-directories always stay hidden. The main process reads the setting on every `list-directory` and `walkProjectFiles`, and toggling it clears the file index cache and broadcasts `project-files-changed`, so the explorer re-lists at once. The editor kind is fixed on the tab at open (`tab.plainText`), so a rename never swaps editors under a live buffer.
 
 ### Literal round trip
 
@@ -301,6 +301,18 @@ The `onLinkClick` prop is bound per-tab in the Editor map; inside the Editor a r
 - **Dirty state** is `doc.eq(cleanDoc)` -- a plain comparison, so undoing back to the loaded text marks it clean.
 
 Save, Save As, reload and the `file-changed` handler go through App's `DocBuffer` (`serialize` / `version` / `reloadFrom`), implemented by `markdownBuffer` and by the `PlainTextHandle`; the hash guard, conflict banner and autosave are shared unchanged. Find (Cmd+F) opens CodeMirror's own search panel, not `FindBar`. Reloading a plain-text buffer resets its undo history.
+
+### Find and Replace in all files
+
+`FindBar`'s project-wide mode once read every listed file through `read-file` and force-wrote any match back (`expectedHash: null`), so a PDF or image containing the search term came back with every invalid byte turned into U+FFFD. Now:
+
+- Only `markdown` and `plaintext` kinds are read or written (`searchableKind`); everything else is never opened.
+- Both search and replace read through `read-plain-text`, so a file that is not exact UTF-8 is skipped and reported ("not UTF-8 text") rather than rewritten lossily. This applies to markdown too.
+- Replace takes `hashFile` BEFORE the read and writes with that hash, so a change landing anywhere between hash and write is refused (reported as "changed on disk while replacing") instead of clobbered. Hashing after the read would leave a window. Open tabs with unsaved changes are skipped as before.
+- Counting and replacing share `projectPattern` (a non-overlapping regex, whole-word via `(?<!\w)`/`(?!\w)` lookarounds), so the confirmation's count is the number replaced. The current-file mode still counts its own way.
+- The confirmation and the result toast name the kinds: "Replace 5 in 2 markdown and 2 plain-text files?".
+
+The read-then-write race between hash and write has no E2E test; it needs a write timed inside one IPC round trip.
 
 ## Import (DOCX / PDF)
 
@@ -673,7 +685,7 @@ What exists today, for orientation. This list goes stale faster than the notes a
 - Link editing via floating LinkBar (top-right of editor, like FindBar) -- preserves text selection highlight via ProseMirror decorations while editing URL
 - Link preview popup (top-right of editor area when cursor is in a link)
 - Cmd/Ctrl+click a link to follow it: relative file links open in a new tab (resolved against the current file's folder, per standard Markdown semantics); a missing target prompts to create the file; external URLs open in the browser. Plain click still positions the cursor for editing.
-- Find/replace bar (inline below toolbar) with match highlighting (yellow border for all matches, yellow bg for active match), case-sensitive and whole-word filters, disabled nav when <=1 match, inline "Replace all" confirmation
+- Find/replace bar (inline below toolbar) with match highlighting (yellow border for all matches, yellow bg for active match), case-sensitive and whole-word filters, disabled nav when <=1 match, inline "Replace all" confirmation. An all-files mode searches and replaces across the project's markdown and plain-text files only, its confirmation naming how many of each kind will change
 - Code block copy button (NodeView-based, top-right corner, appears on hover)
 - Table cell actions dropdown (three-dots trigger centered on top-right cell border, viewport-aware dropdown alignment, icons for insert/delete row/column)
 - Copying table cells: a single cell copies just its text; multiple cells copy as tab-separated rows (pastes as plain text in editors, as a real table into Word via the HTML clipboard). Select-all over a mixed document copies everything -- prose, lists, AND the table as a Markdown table.
@@ -686,7 +698,7 @@ What exists today, for orientation. This list goes stale faster than the notes a
 - Finder icon thumbnails of `.md` files, macOS only: the opening headings, text, lists and tasks drawn large enough to skim
 - Tools -> Word Count: a modal (`.qa-word-count`) showing word count, character count, and estimated page count (300 words/page) as `selection / whole document` -- or, when nothing is selected, the document figure alone with no `0 / ` prefix. Counts are snapshotted when the dialog opens. Escape or clicking the backdrop closes it. No keyboard shortcut -- menu only.
 - Dark mode support (light / dark / system default, stored in user state file)
-- Settings dialog (Cmd+,) with theme selector, spellcheck toggle, auto-save toggle (1s debounce), terminal launcher installer
+- Settings dialog (Cmd+,) with theme selector, spellcheck toggle, auto-save toggle (1s debounce), show-hidden-files toggle (lists `.gitignore`, `.env` and the other allowlisted dotfiles), terminal launcher installer
 - Terminal launcher: `mde .` opens a folder from the terminal (installed via Settings)
 - Toast notifications with semantic colors (danger, info variants -- separate text/border color variables for contrast in dark mode) and scale animations
 - Window dimensions and position persisted and restored on reopen (debounced 500ms save on resize/move)

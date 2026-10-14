@@ -11,6 +11,8 @@ import * as os from 'os';
 let app: ElectronApplication;
 let page: Page;
 let tmpDirs: string[] = [];
+// The "Show hidden files" value to put back, since the setting persists in the real mde-state.json.
+let hiddenToRestore: boolean | null = null;
 
 function makeTmpDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mde-test-'));
@@ -19,10 +21,19 @@ function makeTmpDir(): string {
 }
 
 test.afterEach(async () => {
-  if (app) await app.close();
+  if (app) {
+    if (hiddenToRestore !== null) await page.evaluate((v) => window.mde.setShowHiddenFiles(v), hiddenToRestore);
+    await app.close();
+  }
+  hiddenToRestore = null;
   for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
   tmpDirs = [];
 });
+
+async function showHiddenFiles() {
+  hiddenToRestore = await page.evaluate(() => window.mde.getShowHiddenFiles());
+  await page.evaluate(() => window.mde.setShowHiddenFiles(true));
+}
 
 async function send(channel: string, arg?: string) {
   await app.evaluate(({ BrowserWindow }, a) => {
@@ -171,8 +182,9 @@ test.describe('Plain-text files: editor', () => {
 });
 
 test.describe('Plain-text files: file explorer', () => {
-  test('each file kind gets its own icon, and only allowlisted dotfiles are listed', async () => {
+  test('each file kind gets its own icon, and with hidden files shown only allowlisted dotfiles are listed', async () => {
     ({ app, page } = await launchApp());
+    await showHiddenFiles();
     const dir = makeTmpDir();
     for (const name of ['notes.md', 'data.json', '.gitignore', '.env', 'Dockerfile', 'report.pdf', 'letter.docx', 'photo.png', '.hidden', '.eslintrc']) {
       fs.writeFileSync(path.join(dir, name), '');
@@ -196,6 +208,7 @@ test.describe('Plain-text files: file explorer', () => {
 
   test('clicking a plain-text file in the explorer opens it, and it offers no export', async () => {
     ({ app, page } = await launchApp());
+    await showHiddenFiles();
     const dir = makeTmpDir();
     fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n');
     await send('open-project', dir);

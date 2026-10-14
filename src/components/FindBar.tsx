@@ -4,6 +4,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Tab } from '../types';
 import { basename, joinPath } from '../utils/paths';
+import { fileKind } from '../utils/fileKinds';
 
 interface FindBarProps {
   editor: TipTapEditor;
@@ -18,30 +19,38 @@ interface FindBarProps {
 interface FileMatchResult {
   filePath: string;
   fileName: string;
+  kind: 'markdown' | 'plaintext';
   count: number;
-}
-
-function countTextMatches(text: string, term: string, caseSens: boolean, whole: boolean): number {
-  if (!term) return 0;
-  const searchStr = caseSens ? term : term.toLowerCase();
-  const haystack = caseSens ? text : text.toLowerCase();
-  let count = 0;
-  let idx = 0;
-  while ((idx = haystack.indexOf(searchStr, idx)) !== -1) {
-    if (whole) {
-      const before = idx > 0 ? haystack[idx - 1] : ' ';
-      const after = idx + searchStr.length < haystack.length ? haystack[idx + searchStr.length] : ' ';
-      if (!/\w/.test(before) && !/\w/.test(after)) count++;
-    } else {
-      count++;
-    }
-    idx += 1;
-  }
-  return count;
 }
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Counting and replacing share this one pattern, so the confirmation's count is what gets replaced.
+function projectPattern(term: string, caseSens: boolean, whole: boolean): RegExp {
+  const escaped = escapeRegExp(term);
+  return new RegExp(whole ? `(?<!\\w)${escaped}(?!\\w)` : escaped, caseSens ? 'g' : 'gi');
+}
+
+// The only files project-wide Find reads and Replace writes. Anything else (images, PDFs, Word
+// files, unknown types) is never opened, let alone rewritten.
+function searchableKind(filePath: string): 'markdown' | 'plaintext' | null {
+  const kind = fileKind(filePath);
+  return kind === 'markdown' || kind === 'plaintext' ? kind : null;
+}
+
+// "18 markdown files", "1 plain-text file", "6 markdown and 4 plain-text files".
+function describeFiles(kinds: Array<'markdown' | 'plaintext'>): string {
+  const markdown = kinds.filter(k => k === 'markdown').length;
+  const plain = kinds.length - markdown;
+  const noun = kinds.length === 1 ? 'file' : 'files';
+  if (markdown && plain) return `${markdown} markdown and ${plain} plain-text ${noun}`;
+  return markdown ? `${markdown} markdown ${noun}` : `${plain} plain-text ${noun}`;
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
 
 export default function FindBar({ editor, onClose, focusTrigger, projectRoot, tabs, onOpenFile, onToast }: FindBarProps) {
@@ -56,6 +65,8 @@ export default function FindBar({ editor, onClose, focusTrigger, projectRoot, ta
 
   const [fileMode, setFileMode] = useState<'current' | 'all'>('current');
   const [fileMatches, setFileMatches] = useState<FileMatchResult[]>([]);
+  // Searchable files the last search skipped because they are not UTF-8 text.
+  const [unreadableCount, setUnreadableCount] = useState(0);
   const [allFilesSearching, setAllFilesSearching] = useState(false);
   const [confirmingAllFiles, setConfirmingAllFiles] = useState(false);
   const searchCounterRef = useRef(0);
@@ -153,6 +164,7 @@ export default function FindBar({ editor, onClose, focusTrigger, projectRoot, ta
   const searchAllFiles = useCallback(async (term: string, caseSens: boolean, whole: boolean) => {
     if (!projectRoot || !term) {
       setFileMatches([]);
+      setUnreadableCount(0);
       setAllFilesSearching(false);
       return;
     }
@@ -160,62 +172,89 @@ export default function FindBar({ editor, onClose, focusTrigger, projectRoot, ta
     setAllFilesSearching(true);
     try {
       const files = await window.mde.listProjectFiles(projectRoot);
+      const pattern = projectPattern(term, caseSens, whole);
       const results: FileMatchResult[] = [];
+      let unreadable = 0;
       for (const relativePath of files) {
         if (searchCounterRef.current !== myCount) return;
+        const kind = searchableKind(relativePath);
+        if (!kind) continue;
         const filePath = joinPath(projectRoot, relativePath);
-        const content = await window.mde.readFile(filePath);
-        const count = countTextMatches(content, term, caseSens, whole);
+        let content: string;
+        try {
+          content = await window.mde.readPlainText(filePath);
+        } catch {
+          unreadable++;
+          continue;
+        }
+        const count = [...content.matchAll(pattern)].length;
         if (count > 0) {
-          results.push({ filePath, fileName: basename(relativePath) || relativePath, count });
+          results.push({ filePath, fileName: basename(relativePath) || relativePath, kind, count });
         }
       }
       if (searchCounterRef.current === myCount) {
         setFileMatches(results);
+        setUnreadableCount(unreadable);
         setAllFilesSearching(false);
       }
-    } catch {
-      if (searchCounterRef.current === myCount) setAllFilesSearching(false);
+    } catch (err: any) {
+      if (searchCounterRef.current === myCount) {
+        setAllFilesSearching(false);
+        onToast?.(`Search failed: ${err?.message || err}`, 'danger');
+      }
     }
-  }, [projectRoot]);
+  }, [projectRoot, onToast]);
 
   const replaceAllFiles = useCallback(async () => {
     if (!projectRoot || !searchTerm) return;
     setAllFilesSearching(true);
     setConfirmingAllFiles(false);
     let totalReplaced = 0;
-    let filesChanged = 0;
+    const changedKinds: Array<'markdown' | 'plaintext'> = [];
     let skippedDirty = 0;
+    let skippedChanged = 0;
+    let skippedUnreadable = 0;
     try {
       const files = await window.mde.listProjectFiles(projectRoot);
-      const flags = caseSensitive ? 'g' : 'gi';
-      const pattern = wholeWord
-        ? new RegExp(`\\b${escapeRegExp(searchTerm)}\\b`, flags)
-        : new RegExp(escapeRegExp(searchTerm), flags);
+      const pattern = projectPattern(searchTerm, caseSensitive, wholeWord);
 
       for (const relativePath of files) {
+        const kind = searchableKind(relativePath);
+        if (!kind) continue;
         const filePath = joinPath(projectRoot, relativePath);
         const openTab = tabs?.find(t => t.filePath === filePath);
         if (openTab?.dirty) { skippedDirty++; continue; }
 
-        const content = await window.mde.readFile(filePath);
+        // Hashing BEFORE the read makes the write's guard cover the whole read-replace-write:
+        // a change landing at any point after the hash is refused rather than overwritten.
+        const hash = await window.mde.hashFile(filePath);
+        let content: string;
+        try {
+          if (hash === null) throw new Error('missing');
+          // readPlainText refuses anything that would not decode and re-encode to identical
+          // bytes, so the write changes nothing but the replaced text.
+          content = await window.mde.readPlainText(filePath);
+        } catch {
+          skippedUnreadable++;
+          continue;
+        }
         let matchCount = 0;
         const newContent = content.replace(pattern, () => { matchCount++; return replaceTerm; });
+        if (matchCount === 0) continue;
 
-        if (matchCount > 0) {
-          // Forces the write (null): content was just read+transformed and dirty tabs are
-          // skipped above. writeFileIfUnchanged is the only document-write path.
-          await window.mde.writeFileIfUnchanged(filePath, newContent, null);
-          totalReplaced += matchCount;
-          filesChanged++;
-        }
+        const result = await window.mde.writeFileIfUnchanged(filePath, newContent, hash);
+        if (!result.ok) { skippedChanged++; continue; }
+        totalReplaced += matchCount;
+        changedKinds.push(kind);
       }
 
-      let msg = `Replaced ${totalReplaced} occurrence${totalReplaced !== 1 ? 's' : ''} in ${filesChanged} file${filesChanged !== 1 ? 's' : ''}.`;
-      if (skippedDirty > 0) {
-        msg += ` Skipped ${skippedDirty} file${skippedDirty !== 1 ? 's' : ''} with unsaved changes.`;
-      }
-      onToast?.(msg);
+      let msg = changedKinds.length
+        ? `Replaced ${plural(totalReplaced, 'occurrence')} in ${describeFiles(changedKinds)}.`
+        : 'Replaced nothing.';
+      if (skippedDirty > 0) msg += ` Skipped ${plural(skippedDirty, 'file')} with unsaved changes.`;
+      if (skippedChanged > 0) msg += ` Skipped ${plural(skippedChanged, 'file')} that changed on disk while replacing.`;
+      if (skippedUnreadable > 0) msg += ` Skipped ${plural(skippedUnreadable, 'file')} that ${skippedUnreadable === 1 ? 'is' : 'are'} not UTF-8 text.`;
+      onToast?.(msg, skippedChanged + skippedUnreadable > 0 ? 'danger' : undefined);
       await searchAllFiles(searchTerm, caseSensitive, wholeWord);
     } catch (err: any) {
       onToast?.(`Replace failed: ${err?.message || err}`, 'danger');
@@ -354,7 +393,7 @@ export default function FindBar({ editor, onClose, focusTrigger, projectRoot, ta
         </button>
         {showAllFilesToggle && (
           <button
-            className={`find-bar-btn find-bar-case ${fileMode === 'all' ? 'active' : ''}`}
+            className={`find-bar-btn find-bar-case qa-find-all-files ${fileMode === 'all' ? 'active' : ''}`}
             onClick={toggleFileMode}
             title={fileMode === 'all' ? 'Search current file only' : 'Search all project files'}
           >
@@ -388,15 +427,15 @@ export default function FindBar({ editor, onClose, focusTrigger, projectRoot, ta
           <>
             {confirmingAllFiles ? (
               <>
-                <span className="find-bar-confirm-label">
-                  Replace {totalFileMatches} in {fileMatches.length} file{fileMatches.length !== 1 ? 's' : ''}?
+                <span className="find-bar-confirm-label qa-find-confirm-label">
+                  Replace {totalFileMatches} in {describeFiles(fileMatches.map(f => f.kind))}?
                 </span>
-                <button className="find-bar-btn btn-primary" onClick={replaceAllFiles} disabled={allFilesSearching}>Yes</button>
+                <button className="find-bar-btn btn-primary qa-find-confirm-yes" onClick={replaceAllFiles} disabled={allFilesSearching}>Yes</button>
                 <button className="find-bar-btn" onClick={() => setConfirmingAllFiles(false)}>No</button>
               </>
             ) : (
               <button
-                className="find-bar-btn"
+                className="find-bar-btn qa-find-replace-all-files"
                 onClick={() => totalFileMatches > 0 && setConfirmingAllFiles(true)}
                 disabled={totalFileMatches === 0 || allFilesSearching}
                 title="Replace in all project files (skips files with unsaved changes)"
@@ -415,10 +454,15 @@ export default function FindBar({ editor, onClose, focusTrigger, projectRoot, ta
           {!allFilesSearching && searchTerm && fileMatches.length === 0 && (
             <div className="find-bar-file-status">No matches found</div>
           )}
+          {!allFilesSearching && unreadableCount > 0 && (
+            <div className="find-bar-file-status qa-find-unreadable">
+              Skipped {plural(unreadableCount, 'file')} that {unreadableCount === 1 ? 'is' : 'are'} not UTF-8 text.
+            </div>
+          )}
           {fileMatches.map(({ filePath, fileName, count }) => (
             <div
               key={filePath}
-              className="find-bar-file-match"
+              className="find-bar-file-match qa-find-file-match"
               onClick={() => {
                 pendingSearchRef.current = searchTerm;
                 onOpenFile?.(filePath);

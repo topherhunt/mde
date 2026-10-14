@@ -39,6 +39,7 @@ Break these and something silently corrupts, clobbers, or infinite-loops.
 - **No** `codesign --deep` **after** `buildQuickLookExtension` **in** `postPackage`. It re-signs the appexes without their sandbox entitlement, macOS then silently never loads it, and `codesign --verify --deep --strict` STILL PASSES -- only `verifyQuickLookExtension` and `tests/packaged.spec.ts` notice. -> notes: Quick Look preview
 - **An image saves its captured source text, never a rebuild from** `src`**/**`alt`**.** markdown-it percent-encodes the path and flattens the alt, so a rebuild rewrites the user's reference on every save. -> notes: Markdown serialization
 - **A plain-text file saves back exactly the bytes it loaded, plus the user's edits.** Never normalize line endings, whitespace, or encoding; never open one through `read-file` (lossy on invalid UTF-8) or in the Markdown editor. -> notes: Plain-text files
+- **Find/Replace in all files reads and writes ONLY `markdown` and `plaintext` kinds, through `read-plain-text`, and writes with the hash taken BEFORE the read.** It once force-wrote every matching file through `read-file`, so a PDF or image containing the term was corrupted. -> notes: Find and Replace in all files
 - **Import never mutates the source file.** No renaming, moving, or hiding, and no code path overwrites an already-converted Markdown. -> notes: Import (DOCX / PDF)
 - `confirm()` **and** `alert()` **don't work in Electron's renderer.** Use in-app toasts or inline confirmation UI.
 - **Renderer webpack config must NOT use** `@vercel/webpack-asset-relocator-loader` -- it breaks ESM imports from TipTap packages. Main process only.
@@ -132,7 +133,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 
 ### Plain-text files
 
-- `utils/fileKinds.ts` (`fileKind`) is the ONLY place that decides how a file opens (markdown / plaintext / importable / other) and which dotfiles are listed. Plain text is a fixed allowlist, no content sniffing. -> notes: Plain-text files
+- `utils/fileKinds.ts` (`fileKind`) is the ONLY place that decides how a file opens (markdown / plaintext / importable / other) and which dotfiles are listed. Plain text is a fixed allowlist, no content sniffing. Dotfiles are listed only with Settings > Show hidden files on (`showHiddenFiles`, default off), and then only the allowlisted ones. -> notes: Plain-text files
 - Plain-text tabs (`tab.plainText`) use `PlainTextEditor` (CodeMirror 6, no language package), no toolbar, no outline, no export. Save/reload go through App's `DocBuffer`, so the hash guard and conflict machinery are shared. -> notes: Plain-text files
 
 ### Import and packaging
@@ -175,7 +176,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-320 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+330 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

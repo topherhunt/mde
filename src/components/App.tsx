@@ -238,6 +238,7 @@ export default function App() {
   const [linkTrigger, setLinkTrigger] = useState(0);
   const [spellcheck, setSpellcheck] = useState(true);
   const [autosave, setAutosave] = useState(false);
+  const [showHiddenFiles, setShowHiddenFiles] = useState(false);
   const [toolbarVisible, setToolbarVisible] = useState(true);
   const [toolbarLeaving, setToolbarLeaving] = useState(false);
   const toolbarLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -916,13 +917,15 @@ export default function App() {
     window.mde.getTheme().then(applyTheme);
     window.mde.getSpellcheck().then(setSpellcheck);
     window.mde.getAutosave().then(setAutosave);
+    window.mde.getShowHiddenFiles().then(setShowHiddenFiles);
     window.mde.getToolbar().then(setToolbarVisible);
     const cleanupTheme = window.mde.onThemeChanged(applyTheme);
     const cleanupToolbar = window.mde.onToolbarChanged(applyToolbarVisible);
     const cleanupSpell = window.mde.onSpellcheckChanged(setSpellcheck);
     const cleanupAutosave = window.mde.onAutosaveChanged(setAutosave);
+    const cleanupHidden = window.mde.onShowHiddenFilesChanged(setShowHiddenFiles);
     const cleanupProjectFiles = window.mde.onProjectFilesChanged(() => setSidebarRefreshKey(n => n + 1));
-    return () => { cleanupTheme(); cleanupSpell(); cleanupAutosave(); cleanupToolbar(); cleanupProjectFiles(); };
+    return () => { cleanupTheme(); cleanupSpell(); cleanupAutosave(); cleanupHidden(); cleanupToolbar(); cleanupProjectFiles(); };
   }, []);
 
   useEffect(() => { findBarOpenRef.current = state.findBarOpen; }, [state.findBarOpen]);
@@ -1256,6 +1259,7 @@ export default function App() {
           theme={theme}
           spellcheck={spellcheck}
           autosave={autosave}
+          showHiddenFiles={showHiddenFiles}
           projectRoot={state.projectRoot}
           vc={vc}
           onToast={showToast}
@@ -1274,6 +1278,7 @@ interface SettingsDialogProps {
   theme: string;
   spellcheck: boolean;
   autosave: boolean;
+  showHiddenFiles: boolean;
   // Checkpoints are a per-FOLDER setting living in an otherwise app-global dialog, which is why
   // these three have to be threaded down here at all. `CheckpointSettings` names the folder so
   // the mismatch is visible rather than misleading.
@@ -1282,7 +1287,7 @@ interface SettingsDialogProps {
   onToast: (msg: string, variant?: string) => void;
 }
 
-function SettingsDialog({ onClose, theme, spellcheck, autosave, projectRoot, vc, onToast }: SettingsDialogProps) {
+function SettingsDialog({ onClose, theme, spellcheck, autosave, showHiddenFiles, projectRoot, vc, onToast }: SettingsDialogProps) {
   const [status, setStatus] = useState<'checking' | 'idle' | 'installed' | 'installing' | 'done' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
   const [installNote, setInstallNote] = useState('');
@@ -1357,6 +1362,24 @@ function SettingsDialog({ onClose, theme, spellcheck, autosave, projectRoot, vc,
                 type="checkbox"
                 checked={autosave}
                 onChange={(e) => window.mde.setAutosave(e.target.checked)}
+              />
+              <span className="settings-toggle-slider" />
+            </label>
+          </div>
+          <div className="settings-separator" />
+          <div className="settings-row">
+            <div>
+              <div className="fw-bold">Show hidden files</div>
+              <div className="small text-muted">
+                List settings files such as <code>.gitignore</code> and <code>.env</code> in the file explorer, Quick Open, and Find in all files.
+              </div>
+            </div>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                className="qa-settings-show-hidden"
+                checked={showHiddenFiles}
+                onChange={(e) => window.mde.setShowHiddenFiles(e.target.checked)}
               />
               <span className="settings-toggle-slider" />
             </label>

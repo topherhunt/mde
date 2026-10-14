@@ -9,7 +9,7 @@ const PLAINTEXT_EXTENSIONS = new Set([
   'txt', 'json', 'jsonc', 'yaml', 'yml', 'toml', 'csv', 'tsv', 'log', 'ini', 'conf', 'env',
   'xml', 'html', 'css', 'js', 'ts', 'sh', 'py', 'rb', 'sql',
 ]);
-// Exact names, lowercased. The dotfiles here are the only ones the file explorer lists.
+// Exact names, lowercased. The dotfiles here are the only ones the file explorer can list.
 const PLAINTEXT_NAMES = new Set(['.gitignore', '.editorconfig', '.env', 'makefile', 'dockerfile', 'license']);
 
 function lowerBasename(nameOrPath: string): string {
@@ -27,7 +27,8 @@ export function fileKind(nameOrPath: string): FileKind {
   return 'other';
 }
 
-// Dotfiles are hidden from the file explorer and Quick Open, except the ones MDE can open.
-export function isHiddenName(name: string): boolean {
-  return name.startsWith('.') && !PLAINTEXT_NAMES.has(name.toLowerCase());
+// Whether a file is left out of the file explorer, Quick Open, and project-wide Find. Every
+// dotfile is, unless the "Show hidden files" setting is on and MDE can open it.
+export function isHiddenName(name: string, showHidden: boolean): boolean {
+  return name.startsWith('.') && !(showHidden && PLAINTEXT_NAMES.has(name.toLowerCase()));
 }
