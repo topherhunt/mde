@@ -188,6 +188,7 @@ function fileIcon(name: string): string | null {
     case 'markdown': return 'bi-markdown';
     case 'plaintext': return 'bi-code-slash';
     case 'importable': return /\.pdf$/i.test(name) ? 'bi-file-earmark-pdf' : 'bi-file-earmark-word';
+    case 'image': return 'bi-file-earmark-image';
     case 'other': return null;
   }
 }

@@ -133,7 +133,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 
 ### Plain-text files
 
-- `utils/fileKinds.ts` (`fileKind`) is the ONLY place that decides how a file opens (markdown / plaintext / importable / other) and which dotfiles are listed. Plain text is a fixed allowlist, no content sniffing. Dotfiles are listed only with Settings > Show hidden files on (`showHiddenFiles`, default off), and then only the allowlisted ones. -> notes: Plain-text files
+- `utils/fileKinds.ts` (`fileKind`) is the ONLY place that decides how a file opens (markdown / plaintext / importable / image / other) and which dotfiles are listed. Plain text is a fixed allowlist, no content sniffing. Dotfiles are listed only with Settings > Show hidden files on (`showHiddenFiles`, default off), and then only the allowlisted ones. -> notes: Plain-text files
 - Plain-text tabs (`tab.plainText`) use `PlainTextEditor` (CodeMirror 6, no language package), no toolbar, no outline, no export. Save/reload go through App's `DocBuffer`, so the hash guard and conflict machinery are shared. -> notes: Plain-text files
 
 ### Import and packaging
@@ -143,6 +143,7 @@ Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 - `forge.config.ts`'s `packageAfterCopy` hook copies main-process externals plus their transitive prod deps into the packaged app, because electron-forge ships an empty `node_modules` inside `app.asar`. -> notes: Packaging and webpack
 - Finder Quick Look preview and icon thumbnail are two Swift appexes in `quicklook/` (no Xcode project), both reading markdown through the editor's markdown-it via `render.js` in JavaScriptCore. They only fire because `forge.config.ts` imports the `net.daringfireball.markdown` UTI. The extensions themselves can't be E2E tested -- hand-check spacebar and Finder icons each release. -> notes: Quick Look preview
 - Export (right-click > Export as PDF / DOCX in the file explorer or a tab, or File > Export for the active tab) writes `<name>.pdf`/`.docx` beside the source -- no save dialog. Both are built from the ProseMirror document, never the window; an open file exports its live buffer. An unmapped node or mark must THROW, not drop content. -> notes: Export (PDF / DOCX)
+- Clicking an image opens a read-only image TAB (`view: 'image'`, `ImagePreview`), scaled down to fit, served by `mde-file:`. `IMAGE_TYPES` in `utils/fileKinds.ts` is both what lists as an image and what the protocol will serve. Dropping an image on the window (outside a document) still only toasts -- it does not open the tab.
 - Bootstrap Icons are self-hosted in `src/fonts/`, imported via CSS in renderer.tsx.
 - Tooltips use a shared CSS `[data-tooltip]::after` bubble; buttons set `data-tooltip` + `aria-label`, not `title`. -> notes: UI details
 
@@ -176,7 +177,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-330 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+332 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

@@ -4918,6 +4918,49 @@ test.describe('Sidebar layout', () => {
 const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 test.describe('Images', () => {
+  test('clicking an image in the explorer shows it read-only, scaled to fit, without touching the file', async () => {
+    ({ app, page } = await launchApp());
+    const tmpDir = makeTmpDir();
+    const pngPath = path.join(tmpDir, 'dot.png');
+    const svgPath = path.join(tmpDir, 'wide.svg');
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="1000"><rect width="4000" height="1000" fill="red"/></svg>';
+    fs.writeFileSync(pngPath, PNG_BYTES);
+    fs.writeFileSync(svgPath, svg);
+    await openProject(tmpDir);
+
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^dot\.png$/ }).click();
+    const img = page.locator('.qa-image-preview img');
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth), { timeout: 5000 }).toBe(1);
+    await expect(page.locator('.tab.active')).toContainText('dot.png');
+    await expect(page.locator('.qa-tree-file-image .qa-tree-file-icon').first()).toHaveClass(/bi-file-earmark-image/);
+    await expect(page.locator('.ProseMirror:visible')).toHaveCount(0);
+    await expect(page.locator('.toolbar')).toHaveCount(0);
+    await expect(page.locator('.qa-import-bar')).toHaveCount(0);
+
+    // A single click is tentative, so the next image replaces this tab rather than adding one.
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^wide\.svg$/ }).click();
+    await expect(page.locator('.tab')).toHaveCount(1);
+    await expect(page.locator('.tab.active')).toContainText('wide.svg');
+    await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth), { timeout: 5000 }).toBe(4000);
+    const fit = await img.evaluate((el: HTMLImageElement) => ({ img: el.getBoundingClientRect().width, pane: el.parentElement!.getBoundingClientRect().width }));
+    expect(fit.img).toBeGreaterThan(0);
+    expect(fit.img).toBeLessThanOrEqual(fit.pane);
+
+    expect(fs.readFileSync(pngPath)).toEqual(PNG_BYTES);
+    expect(fs.readFileSync(svgPath, 'utf8')).toBe(svg);
+  });
+
+  test('an image file that cannot be decoded shows an error rather than a broken image', async () => {
+    ({ app, page } = await launchApp());
+    const tmpDir = makeTmpDir();
+    fs.writeFileSync(path.join(tmpDir, 'broken.png'), 'not an image');
+    await openProject(tmpDir);
+
+    await page.locator('.sidebar .tree-name').filter({ hasText: /^broken\.png$/ }).click();
+    await expect(page.locator('.qa-image-preview-error')).toContainText('broken.png', { timeout: 5000 });
+    await expect(page.locator('.qa-image-preview img')).toHaveCount(0);
+  });
+
   test('every form of image reference survives load, edit, and save byte-for-byte', async () => {
     ({ app, page } = await launchApp());
     // Each of these is one markdown-it would normalize if rebuilt from attrs: angle brackets

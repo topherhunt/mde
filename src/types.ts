@@ -40,8 +40,9 @@ export interface Tab {
   // keep a hidden editor receiving keystrokes. Everything else -- Cmd+W, Cmd+S, the conflict
   // banner, drag-drop -- already has a correct answer for a read-only tab.
   // 'preview' shows a .pdf/.docx (`filePath`) read-only, with an offer to convert it. It is
-  // never watched or saved: the source is not a document MDE writes.
-  view?: 'history' | 'preview';
+  // never watched or saved: the source is not a document MDE writes. 'image' shows an image file
+  // (`filePath`) the same way, with nothing to convert.
+  view?: 'history' | 'preview' | 'image';
   // Edited as literal text (PlainTextEditor) rather than as Markdown. Fixed when the tab
   // opens, so renaming the file does not swap the editor under the buffer.
   plainText?: boolean;

@@ -21,18 +21,14 @@ import {
   flushAll,
 } from './git/checkpointer';
 import { VcCheckpointResult } from './types';
-import { isHiddenName } from './utils/fileKinds';
+import { isHiddenName, IMAGE_TYPES } from './utils/fileKinds';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 
-// `mde-file://local/<path>` serves local images to the editor and the PDF export window (see
-// utils/imageNode.ts), and PDFs to the import preview. Those types only: everything else the
-// renderer reads goes through IPC.
-const IMAGE_TYPES: Record<string, string> = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
-  '.webp': 'image/webp', '.svg': 'image/svg+xml', '.avif': 'image/avif', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
-};
+// `mde-file://local/<path>` serves local images (IMAGE_TYPES) to the editor, the image tab, and the
+// PDF export window (see utils/imageNode.ts), and PDFs to the import preview. Those types only:
+// everything else the renderer reads goes through IPC.
 protocol.registerSchemesAsPrivileged([
   { scheme: 'mde-file', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
 ]);

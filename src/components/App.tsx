@@ -14,6 +14,7 @@ import QuickOpen from './QuickOpen';
 import { useVersionControl, VersionControl, CheckpointSettings } from './VersionPanel';
 import HistoryView, { HistoryNavRequest } from './HistoryView';
 import ImportPreview from './ImportPreview';
+import ImagePreview from './ImagePreview';
 import PlainTextEditor, { PlainTextHandle } from './PlainTextEditor';
 import { fileKind } from '../utils/fileKinds';
 import { DeleteConfirmDialog, ExportConflictDialog, copyFilePath, relativeToProject } from './FileContextMenu';
@@ -375,12 +376,12 @@ export default function App() {
     }
 
     const kind = fileKind(filePath);
-    if (kind === 'importable') {
+    if (kind === 'importable' || kind === 'image') {
       dispatch({
         type: 'OPEN_TAB',
         tab: {
           id: nextTabId(), filePath, fileName: fileNameFromPath(filePath), dirty: false, diskMtime: null,
-          diskHash: null, conflict: false, tentative, readOnly: true, view: 'preview',
+          diskHash: null, conflict: false, tentative, readOnly: true, view: kind === 'image' ? 'image' : 'preview',
         },
       });
       return;
@@ -1017,10 +1018,10 @@ export default function App() {
           }
           return;
         }
-        if (fileKind(filePath) !== 'other') {
-          openFile(filePath);
-        } else if (isImageFile(file)) {
+        if (isImageFile(file)) {
           showToast('To add an image, drop it into the document.', 'danger');
+        } else if (fileKind(filePath) !== 'other') {
+          openFile(filePath);
         } else {
           const ext = basename(filePath) || filePath;
           showToast(`Unsupported file type: ${ext}`, 'danger');
@@ -1179,6 +1180,8 @@ export default function App() {
                   />
                 ) : tab.view === 'preview' && tab.filePath ? (
                   <ImportPreview tabId={tab.id} filePath={tab.filePath} onConvert={runConvert} onOpenFile={openFile} onOutline={setPreviewOutline} onOutlineActive={setPreviewOutlineActive} />
+                ) : tab.view === 'image' && tab.filePath ? (
+                  <ImagePreview filePath={tab.filePath} />
                 ) : tab.plainText ? (
                   <PlainTextEditor
                     tab={tab}

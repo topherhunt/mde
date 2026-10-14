@@ -1,7 +1,13 @@
 // How MDE opens a file, decided by its name alone. Shared by the main process and the renderer.
 // 'markdown' opens in the WYSIWYG editor, 'plaintext' in the literal text editor, 'importable'
-// in a read-only preview; 'other' does not open.
-export type FileKind = 'markdown' | 'plaintext' | 'importable' | 'other';
+// in a read-only preview with an offer to convert, 'image' in a read-only image view; 'other' does not open.
+export type FileKind = 'markdown' | 'plaintext' | 'importable' | 'image' | 'other';
+
+// Also the types `mde-file:` will serve (index.ts), so an image MDE lists is always one it can show.
+export const IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.svg': 'image/svg+xml', '.avif': 'image/avif', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
+};
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
 const IMPORTABLE_EXTENSIONS = new Set(['pdf', 'docx']);
@@ -24,6 +30,7 @@ export function fileKind(nameOrPath: string): FileKind {
   if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown';
   if (PLAINTEXT_EXTENSIONS.has(ext)) return 'plaintext';
   if (IMPORTABLE_EXTENSIONS.has(ext)) return 'importable';
+  if (`.${ext}` in IMAGE_TYPES) return 'image';
   return 'other';
 }
 

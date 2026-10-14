@@ -186,7 +186,7 @@ test.describe('Plain-text files: file explorer', () => {
     ({ app, page } = await launchApp());
     await showHiddenFiles();
     const dir = makeTmpDir();
-    for (const name of ['notes.md', 'data.json', '.gitignore', '.env', 'Dockerfile', 'report.pdf', 'letter.docx', 'photo.png', '.hidden', '.eslintrc']) {
+    for (const name of ['notes.md', 'data.json', '.gitignore', '.env', 'Dockerfile', 'report.pdf', 'letter.docx', 'photo.png', 'archive.zip', '.hidden', '.eslintrc']) {
       fs.writeFileSync(path.join(dir, name), '');
     }
     await send('open-project', dir);
@@ -200,8 +200,10 @@ test.describe('Plain-text files: file explorer', () => {
     }
     await expect(row('report.pdf').locator('.qa-tree-file-icon')).toHaveClass(/bi-file-earmark-pdf/);
     await expect(row('letter.docx').locator('.qa-tree-file-icon')).toHaveClass(/bi-file-earmark-word/);
-    await expect(row('photo.png').locator('.qa-tree-file-icon')).not.toHaveClass(/bi-/);
-    await expect(row('photo.png')).toHaveClass(/tree-file-disabled/);
+    await expect(row('photo.png').locator('.qa-tree-file-icon')).toHaveClass(/bi-file-earmark-image/);
+    await expect(row('photo.png')).not.toHaveClass(/tree-file-disabled/);
+    await expect(row('archive.zip').locator('.qa-tree-file-icon')).not.toHaveClass(/bi-/);
+    await expect(row('archive.zip')).toHaveClass(/tree-file-disabled/);
     await expect(row('.hidden')).toHaveCount(0);
     await expect(row('.eslintrc')).toHaveCount(0);
   });

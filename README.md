@@ -15,6 +15,7 @@ MDE fills some gaps between Obsidian and VS Code for Markdown editing:
 - **True WYSIWYG** -- like Obsidian, you see formatted text as you type, not raw Markdown syntax
 - **Folder-based, no vault lock-in** -- open any folder from the terminal (`mde .`) or drag it onto the window or dock icon, like VS Code. No special vault folder to set up. Every folder gets the same treatment.
 - **Preview and convert PDF & DOCX** -- click a PDF or DOCX in the sidebar to read it in a tab, then convert it to editable Markdown with one button; the original is left untouched (Warning: conversion is not perfect)
+- **View images** -- click an image in the sidebar to see it in a tab
 - **File conflict detection** -- smart auto-reload or warning is displayed if file conflicts are detected. I've been burned by Obsidian and VS Code's wonky file-conflict handling.
 - **Checkpoints** -- an undo history for the whole folder, built for people working alongside Claude Code or other AI agents. See what changed, read it as prose rather than a `+`/`-` diff, and put any file (or the whole folder) back. No Git knowledge required, and nothing is ever lost.
 
