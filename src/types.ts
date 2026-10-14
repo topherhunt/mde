@@ -223,6 +223,7 @@ export interface MdeAPI {
   installTerminalLauncher: () => Promise<{ success: boolean; error?: string; note?: string }>;
   onOpenSettings: (callback: () => void) => () => void;
   onToggleCodeBlock: (callback: () => void) => () => void;
+  onCopyAsMarkdown: (callback: () => void) => () => void;
   onInsertLink: (callback: () => void) => () => void;
   getSpellcheck: () => Promise<boolean>;
   setSpellcheck: (enabled: boolean) => Promise<void>;

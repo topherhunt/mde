@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { launchApp, fixturePath } from './electron-helpers';
+import { launchApp, fixturePath, clickMenuItem } from './electron-helpers';
 import { ElectronApplication, Page } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -4284,6 +4284,48 @@ test.describe('Plain-text clipboard', () => {
     await expect(editor.locator('h1')).toHaveCount(1);
     await expect(editor.locator('strong')).toHaveCount(1);
     await expect(editor.locator('li')).toHaveCount(3);
+  });
+
+  test('Edit > Copy as Markdown puts the selection\'s Markdown source on the clipboard', async () => {
+    ({ app, page } = await launchApp());
+    const md = '# Heading\n\nSome **bold** and [a link](https://example.com).\n\n- one\n- [x] two\n  - [ ] nested **bold** task\n';
+    await openMarkdown(md, 'copy-md.md');
+    const editor = page.locator('.tiptap:visible');
+    await expect(editor.locator('strong').first()).toHaveText('bold', { timeout: 5000 });
+
+    await editor.locator('h1').click();
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.evaluate(() => navigator.clipboard.writeText(''));
+    await clickMenuItem(app, 'Edit', 'Copy as Markdown');
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(md.trimEnd());
+
+    // Text inside one nested item: its Markdown, without any item's "- [ ]" marker.
+    await editor.locator('li li p').click({ clickCount: 3 });
+    await clickMenuItem(app, 'Edit', 'Copy as Markdown');
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('nested **bold** task');
+  });
+
+  test('right-clicking selected text offers Copy and Copy as Markdown; no selection, no menu', async () => {
+    ({ app, page } = await launchApp());
+    await openMarkdown('Some **bold** text.\n\nOther line.\n', 'ctx.md');
+    const editor = page.locator('.tiptap:visible');
+    const para = editor.locator('p', { hasText: 'Some' });
+    await expect(editor.locator('strong')).toHaveText('bold', { timeout: 5000 });
+
+    await para.click({ clickCount: 3 });
+    await para.click({ button: 'right' });
+    await page.locator('.qa-text-copy-markdown').click();
+    await expect(page.locator('.qa-text-menu')).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('Some **bold** text.');
+
+    await para.click({ button: 'right' });
+    await page.locator('.qa-text-copy').click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('Some bold text.');
+
+    // A collapsed cursor has nothing to copy, so right-click shows no menu.
+    await editor.locator('p', { hasText: 'Other' }).click();
+    await editor.locator('p', { hasText: 'Other' }).click({ button: 'right' });
+    await expect(page.locator('.qa-text-menu')).toHaveCount(0);
   });
 });
 

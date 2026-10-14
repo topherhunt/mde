@@ -21,6 +21,7 @@ import { dirname } from '../utils/paths';
 import { ColorHighlight, TextColor, escapeColorSyntax } from '../utils/colorMarks';
 import TableMenu from './TableMenu';
 import ImageContextMenu from './ImageContextMenu';
+import TextContextMenu from './TextContextMenu';
 import PasteImagesDialog from './PasteImagesDialog';
 import DeleteImageDialog, { DeleteImageChoice } from './DeleteImageDialog';
 import { IMAGE_DELETE_ANSWERED, IMAGE_DELETE_EVENT, ImageDeleteGuard, ImageDeleteRequest } from '../utils/imageDeletion';
@@ -190,6 +191,34 @@ function listItemDepth($pos: any): number {
     if ($pos.node(d).type.name === 'listItem') return d;
   }
   return 0;
+}
+
+// The selection as Markdown source, for Copy as Markdown (the plain copy is literal
+// text). Text inside one list item drops the item's marker -- a slice carries every
+// ancestor item, so a nested task would read "- [ ] - [x] text" -- and a lone whole
+// item sheds its own marker while any sublist it carries keeps theirs.
+export function selectionToMarkdown(editor: any): string {
+  const serializer = editor.storage.markdown.serializer;
+  const { $from, $to, empty } = editor.state.selection;
+  if (empty) return '';
+  if ($from.sameParent($to) && $from.parent.isTextblock && !$from.parent.type.spec.code
+      && listItemDepth($from) > 0) {
+    return serializer.serialize(Fragment.from($from.parent.cut($from.parentOffset, $to.parentOffset))).trim();
+  }
+  const { content } = editor.state.selection.content();
+  if (content.childCount === 1) {
+    const child = content.firstChild!;
+    if ((child.type.name === 'bulletList' || child.type.name === 'orderedList') && child.childCount === 1) {
+      return serializer.serialize(child.firstChild!.content).trim();
+    }
+    if (child.type.name === 'listItem') return serializer.serialize(child.content).trim();
+  }
+  return serializer.serialize(content);
+}
+
+export function copySelectionAsMarkdown(editor: any): void {
+  const md = selectionToMarkdown(editor);
+  if (md) navigator.clipboard.writeText(md);
 }
 
 // Every copy's text/plain is literal text (fragmentToPlainText); code-only
@@ -2007,6 +2036,7 @@ export default function Editor({
       {!tab.readOnly && <LinkPreview editor={editor} />}
       {!tab.readOnly && <TableMenu editor={editor} />}
       <ImageContextMenu editor={editor} />
+      <TextContextMenu editor={editor} copyAsMarkdown={copySelectionAsMarkdown} />
       {pendingPaste && <PasteImagesDialog pending={pendingPaste} canSave={docDir !== null} onChoose={finishPaste} onCancel={cancelPaste} />}
       {pendingDelete && <DeleteImageDialog files={pendingDelete.files.map((f) => f.shown)} onChoose={finishDelete} onCancel={cancelDelete} />}
     </div>

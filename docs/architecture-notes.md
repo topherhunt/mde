@@ -230,6 +230,8 @@ Every copy writes BOTH a `text/html` (ProseMirror's own, rich: headings, bold, l
 
 Every node recurses into its children, so no block can be dropped from the copy. A "contains a table anywhere" shortcut once silently dropped every non-table block -- never decide the whole slice's output on what it contains.
 
+**Copy as Markdown** (Edit menu, `copy-as-markdown` IPC, and `TextContextMenu` on right-click inside a selection) is the way to get Markdown source: `selectionToMarkdown` writes ONLY `text/plain`, so a paste into MDE goes through tiptap-markdown's parser and comes back rich. Text inside one list item drops the item's marker (a slice carries every ancestor item, so a nested task would read `- [ ] - [x] text`), and a lone whole item sheds its own marker while any sublist keeps theirs. The menu's plain Copy runs `document.execCommand('copy')`, so it goes through exactly the same handlers as Cmd+C.
+
 Paste INSIDE MDE is unaffected: ProseMirror reads the `text/html` (with its `data-pm-slice` structure) unless the paste is plain (Shift) or lands in a code block, where it takes the literal `text/plain`.
 
 ### Code blocks and inline code

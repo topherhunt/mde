@@ -165,6 +165,12 @@ const api = {
     return () => ipcRenderer.removeListener('toggle-code-block', handler);
   },
 
+  onCopyAsMarkdown: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('copy-as-markdown', handler);
+    return () => ipcRenderer.removeListener('copy-as-markdown', handler);
+  },
+
   onInsertLink: (callback: () => void) => {
     const handler = () => callback();
     ipcRenderer.on('insert-link', handler);

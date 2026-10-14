@@ -88,7 +88,7 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 
 ### Clipboard and paste
 
-- Every copy's `text/plain` is the literal text with no Markdown syntax (blank line between blocks, newline between list items and table rows, tab between cells); rich formatting rides in `text/html`. A selection whose only content is one code block or inline code span (part or whole) also gets plain `text/html`, so it never pastes back as code. -> notes: Clipboard
+- Every copy's `text/plain` is the literal text with no Markdown syntax (blank line between blocks, newline between list items and table rows, tab between cells); rich formatting rides in `text/html`. Markdown source comes only from Copy as Markdown (Edit menu, or right-click inside a selection). A selection whose only content is one code block or inline code span (part or whole) also gets plain `text/html`, so it never pastes back as code. -> notes: Clipboard
 - `handlePaste` intercepts list-shaped plain text and routes it through MDE's own file-load pipeline, so a pasted list is structurally identical to a loaded one. This is what actually fixes real-world (Obsidian) list pastes -- `transformPastedText` never fires when the clipboard carries `text/html`. -> notes: Paste and input rules
 - `BacktickWrap`: a backtick typed over a non-empty single-line selection wraps it in inline code.
 

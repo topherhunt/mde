@@ -461,6 +461,12 @@ function buildMenu(): void {
         { type: 'separator' },
         { role: 'cut' },
         { role: 'copy' },
+        {
+          label: 'Copy as Markdown',
+          click: (_item: Electron.MenuItem, win: Electron.BaseWindow | undefined) => {
+            if (win instanceof BrowserWindow) win.webContents.send('copy-as-markdown');
+          },
+        },
         { role: 'paste' },
         { role: 'selectAll' },
         { type: 'separator' },

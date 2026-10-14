@@ -6,7 +6,7 @@ import Toolbar, { TOGGLE_TOOLBAR_HINT } from './Toolbar';
 
 // Must match the .toolbar-leaving transition in index.css.
 const TOOLBAR_SLIDE_MS = 200;
-import Editor, { getFoldedPositions, applyFoldPositions, foldPosToLineNumbers, lineNumbersToFoldPositions } from './Editor';
+import Editor, { copySelectionAsMarkdown, getFoldedPositions, applyFoldPositions, foldPosToLineNumbers, lineNumbersToFoldPositions } from './Editor';
 import ConflictBanner from './ConflictBanner';
 import FindBar from './FindBar';
 import LinkBar from './LinkBar';
@@ -791,6 +791,10 @@ export default function App() {
       window.mde.onToggleCodeBlock(() => {
         const ed = editorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
         if (ed) ed.chain().focus().toggleCodeBlock().run();
+      }),
+      window.mde.onCopyAsMarkdown(() => {
+        const ed = editorsRef.current.get(state.tabs[state.activeTabIndex]?.id);
+        if (ed) copySelectionAsMarkdown(ed);
       }),
       window.mde.onShowKeyboardShortcuts(openKeyboardShortcuts),
       window.mde.onShowWordCount(() => setWordCountOpen(true)),
