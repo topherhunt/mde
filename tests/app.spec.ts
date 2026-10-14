@@ -5231,7 +5231,12 @@ test.describe('Pasting images', () => {
   async function paste(clip: { html?: string; text?: string; files?: string[] }) {
     const ed = page.locator('.tiptap:visible');
     // A click can't place the caret: the headless window never has focus (see the Images tests).
-    await ed.evaluate((el) => (el as any).editor.commands.focus('end'));
+    // focus() lands in a requestAnimationFrame; wait it out, or it steals focus back from the dialog
+    // and a later fill() types into the document instead of the folder field.
+    await ed.evaluate((el) => new Promise<void>((resolve) => {
+      (el as any).editor.commands.focus('end');
+      requestAnimationFrame(() => resolve());
+    }));
     await ed.evaluate((el, { clip, png }) => {
       const dt = new DataTransfer();
       if (clip.html) dt.setData('text/html', clip.html);
