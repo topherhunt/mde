@@ -540,7 +540,7 @@ There is no operation anywhere that destroys or rewrites a commit. Restore reads
 
 `mde.managed = true` in `.git/config` is the ONLY thing that makes a repo writable. `.git/config` is the right home: inside `.git/`, so never in the working tree, never in a diff, never committed, and it survives a move, rename, copy, or zip. Do NOT key managed-ness off a path in `mde-state.json` -- that breaks on exactly the rename case (there is a test).
 
-Four attach states: `none` (no repo -- dimmed tab, opt-in screen), `managed` (writable), `foreign` (a repo MDE did not create -- read-only browsing plus an explicit adopt button), `steppedBack` (marker present but a remote or a second branch appeared -- read-only, and NOT adoptable). Live evidence outranks the marker, always. A false negative costs one click; a false positive means MDE silently commits into a developer's real project.
+Five attach states: `none` (no repo -- dimmed tab, opt-in screen), `managed` (writable), `foreign` (a repo MDE did not create -- read-only browsing plus an explicit adopt button), `steppedBack` (marker present but a remote or a second branch appeared -- read-only, and NOT adoptable), and `off` (the user turned watching off for this folder; it overrides the other four -- see "Turning a folder off"). Live evidence outranks the marker, always. A false negative costs one click; a false positive means MDE silently commits into a developer's real project.
 
 ### Opt-in is mandatory, and it lives in Settings
 
@@ -548,7 +548,7 @@ Opening a folder never creates a repo. Turning checkpoints on is a **Settings** 
 
 The sidebar's `none` state is a signpost, not a control -- but it keeps the whole explanation and adds an "Open Settings" button. Moving the explanation into Settings alongside the button would hide the feature from exactly the people it was built for, because nobody browses Settings.
 
-There is deliberately **no "turn off" button**. Off means flipping back to manual: the history is real work the user may want back, and a checkbox that deletes it is not a thing this feature should own. Adopting a `foreign` repo moved to Settings for the same reason activation did -- it is the same decision.
+There is deliberately **no "turn off" button** that undoes activation. Off means flipping back to manual: the history is real work the user may want back, and a checkbox that deletes it is not a thing this feature should own. The "Watch this folder for changes" switch is not that button -- it deletes nothing and only stops MDE looking. Adopting a `foreign` repo moved to Settings for the same reason activation did -- it is the same decision.
 
 ### Two axes, not one permission
 
@@ -579,16 +579,28 @@ Change detection derives from `statusMatrix`, NOT from watcher events, and this 
 
 Poll interval self-calibrates: `max(60s, lastStatusDuration * 100)`, capped at 15 minutes. Measured 52-74ms on this repo with 33k gitignored entries, so a real Markdown folder is far cheaper.
 
-### isomorphic-git has no racy-clean rule
+**Status walks run on a worker thread, never the main process, where their cost landed on saves, reads, and every IPC reply.** The poller is not the only caller: the sidebar badge refreshes on each `project-files-changed` (any watcher event, 2s debounce, in ANY attach state but `none`, panel open or not). On a code repo with 360MB of packs and agents writing into an ignored `tmp/` every second, each walk blocked the main process for ~6s -- beachballs and typing lag. The cause is an isomorphic-git race: it SHA-1s a whole pack on first read (`_checksumVerified`), but every object read that was waiting for the pack to load runs the check too, and a walk reads sibling folders' trees concurrently. That repo hashed 20GB per walk (92 x 220MB), synchronously. It needs HEAD's root tree OUTSIDE the big pack (loose, or in a newer pack), so all subtree reads pile onto the pack's load; a fixture whose root tree shares the pack hashes once and looks fine. The defences, each with a mutation-verified test in "Status walks":
 
-`compareStats` reuses an index entry's cached hash when the mtime SECOND, ctime second, size, inode, and mode all still match. mtime granularity is one second. **So a write landing in the same second as the `git.add` that recorded those stats, at the same byte length, is invisible -- permanently, until something else touches the file.** Real Git closes this with the racy-clean rule; isomorphic-git does not implement it. For a feature promising "nothing is ever lost", a file silently missing from the changes list is the worst available failure.
-
-Two halves, both required:
+- **Each pack is loaded once, before the walk** (`loadPacksOneAtATime` in `src/git/statusWalk.ts`). Reading the first object of each `.idx` one at a time, through the shared `cache`, verifies each pack before the walk's concurrent reads can pile onto it. On that repo a cold walk went from 6.4s to ~0.4s (6.6s of CPU to ~0.7s). The test fixture puts HEAD's root tree outside the pack for the reason above and counts bytes through `crypto.createHash`.
+- **The walk is on a worker** (`src/git/statusWorker.ts`, its own webpack entry, loaded by path from beside `index.cjs`; the walk itself is `statusWalk.ts`, importable in-process by tests). `status.ts` keeps pacing, coalescing, and the lock on the main side and sends the worker one message per walk. A worker that crashes, fails to load, or is stopped rejects every walk in flight and is replaced on the next request -- nothing hangs. It stops after 5 quiet minutes (an idle worker is ~20MB RSS; its packs would have gone cold by then anyway) and on quit. Only inside the packaged `app.asar` can the load fail while the dev suite passes, so `--self-test-status=<dir>` walks `<dir>` on the worker and prints JSON, and `tests/packaged.spec.ts` runs it against the built binary.
+- **Packs are cached across walks, in the worker; the index never is.** With a fresh `cache` every call, every walk reloads (and re-hashes) every pack; reusing the pack map took that walk from ~6s to ~165ms. Pack files are immutable per name, so the map is safe to keep (entries whose `.idx` vanished are pruned; a root's packs are released after 5 idle minutes or on folder close). The index is NOT carried over: isomorphic-git's index-staleness check is whole-second mtime + size + inode, `deraceIndex` rewrites it in place, and a same-second same-size rewrite would leave a cached index silently stale.
+- **Walks and checkpoints never overlap (`withIndexLock`, per root).** isomorphic-git writes `.git/index` in place and its own lock is per thread, so a worker walk could read the index half-rewritten by `createCheckpoint`'s `git.add` on the main thread. `createCheckpoint` holds the lock for its whole run; `observeStatus` takes it for each walk.
+- **Observers go through `observeStatus`: coalesced and paced.** Requests that arrive while a walk is pending share it (each still gets a walk that began after it asked), and a walk cannot start until 9x the previous walk's cost has passed, capping the worker at ~10% of a core whatever the repo. Only `createCheckpoint` calls `computeStatus` directly (already holding the lock), since a commit must see the tree at the moment of the click.
 
 - `computeStatus` passes **`refresh: false`**, making status read-only with respect to the index. With the default, a status that merely happened to run in the same second as a write would poison the stat cache with nothing following it to undo the damage. This makes `git.add` the only writer of index stats in the whole system.
 - `createCheckpoint` calls **`deraceIndex`** right after committing, rewriting the index entry (via `updateIndex` with an explicit oid, which stores zeroed stats) for any just-committed file whose mtime second is the current second. Zeroed stats never compare equal to a real file, so the next status hashes it for real.
 
 Do NOT "fix" this by deleting `.git/index` between checkpoints. `git.commit` builds its tree FROM the index, so the index must stay COMPLETE even though it is never left dirty -- each checkpoint adds only the changed files on top of what is already there. "Transient" means no uncommitted content, not empty.
+
+### Turning a folder off, and the slow-folder warning
+
+Settings > "Watch this folder for changes" puts a folder in the `off` attach state: no poller, no status walks, no history tab, its packs released. It is keyed by path in `mde-state.json` (`vcOff`), unlike the marker, because it grants nothing -- a renamed folder that comes back on costs one walk -- and because writing into a `foreign` repo's `.git/config` is exactly what MDE must not do. `vc-set-off` drops paths that no longer exist on every write. A tick already waiting on a paced walk when the folder is unwatched discards its result (`state.stopped`), or the badge lights up after the folder was turned off.
+
+Three walks in a row of 1s or more (`watchForSlowWalks` in `status.ts`; `--vc-slow-walk-ms` overrides the threshold) raise a dismissible warning banner offering that switch, once per folder per session. A streak, because one walk can stall behind a busy machine.
+
+### Failures are logged and shown, never swallowed
+
+Every main-process failure the UI reports also goes to `~/Library/Logs/MDE/main.log` with its stack (`src/log.ts`; `--log-file=` redirects it, test runs default to the temp folder; one `.old` rotation at 5MB). A failed status walk returns `error` from `vc-get-status`: the panel replaces the changes list with a danger notice, and App toasts each new message once. The poller logs every failure but broadcasts only every third in a row (`vc-status-error`), since one failure is usually a file caught mid-write. `vc-checkpoint-files` rethrows, so the history tab shows an error instead of "Loading..." forever; the stats and counts calls log and return `{}`, since an absent count already reads as unmeasurable.
 
 ### Restore moves BYTES, and only the bytes that differ
 

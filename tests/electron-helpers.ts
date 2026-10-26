@@ -20,6 +20,11 @@ function findWebpackMain(): string {
   );
 }
 
+/** The built status worker, for tests that import src/git/status.ts directly. */
+export function builtStatusWorkerPath(): string {
+  return path.join(path.dirname(findWebpackMain()), 'statusWorker.cjs');
+}
+
 export async function launchApp(
   extraArgs: string[] = []
 ): Promise<{ app: ElectronApplication; page: Page }> {

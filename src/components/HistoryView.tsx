@@ -237,7 +237,7 @@ export default function HistoryView({ projectRoot, vc, onToast, navRequest }: Hi
     return <div className="history-view history-empty qa-hist-no-folder">Open a folder to see its checkpoints.</div>;
   }
 
-  if (vc.state.attach === 'none') {
+  if (vc.state.attach === 'none' || vc.state.attach === 'off') {
     return (
       <div className="history-view history-empty qa-hist-off">
         <p>Checkpoints are off for this folder.</p>
@@ -550,13 +550,18 @@ function CheckpointDetail({
   projectRoot, checkpoint, writable, busy, onOpenFile, onRestoreFile, onRestoreAll, onSaveTitle,
 }: CheckpointDetailProps) {
   const [files, setFiles] = useState<VcChangedFile[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setFiles(null);
-    window.mde.vcCheckpointFiles(projectRoot, checkpoint.sha, { counts: true }).then(result => {
-      if (!cancelled) setFiles(result);
-    });
+    setLoadError(null);
+    window.mde.vcCheckpointFiles(projectRoot, checkpoint.sha, { counts: true }).then(
+      result => { if (!cancelled) setFiles(result); },
+      (err: Error) => {
+        if (!cancelled) setLoadError(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+      },
+    );
     return () => { cancelled = true; };
   }, [projectRoot, checkpoint.sha]);
 
@@ -585,7 +590,13 @@ function CheckpointDetail({
         )}
       </div>
 
-      {files === null && <div className="history-empty text-muted">Loading...</div>}
+      {loadError !== null && (
+        <div className="vc-notice vc-notice-danger qa-hist-detail-error">
+          Could not read this checkpoint&apos;s changes. {loadError}
+        </div>
+      )}
+
+      {files === null && loadError === null && <div className="history-empty text-muted">Loading...</div>}
 
       {files !== null && files.length === 0 && (
         <div className="history-empty text-muted qa-hist-detail-empty">

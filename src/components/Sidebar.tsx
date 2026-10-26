@@ -112,7 +112,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, 
         {/* Dimmed until the user opts in, so the feature is discoverable without ever
             looking like it is already running. */}
         <button
-          className={`sidebar-tab qa-vc-tab ${mode === 'versions' ? 'active' : ''} ${vc.state.attach === 'none' ? 'sidebar-tab-dim' : ''}`}
+          className={`sidebar-tab qa-vc-tab ${mode === 'versions' ? 'active' : ''} ${vc.state.attach === 'none' || vc.state.attach === 'off' ? 'sidebar-tab-dim' : ''}`}
           onClick={() => onSetMode('versions')}
           title="Checkpoints"
         >
@@ -121,7 +121,7 @@ export default function Sidebar({ projectRoot, mode, onSetMode, vc, onOpenFile, 
               is ever going to clear it. In automatic mode the poller resolves it within
               minutes whether or not anyone looks, and on a read-only folder MDE will never act
               on it at all; both of those are status numbers, so both stay grey. */}
-          {vc.files.length > 0 && vc.state.attach !== 'none' && (
+          {vc.files.length > 0 && vc.state.attach !== 'none' && vc.state.attach !== 'off' && (
             <span
               className={`sidebar-tab-badge qa-vc-badge ${
                 vc.state.attach === 'managed' && vc.state.auto !== true ? 'sidebar-tab-badge-alert' : ''

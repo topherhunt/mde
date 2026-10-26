@@ -32,9 +32,17 @@ export const externalPackages = [
 export const mainConfig: Configuration = {
   /**
    * This is the main entry point for your application, it's the first file
-   * that runs in the main process.
+   * that runs in the main process. `statusWorker` is a worker_threads entry that
+   * src/git/status.ts loads from beside index.cjs at runtime -- nothing imports it,
+   * so dropping it here fails only when the first status walk runs.
    */
-  entry: './src/index.ts',
+  entry: {
+    index: './src/index.ts',
+    statusWorker: './src/git/statusWorker.ts',
+  },
+  output: {
+    filename: '[name].cjs',
+  },
   // Put your normal webpack config below here
   module: {
     rules,

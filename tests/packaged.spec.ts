@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync, spawnSync } from 'child_process';
 import { renderInJSC } from './quicklook-helpers';
+import git from 'isomorphic-git';
 
 // ---------------------------------------------------------------------------
 // Packaged-app guard: the webpack `externals` must be require-able from app.asar
@@ -213,5 +214,41 @@ test.describe('Packaged Quick Look extensions', () => {
     const thumb = resources('MDEThumbnail');
     const json = renderInJSC(path.join(thumb, 'markdown-it.min.js'), path.join(thumb, 'render.js'), '# Hi', 'thumbnailBlocks');
     expect(JSON.parse(json)).toEqual([{ kind: 'h1', text: 'Hi' }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Packaged status worker: checkpoint status walks run on a worker thread loaded
+// by PATH from beside index.cjs (src/git/status.ts). Inside app.asar, under the
+// Fuses, is the one place that load can fail while the dev-tree suite passes --
+// and a worker that never loads leaves every folder silently showing no changes.
+// `--self-test-status=<dir>` walks <dir> on the worker and prints the result.
+// ---------------------------------------------------------------------------
+
+test.describe('Packaged status worker', () => {
+  test.skip(process.platform !== 'darwin', 'the binary path below is the macOS bundle layout');
+
+  const binary = () => path.resolve(findPackagedAsar(), '..', '..', 'MacOS', 'MDE');
+
+  test('loads from inside app.asar and reports what changed', async () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mde-selftest-')));
+    try {
+      await git.init({ fs, dir });
+      fs.writeFileSync(path.join(dir, 'a.md'), 'one\n');
+      await git.add({ fs, dir, filepath: 'a.md' });
+      await git.commit({ fs, dir, message: 'init', author: { name: 'Test', email: 'test@example.com' } });
+      fs.writeFileSync(path.join(dir, 'a.md'), 'changed\n');
+      fs.writeFileSync(path.join(dir, 'b.md'), 'new\n');
+
+      const run = spawnSync(binary(), [`--self-test-status=${dir}`], { encoding: 'utf8', timeout: 30000 });
+      expect(run.stderr).not.toContain('self-test-status failed');
+      expect(run.status).toBe(0);
+      expect(JSON.parse(run.stdout.trim().split('\n').pop() as string).files).toEqual([
+        { path: 'a.md', kind: 'modified' },
+        { path: 'b.md', kind: 'added' },
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

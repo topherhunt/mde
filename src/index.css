@@ -1577,6 +1577,15 @@ body {
   word-break: break-word;
 }
 
+.warning-banner {
+  background: var(--warning-bg);
+  border-bottom-color: var(--warning-border);
+}
+
+.warning-banner .error-banner-text {
+  color: var(--warning-text);
+}
+
 /* --- Find bar --- */
 .find-bar {
   background: var(--bg-secondary);
@@ -2401,6 +2410,14 @@ body {
   background: var(--bg);
   color: var(--text-muted);
   line-height: 1.45;
+}
+
+.vc-notice-danger {
+  border-color: var(--danger-border);
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  word-break: break-word;
 }
 
 .vc-section {

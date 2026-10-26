@@ -4,6 +4,7 @@
 
 ---
 
+- Sidebar filenames should always be white; the icon color should be used to indicate file type (markdown, plaintext, docx/pdf, other). Grayed out filenames / folder names should indicate if it's gitignored.
 - I think I want to make the git support more generalizable.
   - It should have full support for listing/viewing dirty files and browsing commit history even if it's read-only.
   - There should probably be a setting for "let MDE commit checkpoints for this folder", so it doesn't need to check for branches etc every single time the app loads, if that setting is enabled it effectively "remembers" MDE's assessment that it can safely commit here.

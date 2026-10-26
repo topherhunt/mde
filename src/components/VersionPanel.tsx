@@ -27,6 +27,9 @@ import { basename } from '../utils/paths';
 export interface VersionControl {
   state: VcState;
   files: VcChangedFile[];
+  // Why the last status check failed; `files` is empty and means nothing while this is set.
+  // Cleared by the next successful status.
+  error: string | null;
   // Bumped on every checkpoint so the history list refetches.
   historyKey: number;
   refresh: () => Promise<void>;
@@ -39,22 +42,26 @@ export interface VersionControl {
 export function useVersionControl(projectRoot: string | null): VersionControl {
   const [state, setState] = useState<VcState>({ attach: 'none' });
   const [files, setFiles] = useState<VcChangedFile[]>([]);
+  const [error, setError] = useState<string | null>(null);
   const [historyKey, setHistoryKey] = useState(0);
 
   const refresh = useCallback(async () => {
     if (!projectRoot) {
       setState({ attach: 'none' });
       setFiles([]);
+      setError(null);
       return;
     }
     const resolved = await window.mde.vcGetState(projectRoot);
     setState(resolved);
-    if (resolved.attach === 'none') {
+    if (resolved.attach === 'none' || resolved.attach === 'off') {
       setFiles([]);
+      setError(null);
       return;
     }
     const status = await window.mde.vcGetStatus(projectRoot);
     setFiles(status.files);
+    setError(status.error ?? null);
   }, [projectRoot]);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -64,18 +71,23 @@ export function useVersionControl(projectRoot: string | null): VersionControl {
   // The project watcher (2s debounce in the main process) is what makes it feel immediate.
   useEffect(() => {
     const offStatus = window.mde.onVcStatus(payload => {
-      if (payload.root === projectRoot) setFiles(payload.files);
+      if (payload.root !== projectRoot) return;
+      setFiles(payload.files);
+      setError(null);
+    });
+    const offStatusError = window.mde.onVcStatusError(payload => {
+      if (payload.root === projectRoot) setError(payload.error);
     });
     const offCheckpoint = window.mde.onVcCheckpoint(payload => {
       if (payload.root === projectRoot) setHistoryKey(k => k + 1);
     });
     const offFiles = window.mde.onProjectFilesChanged(() => { void refresh(); });
-    return () => { offStatus(); offCheckpoint(); offFiles(); };
+    return () => { offStatus(); offStatusError(); offCheckpoint(); offFiles(); };
   }, [projectRoot, refresh]);
 
   const bumpHistory = useCallback(() => setHistoryKey(k => k + 1), []);
 
-  return { state, files, historyKey, refresh, bumpHistory };
+  return { state, files, error, historyKey, refresh, bumpHistory };
 }
 
 // --- Formatting -------------------------------------------------------------------
@@ -171,6 +183,17 @@ export default function VersionPanel({
         </div>
       )}
 
+      {state.attach === 'off' && (
+        <div className="vc-notice qa-vc-off">
+          <div className="small">
+            Checkpoints are turned off for this folder, so MDE is not watching it for changes.
+          </div>
+          <button className="btn btn-sm mt-2 qa-vc-open-settings" onClick={onOpenSettings}>
+            Open Settings
+          </button>
+        </div>
+      )}
+
       {(state.attach === 'foreign' || state.attach === 'steppedBack') && (
         <div className="vc-notice qa-vc-readonly">
           <div className="small">{state.reason}</div>
@@ -180,7 +203,15 @@ export default function VersionPanel({
         </div>
       )}
 
-      {writable && (
+      {/* In place of the changes list, whose emptiness would otherwise read as "nothing changed". */}
+      {vc.error && (
+        <div className="vc-notice vc-notice-danger qa-vc-status-error">
+          <div className="small fw-bold">Could not check this folder for changes.</div>
+          <div className="small">{vc.error}</div>
+        </div>
+      )}
+
+      {writable && !vc.error && (
         <ChangesSection
           projectRoot={projectRoot}
           files={files}
@@ -190,7 +221,7 @@ export default function VersionPanel({
         />
       )}
 
-      {state.attach !== 'none' && (
+      {state.attach !== 'none' && state.attach !== 'off' && (
         <div className="vc-section">
           <button
             className="btn btn-sm vc-browse-btn qa-vc-browse"
@@ -510,6 +541,12 @@ export function CheckpointSettings({ projectRoot, vc, onToast }: CheckpointSetti
     await refresh();
   }, [projectRoot, onToast, refresh]);
 
+  const setOff = useCallback(async (off: boolean) => {
+    if (!projectRoot) return;
+    await window.mde.vcSetOff(projectRoot, off);
+    await refresh();
+  }, [projectRoot, refresh]);
+
   const canAdopt =
     state.attach === 'foreign' && !state.hasRemote && (state.branchCount ?? 1) <= 1;
 
@@ -584,6 +621,28 @@ export function CheckpointSettings({ projectRoot, vc, onToast }: CheckpointSetti
               type="checkbox"
               checked={state.auto === true}
               onChange={e => void setAuto(e.target.checked)}
+            />
+            <span className="settings-toggle-slider" />
+          </label>
+        </div>
+      )}
+
+      {/* The off switch. Hidden on a folder with no history, where there is nothing to watch.
+          Turning it off deletes nothing, which is why it can be a toggle at all. */}
+      {projectRoot && state.attach !== 'none' && (
+        <div className="settings-row mt-2">
+          <div>
+            <div className="fw-bold">Watch this folder for changes</div>
+            <div className="small text-muted">
+              Turn this off if this folder&apos;s history is so large that it slows MDE down.
+              Nothing is deleted, and you can turn it back on at any time.
+            </div>
+          </div>
+          <label className="settings-toggle qa-settings-vc-watch">
+            <input
+              type="checkbox"
+              checked={state.attach !== 'off'}
+              onChange={e => void setOff(!e.target.checked)}
             />
             <span className="settings-toggle-slider" />
           </label>

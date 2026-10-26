@@ -8,7 +8,7 @@ import * as path from 'path';
 import git from 'isomorphic-git';
 import { VcChangedFile } from '../types';
 import { DEFAULT_AUTHOR } from './repo';
-import { computeStatus } from './status';
+import { computeStatus, withIndexLock } from './status';
 
 export type CheckpointKind = 'auto' | 'manual' | 'restore';
 
@@ -142,6 +142,14 @@ export async function createCheckpoint(
   root: string,
   kind: CheckpointKind,
   opts: { message?: string; restoreOf?: string } = {}
+): Promise<CheckpointResult | null> {
+  return withIndexLock(root, () => checkpointLocked(root, kind, opts));
+}
+
+async function checkpointLocked(
+  root: string,
+  kind: CheckpointKind,
+  opts: { message?: string; restoreOf?: string }
 ): Promise<CheckpointResult | null> {
   const { files } = await computeStatus(root);
   if (files.length === 0) return null;

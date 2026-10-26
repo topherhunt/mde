@@ -1,11 +1,15 @@
 import { test, expect } from '@playwright/test';
-import { launchApp, clickMenuItem } from './electron-helpers';
+import { launchApp, clickMenuItem, builtStatusWorkerPath } from './electron-helpers';
 import { ElectronApplication, Page } from 'playwright';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { buildDiff } from '../src/utils/prosediff';
-import { describeChanges } from '../src/git/checkpoint';
+import { createCheckpoint, describeChanges } from '../src/git/checkpoint';
+import { computeStatus, configureStatusWorker, observeStatus, stopStatusWorker, watchForSlowWalks } from '../src/git/status';
+import git from 'isomorphic-git';
+import crypto, { randomBytes } from 'crypto';
+import { walkStatus } from '../src/git/statusWalk';
 
 let app: ElectronApplication;
 let page: Page;
@@ -1712,5 +1716,394 @@ test.describe('Prose diff', () => {
     expect(gaps[0].hiddenCount).toBeGreaterThan(30);
     // Context is kept next to the change so the reader can see where they are.
     expect(diff.rows.some(r => r.type === 'context' && r.segments[0].text === 'line 1')).toBe(true);
+  });
+});
+
+test.describe('Status walks', () => {
+  const author = { name: 'Test', email: 'test@example.com' };
+
+  test.beforeAll(() => configureStatusWorker({ path: builtStatusWorkerPath() }));
+  // A fresh worker per test, so no test inherits another's packs.
+  test.afterEach(() => stopStatusWorker());
+
+  async function makeRepo(dir: string, files: Record<string, string>): Promise<void> {
+    await git.init({ fs, dir });
+    for (const [name, content] of Object.entries(files)) {
+      fs.writeFileSync(path.join(dir, name), content);
+      await git.add({ fs, dir, filepath: name });
+    }
+    await git.commit({ fs, dir, message: 'init', author });
+  }
+
+  /** Moves commit `ref` and everything in its tree into one packfile, so reading them must go through it. */
+  async function packObjectsOf(dir: string, ref: string): Promise<string> {
+    const oids = [await git.resolveRef({ fs, dir, ref })];
+    await git.walk({
+      fs, dir, trees: [git.TREE({ ref })],
+      map: async (_p, [entry]) => { if (entry) oids.push(await entry.oid()); return undefined; },
+    });
+    const { filename } = await git.packObjects({ fs, dir, oids, write: true });
+    await git.indexPack({ fs, dir, filepath: `.git/objects/pack/${filename}` });
+    const objects = path.join(dir, '.git', 'objects');
+    for (const oid of oids) fs.rmSync(path.join(objects, oid.slice(0, 2), oid.slice(2)), { force: true });
+    return path.join(objects, 'pack', filename);
+  }
+
+  test('reuse loaded packfiles instead of re-reading them on every walk', async () => {
+    const dir = makeTmpDir();
+    await makeRepo(dir, { 'a.md': 'one\n', 'b.md': 'two\n' });
+    const packPath = await packObjectsOf(dir, 'HEAD');
+    fs.writeFileSync(path.join(dir, 'a.md'), 'changed\n');
+
+    expect((await computeStatus(dir)).files).toEqual([{ path: 'a.md', kind: 'modified' }]);
+
+    // Wreck the pack on disk. A walk that re-read it could not resolve HEAD's tree.
+    fs.writeFileSync(packPath, Buffer.alloc(fs.statSync(packPath).size));
+    await expect(git.statusMatrix({ fs, dir, refresh: false })).rejects.toThrow();
+
+    expect((await computeStatus(dir)).files).toEqual([{ path: 'a.md', kind: 'modified' }]);
+  });
+
+  test('stop the worker, and with it its loaded packs, once nothing has asked for a while', async () => {
+    const dir = makeTmpDir();
+    await makeRepo(dir, { 'a.md': 'one\n' });
+    const packPath = await packObjectsOf(dir, 'HEAD');
+
+    configureStatusWorker({ idleStopMs: 200 });
+    try {
+      await computeStatus(dir);
+      fs.writeFileSync(packPath, Buffer.alloc(fs.statSync(packPath).size));
+      await new Promise(resolve => setTimeout(resolve, 600));
+      // A fresh worker must re-read the pack, and the pack is now garbage.
+      await expect(computeStatus(dir)).rejects.toThrow();
+    } finally {
+      configureStatusWorker({ idleStopMs: 5 * 60 * 1000 });
+    }
+  });
+
+  test('a burst of requests shares one walk that started after they asked', async () => {
+    const dir = makeTmpDir();
+    await makeRepo(dir, { 'a.md': 'one\n' });
+
+    const first = observeStatus(dir);
+    await new Promise(resolve => setImmediate(resolve)); // let the first walk start
+    fs.writeFileSync(path.join(dir, 'new.md'), 'hello\n');
+    const burst = await Promise.all([1, 2, 3, 4, 5].map(() => observeStatus(dir)));
+
+    expect(new Set(burst).size).toBe(1);
+    expect(burst[0]).not.toBe(await first);
+    expect(burst[0].files).toEqual([{ path: 'new.md', kind: 'added' }]);
+  });
+
+  test('are spaced by their own measured cost', async () => {
+    const dir = makeTmpDir();
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 300; i++) files[`f${i}.md`] = `file ${i}\n`;
+    await makeRepo(dir, files);
+
+    const r1 = await observeStatus(dir);
+    const t1 = Date.now();
+    await observeStatus(dir);
+    const gap = Date.now() - t1;
+
+    expect(r1.durationMs).toBeGreaterThan(0);
+    // The next walk may not start until 9x the last walk's cost has passed.
+    expect(gap).toBeGreaterThanOrEqual(8 * r1.durationMs);
+  });
+
+  test('a cold walk hashes each pack once, however many reads were waiting on it', async () => {
+    const dir = makeTmpDir();
+    // isomorphic-git SHA-1s a whole pack on its first read, racily: every read that was waiting
+    // for the pack to load hashes it again. With HEAD's root tree loose and its 30 folders'
+    // trees in one pack, the walk's 30 subtree reads all wait on that load -- the shape that
+    // froze the app.
+    const files: Record<string, string> = { 'big.bin': randomBytes(2 * 1024 * 1024).toString('base64') };
+    for (let i = 0; i < 30; i++) {
+      fs.mkdirSync(path.join(dir, `d${i}`));
+      files[`d${i}/f.md`] = `file ${i}\n`;
+    }
+    await makeRepo(dir, files);
+    const first = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+    fs.writeFileSync(path.join(dir, 'top.md'), 'top\n');
+    await git.add({ fs, dir, filepath: 'top.md' });
+    await git.commit({ fs, dir, message: 'loose root tree', author });
+    const packSize = fs.statSync(await packObjectsOf(dir, first)).size;
+
+    let hashed = 0;
+    const createHash = crypto.createHash;
+    crypto.createHash = ((algorithm: string, options?: crypto.HashOptions) => {
+      const hash = createHash(algorithm, options);
+      const update = hash.update.bind(hash);
+      hash.update = ((data: Buffer) => { hashed += data.length; return update(data); }) as typeof hash.update;
+      return hash;
+    }) as typeof crypto.createHash;
+    try {
+      expect(await walkStatus(dir)).toEqual([]);
+    } finally {
+      crypto.createHash = createHash;
+    }
+    expect(hashed).toBeGreaterThan(packSize / 2);
+    expect(hashed).toBeLessThan(packSize * 2);
+  });
+
+  test('run on a worker thread, leaving the main thread free', async () => {
+    const dir = makeTmpDir();
+    await makeRepo(dir, { 'a.md': 'one\n' });
+    // A stand-in walk that holds its thread for 500ms. Run on the main thread, it would stall
+    // the ticker below for all of that.
+    const busy = path.join(makeTmpDir(), 'busy.cjs');
+    fs.writeFileSync(busy, `require('worker_threads').parentPort.on('message', msg => {
+      const end = Date.now() + 500;
+      while (Date.now() < end) {}
+      require('worker_threads').parentPort.postMessage({ id: msg.id, files: [] });
+    });`);
+
+    let maxLag = 0;
+    configureStatusWorker({ path: busy });
+    try {
+      let last = performance.now();
+      const ticker = setInterval(() => {
+        const now = performance.now();
+        maxLag = Math.max(maxLag, now - last);
+        last = now;
+      }, 2);
+      const result = await computeStatus(dir);
+      clearInterval(ticker);
+      // It went through the worker, and the main thread kept ticking through it.
+      expect(result.durationMs).toBeGreaterThanOrEqual(450);
+    } finally {
+      configureStatusWorker({ path: builtStatusWorkerPath() });
+    }
+    expect(maxLag).toBeLessThan(50);
+  });
+
+  test('a walk that fails rejects with its reason, and the next walk still works', async () => {
+    const dir = makeTmpDir();
+    await makeRepo(dir, { 'a.md': 'one\n' });
+    fs.writeFileSync(path.join(dir, 'b.md'), 'two\n');
+
+    await expect(computeStatus(path.join(dir, 'missing'))).rejects.toThrow(/ENOENT/);
+    expect((await computeStatus(dir)).files).toEqual([{ path: 'b.md', kind: 'added' }]);
+  });
+
+  test('a worker that crashes fails its pending walks, and the next walk gets a new worker', async () => {
+    const dir = makeTmpDir();
+    await makeRepo(dir, { 'a.md': 'one\n' });
+    fs.writeFileSync(path.join(dir, 'b.md'), 'two\n');
+    const crashing = path.join(makeTmpDir(), 'crash.cjs');
+    fs.writeFileSync(crashing, "require('worker_threads').parentPort.on('message', () => { throw new Error('boom'); });");
+
+    configureStatusWorker({ path: crashing });
+    try {
+      await expect(Promise.all([computeStatus(dir), observeStatus(dir)])).rejects.toThrow('boom');
+    } finally {
+      configureStatusWorker({ path: builtStatusWorkerPath() });
+    }
+    expect((await computeStatus(dir)).files).toEqual([{ path: 'b.md', kind: 'added' }]);
+  });
+
+  test('a worker that cannot load fails the walk instead of hanging', async () => {
+    const dir = makeTmpDir();
+    await makeRepo(dir, { 'a.md': 'one\n' });
+
+    configureStatusWorker({ path: path.join(dir, 'no-such-worker.cjs') });
+    try {
+      await expect(computeStatus(dir)).rejects.toThrow(/no-such-worker/);
+    } finally {
+      configureStatusWorker({ path: builtStatusWorkerPath() });
+    }
+    expect((await computeStatus(dir)).files).toEqual([]);
+  });
+
+  test('a worker stopped mid-walk rejects the walk, and the next walk gets a new worker', async () => {
+    const dir = makeTmpDir();
+    await makeRepo(dir, { 'a.md': 'one\n' });
+    fs.writeFileSync(path.join(dir, 'b.md'), 'two\n');
+
+    const rejected = expect(computeStatus(dir)).rejects.toThrow('stopped');
+    await stopStatusWorker();
+    await rejected;
+    expect((await computeStatus(dir)).files).toEqual([{ path: 'b.md', kind: 'added' }]);
+  });
+
+  test('asked just before a checkpoint, wait for it rather than read a half-written index', async () => {
+    const dir = makeTmpDir();
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 300; i++) files[`f${i}.md`] = `file ${i}\n`;
+    await makeRepo(dir, files);
+    for (let i = 0; i < 300; i++) fs.writeFileSync(path.join(dir, `f${i}.md`), `changed ${i}\n`);
+
+    // Asked first, so nothing but the lock stops this walk from running alongside the commit.
+    const order: string[] = [];
+    const observed = observeStatus(dir).then(r => { order.push('status'); return r; });
+    const checkpoint = createCheckpoint(dir, 'manual').then(r => { order.push('checkpoint'); return r; });
+    expect(await checkpoint).not.toBeNull();
+    expect((await observed).files).toEqual([]);
+    expect(order).toEqual(['checkpoint', 'status']);
+  });
+
+  test('wait out a checkpoint that is already committing', async () => {
+    const dir = makeTmpDir();
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 1000; i++) files[`f${i}.md`] = `file ${i}\n`;
+    await makeRepo(dir, files);
+    for (let i = 0; i < 1000; i++) fs.writeFileSync(path.join(dir, `f${i}.md`), `changed ${i}\n`);
+
+    // Staging rewrites the whole index once per file, so this commit far outlasts the pacing
+    // delay the walk below would otherwise sit out.
+    const order: string[] = [];
+    const checkpoint = createCheckpoint(dir, 'manual').then(r => { order.push('checkpoint'); return r; });
+    const observed = observeStatus(dir).then(r => { order.push('status'); return r; });
+    expect(await checkpoint).not.toBeNull();
+    expect((await observed).files).toEqual([]);
+    expect(order).toEqual(['checkpoint', 'status']);
+  });
+
+  test('three slow walks in a row raise the slow warning once, and a fast walk starts the count over', async () => {
+    const dir = makeTmpDir();
+    await makeRepo(dir, { 'a.md': 'one\n' });
+    const slow = path.join(makeTmpDir(), 'slow.cjs');
+    fs.writeFileSync(slow, `require('worker_threads').parentPort.on('message', msg => {
+      setTimeout(() => require('worker_threads').parentPort.postMessage({ id: msg.id, files: [] }), 60);
+    });`);
+
+    const warned: string[] = [];
+    configureStatusWorker({ path: slow });
+    try {
+      watchForSlowWalks({ thresholdMs: 50, onSlow: root => warned.push(root) });
+      await computeStatus(dir);
+      await computeStatus(dir);
+      expect(warned).toEqual([]);
+      await computeStatus(dir);
+      expect(warned).toEqual([dir]);
+      await computeStatus(dir);
+      expect(warned).toEqual([dir]);
+
+      // The same walk under a threshold it beats counts as fast.
+      watchForSlowWalks({ thresholdMs: 10_000, onSlow: root => warned.push(root) });
+      await computeStatus(dir);
+      watchForSlowWalks({ thresholdMs: 50, onSlow: root => warned.push(root) });
+      await computeStatus(dir);
+      await computeStatus(dir);
+      expect(warned).toEqual([dir]);
+      await computeStatus(dir);
+      expect(warned).toEqual([dir, dir]);
+    } finally {
+      configureStatusWorker({ path: builtStatusWorkerPath() });
+      watchForSlowWalks({ thresholdMs: 1000, onSlow: () => undefined });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Turning checkpoints off for a folder, and reporting what goes wrong
+// ---------------------------------------------------------------------------
+
+test.describe('Checkpoints off switch and failures', () => {
+  test('turning watching off in Settings stops all change detection until it is turned back on', async () => {
+    ({ app, page } = await launchApp(['--vc-poll-ms=200']));
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'hi\n');
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    await openSettings();
+    await expect(page.locator('.qa-settings-vc-watch input')).toBeChecked();
+    await page.locator('.qa-settings-vc-watch').click();
+    await expect(page.locator('.qa-settings-vc-watch input')).not.toBeChecked();
+    // Only the switch is left; nothing about saving applies to a folder nobody is watching.
+    await expect(page.locator('.qa-settings-vc-auto')).toHaveCount(0);
+    await closeSettings();
+    try {
+      await expect(page.locator('.qa-vc-off')).toBeVisible();
+      await expect(page.locator('.qa-vc-panel .qa-vc-changes')).toHaveCount(0);
+
+      // An edit the poller would report within a poll or two goes unwalked. The badge is no
+      // witness here: a refresh hides it for an off folder whatever the poller does.
+      await page.evaluate(root => {
+        const seen: number[] = [];
+        (window as unknown as { vcStatusSeen: number[] }).vcStatusSeen = seen;
+        window.mde.onVcStatus(p => { if (p.root === root) seen.push(p.files.length); });
+      }, dir);
+      fs.writeFileSync(path.join(dir, 'note.md'), 'changed\n');
+      await page.waitForTimeout(1500);
+      expect(await page.evaluate(() => (window as unknown as { vcStatusSeen: number[] }).vcStatusSeen)).toEqual([]);
+      await expect(page.locator('.qa-vc-badge')).toHaveCount(0);
+
+      await page.locator('.qa-vc-off .qa-vc-open-settings').click();
+      await expect(page.locator('.qa-settings-vc')).toBeVisible();
+    } finally {
+      // The setting lives in the real mde-state.json the whole suite shares.
+      if (await page.locator('.qa-settings-vc').count() === 0) await openSettings();
+      await page.locator('.qa-settings-vc-watch').click();
+      await expect(page.locator('.qa-settings-vc-watch input')).toBeChecked();
+    }
+    await closeSettings();
+
+    await expect(page.locator('.qa-vc-off')).toHaveCount(0);
+    await expect(page.locator('.qa-vc-badge')).toHaveText('1', { timeout: 10000 });
+  });
+
+  test('a folder whose walks keep running slow offers the off switch', async () => {
+    ({ app, page } = await launchApp(['--vc-slow-walk-ms=0', '--vc-poll-ms=200']));
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'hi\n');
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+    for (let i = 0; i < 3; i++) {
+      fs.writeFileSync(path.join(dir, 'note.md'), `edit ${i}\n`);
+      await page.waitForTimeout(400);
+    }
+
+    const notice = page.locator('.qa-slow-notice');
+    await expect(notice).toBeVisible({ timeout: 10000 });
+    await expect(notice).not.toContainText('Git');
+    await page.locator('.qa-slow-notice-settings').click();
+    await expect(page.locator('.qa-settings-vc-watch')).toBeVisible();
+    await expect(notice).toHaveCount(0);
+  });
+
+  test('a folder that cannot be read says so in the panel and in a toast, and recovers', async () => {
+    const logFile = path.join(makeTmpDir(), 'main.log');
+    ({ app, page } = await launchApp([`--log-file=${logFile}`]));
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'hi\n');
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+
+    const indexPath = path.join(dir, '.git', 'index');
+    const goodIndex = fs.readFileSync(indexPath);
+    fs.writeFileSync(indexPath, 'not an index');
+    // Reopen so the panel asks for status afresh.
+    await openProject(makeTmpDir());
+    await openProject(dir);
+
+    await expect(page.locator('.qa-vc-status-error')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.qa-vc-panel .qa-vc-changes')).toHaveCount(0);
+    await expect(page.locator('.toast')).toContainText('Could not check this folder for changes');
+    expect(fs.readFileSync(logFile, 'utf8')).toContain(dir);
+
+    fs.writeFileSync(indexPath, goodIndex);
+    await openProject(makeTmpDir());
+    await openProject(dir);
+    await expect(page.locator('.qa-vc-status-error')).toHaveCount(0);
+    await expect(page.locator('.qa-vc-panel .qa-vc-changes-empty')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('a checkpoint whose changes cannot be read says so instead of loading forever', async () => {
+    ({ app, page } = await launchApp());
+    const dir = makeTmpDir();
+    fs.writeFileSync(path.join(dir, 'note.md'), 'hi\n');
+    await openCheckpoints(dir);
+    await enableCheckpoints();
+    await openHistory();
+
+    // The commit stays listed, but the tree it points at is gone.
+    const commit = await git.readCommit({ fs, dir, oid: headSha(dir) });
+    const tree = commit.commit.tree;
+    fs.rmSync(path.join(dir, '.git', 'objects', tree.slice(0, 2), tree.slice(2)));
+
+    await page.locator('.qa-hist-checkpoint').first().click();
+    await expect(page.locator('.qa-hist-detail-error')).toBeVisible({ timeout: 10000 });
   });
 });

@@ -70,7 +70,9 @@ export type SidebarMode = 'explorer' | 'outline' | 'versions';
 
 // Only 'managed' permits writes. Everything else is read-only browsing; see
 // `resolveState` in src/git/repo.ts. The marker grants write mode and nothing else does.
-export type VcAttachState = 'none' | 'managed' | 'foreign' | 'steppedBack';
+// 'off' is the user's per-folder switch (Settings) and overrides the rest: no walks, no
+// watching, no automatic checkpoints. It lives in mde-state.json, not the repo.
+export type VcAttachState = 'none' | 'managed' | 'foreign' | 'steppedBack' | 'off';
 
 export interface VcState {
   attach: VcAttachState;
@@ -112,6 +114,8 @@ export interface VcCheckpointStat {
 export interface VcStatus {
   files: VcChangedFile[];
   count: number;
+  // Set when the walk failed. `files` is then empty and means nothing.
+  error?: string;
 }
 
 export interface VcCheckpoint {
@@ -312,6 +316,8 @@ export interface MdeAPI {
   // Turns automatic checkpointing on or off for this folder. Managed-only, and stored in
   // .git/config so it travels with the folder rather than with this machine.
   vcSetAuto: (root: string, auto: boolean) => Promise<{ ok: boolean; error?: string }>;
+  // The per-folder off switch (attach state 'off'). Works on any folder, managed or not.
+  vcSetOff: (root: string, off: boolean) => Promise<void>;
   // Line counts for UNCOMMITTED changes, keyed by repo-relative path. Same rationale as
   // vcCheckpointStats: `vcGetStatus` is the cheap walk the poller runs constantly, and it must
   // never grow a per-file diff. A path with nothing measurable is absent, never zero.
@@ -326,6 +332,10 @@ export interface MdeAPI {
   vcRestoreFile: (root: string, sha: string, filePath: string) => Promise<VcRestoreResult>;
   vcRestoreAll: (root: string, sha: string) => Promise<VcRestoreResult>;
   onVcStatus: (callback: (payload: { root: string; files: VcChangedFile[] }) => void) => () => void;
+  // The background poller's walks have failed several times in a row.
+  onVcStatusError: (callback: (payload: { root: string; error: string }) => void) => () => void;
+  // A folder's walks have stayed slow; the app suggests turning checkpoints off for it.
+  onVcSlow: (callback: (payload: { root: string }) => void) => () => void;
   onVcCheckpoint: (
     callback: (payload: { root: string; sha: string; subject: string }) => void
   ) => () => void;

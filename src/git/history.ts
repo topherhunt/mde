@@ -317,8 +317,8 @@ function looksBinary(filepath: string, content: string | null): boolean {
 /**
  * How far each UNCOMMITTED file has moved: lines gained and lost against the last checkpoint.
  *
- * A separate call from `computeStatus` for the same reason `checkpointStats` is separate from
- * `listCheckpoints`. `computeStatus` is what the poller runs on every tick, on a timer, forever;
+ * A separate call from the status walk for the same reason `checkpointStats` is separate from
+ * `listCheckpoints`. The walk is what the poller runs on every tick, on a timer, forever;
  * it is a single status walk and it must stay one. This is two reads and a diff PER FILE, so it
  * is only ever run by a renderer that has already painted the list and wants to fill in numbers.
  *

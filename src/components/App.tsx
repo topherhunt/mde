@@ -281,6 +281,16 @@ export default function App() {
   // not the Checkpoints tab is the one on screen.
   const vc = useVersionControl(state.projectRoot);
 
+  // One toast per new failure message; the panel's banner keeps showing it until a walk succeeds.
+  useEffect(() => {
+    if (vc.error) showToast(`Could not check this folder for changes: ${vc.error}`, 'danger');
+  }, [vc.error, showToast]);
+
+  // The folder whose walks are slow enough to offer the off switch. Main sends it once per
+  // folder per session.
+  const [slowRoot, setSlowRoot] = useState<string | null>(null);
+  useEffect(() => window.mde.onVcSlow(({ root }) => setSlowRoot(root)), []);
+
   // Where the checkpoint history tab should point. Owned here because every entry point into
   // that tab is outside it: the sidebar's Browse button, a checkpoint row, a right-click.
   const [historyNav, setHistoryNav] = useState<HistoryNavRequest | null>(null);
@@ -522,7 +532,7 @@ export default function App() {
   // Right-click -> "View change history", from the file explorer or a tab. Both hand back a
   // repo-relative path (the context menu computes it), which is what checkpoints are keyed by.
   // Undefined -- not a no-op -- when there are no checkpoints, so the menu hides the item.
-  const viewFileHistory = vc.state.attach === 'none'
+  const viewFileHistory = vc.state.attach === 'none' || vc.state.attach === 'off'
     ? undefined
     : (relativePath: string) => openCheckpointHistory({ kind: 'file', path: relativePath });
 
@@ -857,7 +867,7 @@ export default function App() {
           case 'reveal': window.mde.revealInFinder(tab.filePath); break;
           case 'copy-path': copyFilePath(tab.filePath, state.projectRoot, showToast); break;
           case 'history':
-            if (vc.state.attach === 'none') showToast('Checkpoints are off for this folder. Turn them on in Settings.', 'danger');
+            if (vc.state.attach === 'none' || vc.state.attach === 'off') showToast('Checkpoints are off for this folder. Turn them on in Settings.', 'danger');
             else if (relative === null) showToast('This file is outside the open folder, so it has no checkpoints.', 'danger');
             else openCheckpointHistory({ kind: 'file', path: relative });
             break;
@@ -1154,6 +1164,22 @@ export default function App() {
                 <button className="conflict-btn conflict-btn-saveas" onClick={() => setAppError(null)}>
                   Dismiss
                 </button>
+              </div>
+            )}
+            {slowRoot !== null && slowRoot === state.projectRoot && vc.state.attach !== 'off' && (
+              <div className="error-banner warning-banner qa-slow-notice">
+                <span className="error-banner-text">
+                  <i className="bi bi-hourglass-split" /> This folder&apos;s history is large enough that
+                  watching it for changes is slowing MDE down. You can turn that off for this folder in Settings.
+                </span>
+                <div className="d-flex gap-2">
+                  <button className="conflict-btn qa-slow-notice-settings" onClick={() => { setSlowRoot(null); setSettingsOpen(true); }}>
+                    Open Settings
+                  </button>
+                  <button className="conflict-btn conflict-btn-saveas qa-slow-notice-dismiss" onClick={() => setSlowRoot(null)}>
+                    Dismiss
+                  </button>
+                </div>
               </div>
             )}
             {activeTab?.conflict && (

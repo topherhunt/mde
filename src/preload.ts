@@ -317,6 +317,8 @@ const api = {
     ipcRenderer.invoke('vc-status-counts', root, paths),
   vcSetAuto: (root: string, auto: boolean) =>
     ipcRenderer.invoke('vc-set-auto', root, auto),
+  vcSetOff: (root: string, off: boolean) =>
+    ipcRenderer.invoke('vc-set-off', root, off),
   vcSetTitle: (root: string, sha: string, title: string) =>
     ipcRenderer.invoke('vc-set-title', root, sha, title),
   vcDiff: (root: string, filePath: string, sha?: string) =>
@@ -331,6 +333,18 @@ const api = {
       callback(payload);
     ipcRenderer.on('vc-status', handler);
     return () => ipcRenderer.removeListener('vc-status', handler);
+  },
+
+  onVcStatusError: (callback: (payload: { root: string; error: string }) => void) => {
+    const handler = (_e: unknown, payload: { root: string; error: string }) => callback(payload);
+    ipcRenderer.on('vc-status-error', handler);
+    return () => ipcRenderer.removeListener('vc-status-error', handler);
+  },
+
+  onVcSlow: (callback: (payload: { root: string }) => void) => {
+    const handler = (_e: unknown, payload: { root: string }) => callback(payload);
+    ipcRenderer.on('vc-slow', handler);
+    return () => ipcRenderer.removeListener('vc-slow', handler);
   },
 
   onVcCheckpoint: (

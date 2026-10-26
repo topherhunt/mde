@@ -16,7 +16,7 @@
 // conditional inside it is one nobody can predict. Uniform beats locally optimal.
 
 import { VcChangedFile } from '../types';
-import { computeStatus, statusSignature } from './status';
+import { observeStatus, statusSignature } from './status';
 import { createCheckpoint } from './checkpoint';
 import { resolveState } from './repo';
 
@@ -46,6 +46,8 @@ export function checkpointerConfig(): { eligibilityMs: number; pollMs: number } 
 export interface CheckpointerEvents {
   onStatus: (root: string, files: VcChangedFile[]) => void;
   onCheckpoint: (root: string, sha: string, subject: string) => void;
+  // Every failed tick or flush, with how many have failed in a row. The poller carries on.
+  onError: (root: string, err: Error, failuresInARow: number) => void;
 }
 
 interface RootState {
@@ -57,6 +59,7 @@ interface RootState {
   sawChange: boolean;
   lastSignature: string | null;
   lastStatusMs: number;
+  failures: number;
   timer: ReturnType<typeof setTimeout> | null;
   running: boolean;
   stopped: boolean;
@@ -92,6 +95,7 @@ function schedule(state: RootState, delay: number): void {
 async function tick(state: RootState): Promise<void> {
   if (state.stopped || state.running) return;
   state.running = true;
+  let failed = false;
   try {
     // The gate. Zero status calls when the folder is quiet AND fully checkpointed, which is
     // most of the time.
@@ -113,7 +117,9 @@ async function tick(state: RootState): Promise<void> {
     const vcState = await resolveState(state.root);
     if (vcState.attach !== 'managed') return;
 
-    const { files, durationMs } = await computeStatus(state.root);
+    const { files, durationMs } = await observeStatus(state.root);
+    // Unwatched while the walk was paced or running (folder closed, or checkpoints turned off).
+    if (state.stopped) return;
     state.lastStatusMs = durationMs;
     events?.onStatus(state.root, files);
 
@@ -152,9 +158,13 @@ async function tick(state: RootState): Promise<void> {
     }
 
     state.lastSignature = signature;
-  } catch {
+  } catch (err) {
     // A transient failure (mid-write file, locked index) must not kill the poller.
+    failed = true;
+    state.failures++;
+    events?.onError(state.root, err instanceof Error ? err : new Error(String(err)), state.failures);
   } finally {
+    if (!failed) state.failures = 0;
     state.running = false;
     if (!state.stopped) schedule(state, pollDelay(state));
   }
@@ -170,6 +180,7 @@ export function watchRoot(root: string): void {
     sawChange: true, // do one pass on attach so the badge is correct straight away
     lastSignature: null,
     lastStatusMs: 0,
+    failures: 0,
     timer: null,
     running: false,
     stopped: false,
@@ -222,8 +233,10 @@ export async function flushRoot(root: string): Promise<void> {
       state.lastCommitAt = Date.now();
       state.lastSignature = null;
     }
-  } catch {
+  } catch (err) {
     // Never block shutdown on a checkpoint failure.
+    state.failures++;
+    events?.onError(root, err instanceof Error ? err : new Error(String(err)), state.failures);
   }
 }
 

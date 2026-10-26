@@ -51,6 +51,7 @@ Break these and something silently corrupts, clobbers, or infinite-loops.
 - **Keep** `refresh: false` **on** `statusMatrix` **and the** `deraceIndex` **call after commit.** isomorphic-git has no racy-clean rule, so a same-second same-size write is otherwise invisible FOREVER -- the changes list silently omits a file that really changed. Both halves are required; do not "simplify" either. -> notes: Checkpoints
 - **Restore writes BYTES, never a decoded string.** `readBlobAt` returns a Buffer; `readFileAt` (string) is for the diff viewer only. Decoding a blob to a JS string and writing it back as `'utf8'` replaced every invalid-UTF-8 byte with U+FFFD and destroyed a user's PDF. Whole-tree restore also byte-compares via `writeIfDifferent` -- identical files are not rewritten. -> notes: Checkpoints
 - **A checkpoint's user-edited title is a sidecar (**`.git/mde-titles.json`**), never a commit rewrite.** Rewriting changes that commit's sha and every descendant's, stranding the `MDE-Restore:` trailers that name them, and isomorphic-git has no rebase to do it with. -> notes: Checkpoints
+- **Status walks run on the worker (`statusWorker.ts`, a webpack entry of its own, running `statusWalk.ts`), never the main process, and load each pack one at a time before `statusMatrix`.** Anything that merely observes status calls `observeStatus`, never `computeStatus` (that is for `createCheckpoint`, inside `withIndexLock`); every walk and every index write hold the per-root `withIndexLock`; and the walk's `cache` may carry packs across calls but never the index. A main-thread walk on a big repo beachballed the app; without the pack warm-up, isomorphic-git re-hashes a pack once per waiting read (6s per cold walk); a walk overlapping `git.add` can read a torn index; a cached index goes silently stale on a same-second rewrite. -> notes: Checkpoints
 - **The checkpoint index must stay COMPLETE between checkpoints** (never dirty, but never emptied) -- `git.commit` builds its tree from it. Do not delete `.git/index`. -> notes: Checkpoints
 
 ## Key decisions
@@ -112,7 +113,9 @@ Short form. Follow the `-> notes:` pointer before changing any of these.
 Full design and as-built record: `CHECKPOINTS.md`. Short form here.
 
 - The word "Git" appears in the UI exactly ONCE: the first bullet of the how-it-works recap, which credits it and says you never have to touch it. No button, label, menu item, dialog, or toast may name Git -- a second mention is a regression, not a precedent. No staging, no branches, no remotes, no merge conflicts -- the audience is non-technical writers reviewing what an AI agent did to their files. -> notes: Checkpoints
-- Four attach states: `none` (dimmed tab + signpost to Settings), `managed` (writable), `foreign` (read-only + adopt button), `steppedBack` (read-only, not adoptable). -> notes: Checkpoints
+- Five attach states: `none` (dimmed tab + signpost to Settings), `managed` (writable), `foreign` (read-only + adopt button), `steppedBack` (read-only, not adoptable), `off` (the user turned watching off; overrides the rest). -> notes: Checkpoints
+- **`off` is per-folder in `mde-state.json` (`vcOff`), set by Settings > "Watch this folder for changes".** It stops the poller and every walk and deletes nothing, so it is not the forbidden "turn off" button. Three walks in a row of 1s+ raise a warning banner offering it (`--vc-slow-walk-ms` for tests). -> notes: Turning a folder off
+- **Checkpoint failures are logged and shown, never swallowed.** `logError` (`src/log.ts`) writes `~/Library/Logs/MDE/main.log`; a failed walk shows a danger notice in the panel plus one toast per new message. -> notes: Failures are logged and shown
 - `mde.auto` **is a second, ORTHOGONAL axis, not a second write permission.** `mde.managed` says MDE may write to this folder; `mde.auto` says whether it acts on that unprompted. Manual is the default (`writeMarker` writes `auto = false`), automatic is opt-in from Settings, and a MISSING key reads as `true` -- absence can only mean a folder activated before the setting existed. -> notes: Checkpoints
 - **Turning checkpoints on lives in Settings, and there is deliberately no "turn off" button.** Flipping back to manual is the whole off switch; deleting a history the user might want back is not a thing a checkbox should do. The sidebar's `none` state is a signpost with the EXPLANATION plus an "Open Settings" button -- do not move the explanation into Settings, since nobody browses Settings. -> notes: Checkpoints
 - Full history browsing lives in a read-only TAB (`Tab.view === 'history'` -> `HistoryView`), not an app mode: inactive panes are hidden, not unmounted, so open buffers keep their unsaved edits and undo history. The sidebar panel stays the glance. Both share `src/components/vcRestore.ts` so they can't phrase an outcome differently. -> notes: Checkpoints
@@ -177,7 +180,7 @@ All verification goes through E2E tests -- do not start the app interactively to
 
 ## Current status
 
-332 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
+350 E2E tests. The app has been manually tested and is in active use. Packaged app is named `MDE.app` (productName "MDE" in package.json, name "MDE" in forge.config.ts packagerConfig).
 
 For what exists today, see the **Feature inventory** in `docs/architecture-notes.md` (and README.md for the user-facing summary). The test suite is the authoritative answer to "is this implemented?".
 

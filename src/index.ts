@@ -4,7 +4,8 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as os from 'os';
 import { resolveState, initRepo, adoptRepo, findParentRepo, setAuto } from './git/repo';
-import { computeStatus } from './git/status';
+import { computeStatus, observeStatus, releaseStatusCache, stopStatusWorker, watchForSlowWalks } from './git/status';
+import { logError } from './log';
 import { preflight, seedIgnoreFile } from './git/guards';
 import { createCheckpoint } from './git/checkpoint';
 import { listCheckpoints, listFileCheckpoints, checkpointFiles, checkpointStats, statusCounts, diffFile } from './git/history';
@@ -20,7 +21,7 @@ import {
   flushRoot,
   flushAll,
 } from './git/checkpointer';
-import { VcCheckpointResult } from './types';
+import { VcCheckpointResult, VcState, VcStatus } from './types';
 import { isHiddenName, IMAGE_TYPES } from './utils/fileKinds';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
@@ -136,6 +137,36 @@ configureCheckpointer({
   pollMs: numericArg('vc-poll-ms'),
 });
 
+// Once per folder per session: the suggestion to turn checkpoints off is not worth repeating.
+const slowWarned = new Set<string>();
+watchForSlowWalks({
+  thresholdMs: numericArg('vc-slow-walk-ms'),
+  onSlow: root => {
+    if (slowWarned.has(root)) return;
+    slowWarned.add(root);
+    broadcast('vc-slow', { root });
+  },
+});
+
+// `--self-test-status=<dir>`: walk <dir> on the status worker, print the result as JSON, exit,
+// and open no window. tests/packaged.spec.ts runs it against the PACKAGED app -- the only
+// place that proves the worker loads from inside app.asar, since Playwright cannot attach there.
+const SELF_TEST_STATUS = '--self-test-status=';
+const selfTestArg = process.argv.find(a => a.startsWith(SELF_TEST_STATUS));
+const selfTestStatusDir = selfTestArg ? selfTestArg.slice(SELF_TEST_STATUS.length) : null;
+if (selfTestStatusDir) {
+  computeStatus(selfTestStatusDir).then(
+    result => {
+      process.stdout.write(JSON.stringify(result) + '\n');
+      app.exit(0);
+    },
+    (err: Error) => {
+      process.stderr.write(`self-test-status failed: ${err.message}\n`);
+      app.exit(1);
+    }
+  );
+}
+
 const stateFilePath = path.join(app.getPath('userData'), 'mde-state.json');
 
 function loadState(): Record<string, any> {
@@ -150,6 +181,13 @@ function saveState(partial: Record<string, any>): void {
     const current = loadState();
     fs.writeFileSync(stateFilePath, JSON.stringify({ ...current, ...partial }), 'utf-8');
   } catch {}
+}
+
+// Folders with checkpoints switched off in Settings (attach state 'off'). Keyed by path, which
+// is safe only because 'off' grants nothing: it stops MDE looking, and write mode still comes
+// solely from the marker in .git/config.
+function isVcOff(root: string): boolean {
+  return (loadState().vcOff || []).includes(root);
 }
 
 function loadLastProjectRoot(): string | null {
@@ -1313,7 +1351,7 @@ ipcMain.on('watch-project', (_event, root: string) => {
       }, 2000));
     });
     projectWatchers.set(root, watcher);
-    watchRoot(root);
+    if (!isVcOff(root)) watchRoot(root);
   } catch {}
 });
 
@@ -1324,7 +1362,7 @@ ipcMain.on('unwatch-project', (_event, root: string) => {
   if (timer) { clearTimeout(timer); projectWatchTimers.delete(root); }
   // Capture the tail before letting go of the folder: the 10-minute rule can legitimately
   // leave up to ten minutes of work uncheckpointed, and closing is the last chance.
-  void flushRoot(root).finally(() => unwatchRoot(root));
+  void flushRoot(root).finally(() => { unwatchRoot(root); releaseStatusCache(root); });
 });
 
 // --- Version history (checkpoints). See CHECKPOINTS.md. ---
@@ -1343,24 +1381,47 @@ function broadcast(channel: string, payload: unknown): void {
 initCheckpointer({
   onStatus: (root, files) => broadcast('vc-status', { root, files }),
   onCheckpoint: (root, sha, subject) => broadcast('vc-checkpoint', { root, sha, subject }),
+  onError: (root, err, failuresInARow) => {
+    logError(`Checkpoint poller, ${root} (${failuresInARow} in a row)`, err);
+    // One failure is usually a file caught mid-write. Every third one in a streak is reported,
+    // so the panel's banner comes back if a successful status had cleared it meanwhile.
+    if (failuresInARow % 3 === 0) broadcast('vc-status-error', { root, error: err.message });
+  },
 });
 
 async function requireManaged(root: string): Promise<string | null> {
+  if (isVcOff(root)) return 'Checkpoints are turned off for this folder.';
   const state = await resolveState(root);
   if (state.attach === 'managed') return null;
   return state.reason || 'MDE is not managing version history for this folder.';
 }
 
-ipcMain.handle('vc-get-state', async (_event, root: string) => {
+ipcMain.handle('vc-get-state', async (_event, root: string): Promise<VcState> => {
+  if (isVcOff(root)) return { attach: 'off' };
   return resolveState(root);
 });
 
-ipcMain.handle('vc-get-status', async (_event, root: string) => {
+ipcMain.handle('vc-get-status', async (_event, root: string): Promise<VcStatus> => {
+  // Not looking is not a failure: there is simply nothing to report.
+  if (isVcOff(root)) return { files: [], count: 0 };
   try {
-    const { files } = await computeStatus(root);
+    const { files } = await observeStatus(root);
     return { files, count: files.length };
-  } catch {
-    return { files: [], count: 0 };
+  } catch (err) {
+    logError(`Status walk, ${root}`, err);
+    return { files: [], count: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
+ipcMain.handle('vc-set-off', async (_event, root: string, off: boolean) => {
+  // Folders that no longer exist are dropped on every write, so the list cannot grow forever.
+  const others = ((loadState().vcOff || []) as string[]).filter(r => r !== root && fs.existsSync(r));
+  saveState({ vcOff: off ? [...others, root] : others });
+  if (off) {
+    unwatchRoot(root);
+    releaseStatusCache(root);
+  } else if (projectWatchers.has(root)) {
+    watchRoot(root);
   }
 });
 
@@ -1429,15 +1490,19 @@ ipcMain.handle('vc-file-history', async (_event, root: string, filepath: string,
 ipcMain.handle('vc-checkpoint-files', async (_event, root: string, sha: string, opts?: { counts?: boolean }) => {
   try {
     return await checkpointFiles(root, sha, opts || {});
-  } catch {
-    return [];
+  } catch (err) {
+    // Rethrown: an empty list would claim the checkpoint changed nothing.
+    logError(`Checkpoint files, ${root} ${sha}`, err);
+    throw err;
   }
 });
 
+// The two count calls below degrade to "not counted", which the UI already shows as absent.
 ipcMain.handle('vc-checkpoint-stats', async (_event, root: string, shas: string[]) => {
   try {
     return await checkpointStats(root, shas || []);
-  } catch {
+  } catch (err) {
+    logError(`Checkpoint stats, ${root}`, err);
     return {};
   }
 });
@@ -1445,7 +1510,8 @@ ipcMain.handle('vc-checkpoint-stats', async (_event, root: string, shas: string[
 ipcMain.handle('vc-status-counts', async (_event, root: string, paths: string[]) => {
   try {
     return await statusCounts(root, paths || []);
-  } catch {
+  } catch (err) {
+    logError(`Status counts, ${root}`, err);
     return {};
   }
 });
@@ -1774,6 +1840,7 @@ app.on('open-file', (event, filePath) => {
 // --- App lifecycle ---
 
 app.on('ready', () => {
+  if (selfTestStatusDir) return;
   protocol.handle('mde-file', serveLocalFile);
   buildMenu();
   // Keep the Windows window-control overlay colors in sync when the OS theme changes
@@ -1804,6 +1871,10 @@ app.on('ready', () => {
 });
 
 let isQuitting = false;
+
+app.on('will-quit', () => {
+  void stopStatusWorker();
+});
 
 app.on('before-quit', (event) => {
   if (isQuitting || isTest) return;
